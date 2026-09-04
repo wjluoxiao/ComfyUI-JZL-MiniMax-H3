@@ -444,7 +444,9 @@
     "inputs": {
       "positive": { "name": "正向条件" },
       "vae": { "name": "VAE" },
-      "latent": { "name": "潜空间" }
+      "latent": { "name": "潜空间" },
+      "first_frame": { "name": "首帧图" },
+      "last_frame": { "name": "尾帧图" }
     },
     "outputs": {
       "0": { "name": "正向条件" },

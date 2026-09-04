@@ -299,11 +299,16 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
     """MiniMax H3 二采条件同步。
 
     从放大后的 latent 自动读取目标空间尺寸，把 positive 里「首尾帧」
-    （minimax_keyframes）的 latent 通过「解码→像素放大→重编码」对齐到该尺寸；
-    纯文本（t2va）与参考图/视频（ref2va 的 minimax_refs）原样透传。
+    （minimax_keyframes）的 latent 对齐到该尺寸；纯文本（t2va）与参考图/
+    视频（ref2va 的 minimax_refs）原样透传。
+
+    对齐策略（按优先级）：
+      1. 接了 first_frame / last_frame 原图时，直接在目标分辨率编码原始像素，
+         与二段原生编码逐值一致，零色偏；
+      2. 没接原图时退回「解码→像素放大→重编码」的 VAE 往返。
 
     用于 latent 放大后的二次采样：复用一段的文本 token 与参考条件，
-    只重编码关键帧，免去二段重新编码 Qwen3-VL 文本。
+    只对齐关键帧，免去二段重新编码 Qwen3-VL 文本。
     """
 
     @classmethod
@@ -312,20 +317,28 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
             node_id="JZL_MiniMaxH3CondSync",
             description=(
                 "二采条件同步：从 latent 自动读取目标分辨率，把 MiniMax H3 首尾帧"
-                "（minimax_keyframes）的 latent 通过「解码→像素放大→重编码」对齐到"
-                "该尺寸（保真度优于直接插值）；纯文本与参考图（minimax_refs）"
-                "原样透传。配合 latent 放大节点用于二次采样，免去重新编码文本。"
+                "（minimax_keyframes）的 latent 对齐到该尺寸；纯文本与参考图"
+                "（minimax_refs）原样透传。接上首尾帧原图时按目标分辨率直接编码"
+                "原始像素（零色偏），否则退回「解码→像素放大→重编码」的 VAE 往返。"
+                "配合 latent 放大节点用于二次采样，免去重新编码文本。"
             ),
             display_name="JZL - 🌊 海螺H3二采条件同步",
             category="JZL/MiniMax",
             inputs=[
                 io.Conditioning.Input("positive", tooltip="一段采样的 positive（含文本 token 与可选首尾帧/参考）"),
-                io.Vae.Input("vae", tooltip="视频 VAE，用于首尾帧高保真重编码（解码→像素放大→再编码）"),
+                io.Vae.Input("vae", tooltip="视频 VAE，用于在目标分辨率重新编码首尾帧（原图或解码→放大→重编码）"),
                 io.Latent.Input("latent", tooltip="放大后的 AV latent，自动读 video 空间尺寸作为对齐目标"),
+                io.Image.Input("first_frame", optional=True,
+                    tooltip="一段用的首帧原图（首尾帧生视频时）。接上后按目标分辨率直接编码原始像素，"
+                            "不接则退回解码→放大→重编码。"),
+                io.Image.Input("last_frame", optional=True,
+                    tooltip="一段用的尾帧原图（首尾帧生视频时）。接上后按目标分辨率直接编码原始像素，"
+                            "不接则退回解码→放大→重编码。"),
             ],
             outputs=[
                 io.Conditioning.Output(display_name="positive"),
-                io.Latent.Output(display_name="latent", tooltip="首帧修复后的 AV latent（video 第 0 帧已替换为干净首帧）"),
+                io.Latent.Output(display_name="latent",
+                    tooltip="首帧修复后的 AV latent（video 第 0 帧已替换为对齐后的干净首帧）"),
             ],
         )
 
@@ -337,6 +350,21 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
         else:
             video = samples
         return int(video.shape[-2]), int(video.shape[-1])
+
+    @staticmethod
+    def _encode_keyframe(vae, image, width, height, crop):
+        """在目标分辨率直接编码关键帧原图（无 VAE 往返，零色偏）。
+
+        原图尺寸已经等于目标时整个跳过缩放：_resize 里的 comfy.utils.lanczos
+        会做一次 float32→uint8→float32 往返（8-bit 来源无损，浮点来源误差
+        可达 1/255），没必要为一次空缩放付这个代价。但那次往返同时隐含了
+        [0, 1] 截断，所以跳过缩放时要自己 clamp，否则超出范围的来源
+        （调色 / 混合 / EXR）会带着范围外的值进 vae.encode。
+        """
+        img = image[:1]
+        if img.shape[1] == height and img.shape[2] == width:
+            return vae.encode(img[..., :3].clamp(0.0, 1.0))
+        return vae.encode(_resize(img, width, height, crop))
 
     @staticmethod
     def _reencode_keyframe(vae, z, new_h, new_w):
@@ -351,9 +379,14 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
         return vae.encode(p)
 
     @staticmethod
-    def _repair_first_frame(latent, first_frame, new_h, new_w):
-        """用重编码后的干净首帧替换 video latent 第 0 帧，修复 upscaler 时间维边界污染。"""
-        if first_frame is None:
+    def _repair_first_frame(latent, first_latent, new_h, new_w):
+        """用对齐后的干净首帧替换 video latent 第 0 帧，修复 upscaler 时间维边界污染。
+
+        只要 positive 里带首帧关键帧就会执行，与是否接了 first_frame 原图无关：
+        接了原图时 first_latent 是目标分辨率的精确编码，没接时是重编码对齐的 latent。
+        仅尺寸本就相等时保持原始 latent。
+        """
+        if first_latent is None:
             return latent
         samples = latent.get("samples") if isinstance(latent, dict) else latent
         if isinstance(samples, comfy.nested_tensor.NestedTensor):
@@ -361,13 +394,13 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
             if video.ndim < 5 or video.shape[-2] != new_h or video.shape[-1] != new_w:
                 return latent
             video = video.clone()
-            ff = first_frame.to(device=video.device, dtype=video.dtype)
+            ff = first_latent.to(device=video.device, dtype=video.dtype)
             video[:, :, 0:1, :, :] = ff
             new_samples = comfy.nested_tensor.NestedTensor([video] + list(samples.tensors[1:]))
             return {**latent, "samples": new_samples} if isinstance(latent, dict) else new_samples
         if isinstance(samples, torch.Tensor) and samples.ndim >= 5:
             video = samples.clone()
-            ff = first_frame.to(device=video.device, dtype=video.dtype)
+            ff = first_latent.to(device=video.device, dtype=video.dtype)
             video[:, :, 0:1, :, :] = ff
             if isinstance(latent, dict):
                 return {**latent, "samples": video}
@@ -375,9 +408,9 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
         return latent
 
     @classmethod
-    def execute(cls, positive, vae, latent) -> io.NodeOutput:
+    def execute(cls, positive, vae, latent, first_frame=None, last_frame=None) -> io.NodeOutput:
         new_h, new_w = cls._read_target_size(latent)
-        first_frame = None  # 重编码后的干净首帧，用于修复 video 第 0 帧
+        first_latent = None  # 对齐后的首帧 latent，用于修复 video 第 0 帧
 
         out = []
         for item in positive:
@@ -393,15 +426,27 @@ class JZL_MiniMaxH3CondSync(io.ComfyNode):
                     for kf in kfs:
                         nkf = dict(kf)  # 复制，避免污染原 conditioning
                         z = nkf.get("latent")
-                        if z is not None and (z.shape[-2] != new_h or z.shape[-1] != new_w):
-                            nkf["latent"] = cls._reencode_keyframe(vae, z, new_h, new_w)
-                        if nkf.get("resolved_frame_index") == 0 and first_frame is None:
-                            first_frame = nkf["latent"]
+                        if z is not None:
+                            # resolved_frame_index 0 是首帧（几何锚点，直接拉伸），
+                            # 其余是尾帧（跟随帧，居中裁切），与一段编码时的约定一致
+                            is_first = nkf.get("resolved_frame_index") == 0
+                            image, crop = (first_frame, "disabled") if is_first else (last_frame, "center")
+                            if image is not None:
+                                # 接了原图就一律走精确编码：同分辨率二采时结果与二段
+                                # 原生编码逐值一致，比原样透传更能保证零色偏
+                                nkf["latent"] = cls._encode_keyframe(vae, image, new_w * 16, new_h * 16, crop)
+                            elif z.shape[-2] != new_h or z.shape[-1] != new_w:
+                                # 没接原图时退回「解码→像素放大→重编码」的 VAE 往返
+                                nkf["latent"] = cls._reencode_keyframe(vae, z, new_h, new_w)
+                            # 第 0 帧修复只要有首帧关键帧就做，与是否接原图、是否
+                            # 发生尺寸对齐都无关（尺寸本就相等时即原始 latent）
+                            if is_first and first_latent is None:
+                                first_latent = nkf["latent"]
                         synced.append(nkf)
                     new_params["minimax_keyframes"] = synced
             out.append([cond, new_params])
 
-        repaired = cls._repair_first_frame(latent, first_frame, new_h, new_w)
+        repaired = cls._repair_first_frame(latent, first_latent, new_h, new_w)
         return io.NodeOutput(out, repaired)
 
 
