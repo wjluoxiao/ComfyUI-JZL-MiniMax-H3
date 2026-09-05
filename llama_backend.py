@@ -107,6 +107,38 @@ def get_vram_factor() -> float:
     return 1.55  # CPU / fallback
 
 
+def comfy_gpu_desc() -> str:
+    """ComfyUI 当前使用的 torch 设备描述（含显卡型号），供日志与本地 LLM 对齐显卡用。"""
+    try:
+        dev = mm.get_torch_device()
+        if dev is None:
+            return "CPU"
+        if str(dev.type).startswith("cuda"):
+            idx = int(getattr(dev, "index", 0) or 0)
+            try:
+                return f"{dev} ({torch.cuda.get_device_name(idx)})"
+            except Exception:
+                return f"{dev}"
+        return str(dev)
+    except Exception:
+        return "unknown"
+
+
+def log_gpu_plan(backend: str, gpu_device):
+    """打印本地 LLM 将使用的显卡（自动与 ComfyUI 对齐）。gpu_device: 'auto' / 数字 / None。"""
+    pref = None
+    if isinstance(gpu_device, str):
+        pref = None if gpu_device in ("auto", "None", "") else gpu_device
+    if backend == "llama-server":
+        note = ("自动匹配 ComfyUI GPU（llama-server --list-devices 按显卡名匹配，默认推荐）"
+                if pref is None else f"手动指定设备 {pref}")
+    else:
+        note = ("使用主 GPU（CUDA_VISIBLE_DEVICES 首卡，与 ComfyUI 同环境）"
+                if pref is None else f"手动指定 {pref}（注意：llama-cpp-python 可能忽略手动编号，建议用「跟随 ComfyUI」）")
+    print(f"[JZL-llama] 本地 LLM 显卡计划 [{backend}]：{note}")
+    print(f"[JZL-llama] ComfyUI 使用显卡：{comfy_gpu_desc()}")
+
+
 def print_gpu_info():
     """打印 GPU 信息用于调试"""
     gpu_type = "ROCm (AMD)" if is_rocm() else ("CUDA (NVIDIA)" if is_nvidia() else "CPU")
@@ -116,6 +148,10 @@ def print_gpu_info():
     factor = get_vram_factor()
     arch_str = f", arch={arch}" if arch else ""
     print(f"[JZL-llama] GPU 检测: {gpu_type}, {gpu_name}, VRAM={vram:.1f}GB{arch_str}, factor={factor}")
+    try:
+        print(f"[JZL-llama] ComfyUI 使用显卡: {comfy_gpu_desc()}")
+    except Exception:
+        pass
 
 
 # =============================================================================
@@ -253,6 +289,10 @@ class LLAMA_CPP_STORAGE:
     @classmethod
     def load_model(cls, config):
         backend = str(config.get("backend") or "llama-cpp-python").strip().lower()
+        try:
+            log_gpu_plan(backend, config.get("gpu_device"))
+        except Exception:
+            pass
         if backend == "llama-cpp-python":
             cls._load_model_llama_cpp(config)
         else:

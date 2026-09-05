@@ -1870,6 +1870,8 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
                     display_name="故事风格", tooltip="故事风格（剧本处理器按此风格拆解与润色）"),
                 io.String.Input("story_name", display_name="故事名称", default="机智罗",
                     tooltip="故事名称（用于保存命名 / 日志）"),
+                io.String.Input("external_prompt", display_name="提示词·接线（可连上游文本）", default="",
+                    tooltip="提示词接线输入（与 CLIP Text Encode 同类）：此输入框左上角圆点可拖线连接上游 STRING 文本节点；连线后以上游文本为提示词（优先于「节点内提示词」大框；未接且留空则用大框内容）"),
                 io.Model.Input("model", display_name="主模型", optional=True, advanced=True),
                 io.Clip.Input("clip", display_name="CLIP", optional=True, advanced=True),
                 io.Vae.Input("vae", display_name="视觉VAE", optional=True, advanced=True),
@@ -1906,7 +1908,7 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
             # 固定种子时：生成相关输入变化也必须触发重跑（否则改段数/模式/风格/画幅/提示词被缓存跳过 =「生成视频数量失效」）
             gen_keys = ["run_mode", "video_count", "story_style", "duration",
                         "aspect_ratio", "megapixels", "scale_factor", "upscale_scale",
-                        "internal_prompt"]
+                        "internal_prompt", "external_prompt"]
             gen_sig = {k: kwargs.get(k) for k in gen_keys}
             return f"{cfg}|{gen_sig}"
         except Exception:
@@ -1916,6 +1918,7 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
     def execute(cls, run_mode="拆解故事模式", video_count=6, aspect_ratio="16:9 (Widescreen)",
                 megapixels=1.0, duration=8, scale_factor=1.0, upscale_scale=1.5, display_info="",
                 story_style="热血战斗", story_name="",
+                external_prompt=None,
                 internal_prompt=None, manager_settings="",
                 clip=None, vae=None, audio_vae=None, model=None) -> io.NodeOutput:
         run_mode = (run_mode or "故事拆解模式").strip()
@@ -1953,6 +1956,8 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
         if not isinstance(internal_prompt, str):
             internal_prompt = ""
         prompt_input = (internal_prompt or "").strip()
+        if isinstance(external_prompt, str) and external_prompt.strip():
+            prompt_input = external_prompt.strip()  # 接线提示词优先：外部文本覆盖节点内提示词
 
         # 随机种子（LLM 剧本/增强）+ 生成后控制（control_after_generate）
         seed_control = (enhance.get("seed_control") or "randomize").strip() or "randomize"
@@ -2341,6 +2346,8 @@ class JZL_MiniMaxAssetManagerMax(io.ComfyNode):
                     display_name="故事风格", tooltip="故事风格（剧本处理器按此风格拆解与润色）"),
                 io.String.Input("story_name", display_name="故事名称", default="机智罗",
                     tooltip="故事名称（用于保存命名 / 落盘目录 output/jzl/{故事名} / 生成视频管理）"),
+                io.String.Input("external_prompt", display_name="提示词·接线（可连上游文本）", default="",
+                    tooltip="提示词接线输入（与 CLIP Text Encode 同类）：此输入框左上角圆点可拖线连接上游 STRING 文本节点；连线后以上游文本为提示词（优先于「节点内提示词」大框；未接且留空则用大框内容）"),
                 io.Model.Input("model", display_name="主模型", optional=True, advanced=True),
                 io.Clip.Input("clip", display_name="CLIP", optional=True, advanced=True),
                 io.Vae.Input("vae", display_name="视觉VAE", optional=True, advanced=True),
@@ -2371,7 +2378,7 @@ class JZL_MiniMaxAssetManagerMax(io.ComfyNode):
                 return f"random@{time.time_ns()}"
             gen_keys = ["run_mode", "video_count", "story_style", "duration",
                         "aspect_ratio", "megapixels", "scale_factor", "upscale_scale",
-                        "internal_prompt"]
+                        "internal_prompt", "external_prompt"]
             gen_sig = {k: kwargs.get(k) for k in gen_keys}
             return f"{cfg}|{gen_sig}"
         except Exception:
@@ -2381,6 +2388,7 @@ class JZL_MiniMaxAssetManagerMax(io.ComfyNode):
     def execute(cls, run_mode="拆解故事模式", video_count=6, aspect_ratio="16:9 (Widescreen)",
                 megapixels=1.0, duration=8, scale_factor=1.0, upscale_scale=1.5, display_info="",
                 story_style="热血战斗", story_name="",
+                external_prompt=None,
                 internal_prompt=None, manager_settings="",
                 clip=None, vae=None, audio_vae=None, model=None) -> io.NodeOutput:
         """复刻 8888：LLM 拆解 → 逐段完整链路（调度+编码+一采+latent放大+二采+解码）→
@@ -2411,6 +2419,8 @@ class JZL_MiniMaxAssetManagerMax(io.ComfyNode):
         if not isinstance(internal_prompt, str):
             internal_prompt = ""
         prompt_input = (internal_prompt or "").strip()
+        if isinstance(external_prompt, str) and external_prompt.strip():
+            prompt_input = external_prompt.strip()  # 接线提示词优先：外部文本覆盖节点内提示词
 
         seed_control = (enhance.get("seed_control") or "randomize").strip() or "randomize"
         current_seed = int(enhance.get("seed", 0) or 0)
@@ -2712,6 +2722,8 @@ class JZL_MiniMaxAssetManagerMini(io.ComfyNode):
                     display_name="故事风格", tooltip="故事风格（剧本处理器按此风格拆解与润色）"),
                 io.String.Input("story_name", display_name="故事名称", default="机智罗",
                     tooltip="故事名称（用于保存命名 / 日志）"),
+                io.String.Input("external_prompt", display_name="提示词·接线（可连上游文本）", default="",
+                    tooltip="提示词接线输入（与 CLIP Text Encode 同类）：此输入框左上角圆点可拖线连接上游 STRING 文本节点；连线后以上游文本为提示词（优先于「节点内提示词」大框；未接且留空则用大框内容）"),
                 io.Model.Input("model", display_name="主模型", optional=True, advanced=True),
                 io.Clip.Input("clip", display_name="CLIP", optional=True, advanced=True),
                 io.Vae.Input("vae", display_name="视觉VAE", optional=True, advanced=True),
@@ -2748,7 +2760,7 @@ class JZL_MiniMaxAssetManagerMini(io.ComfyNode):
                 return f"random@{time.time_ns()}"
             gen_keys = ["run_mode", "video_count", "story_style", "duration",
                         "aspect_ratio", "megapixels", "scale_factor", "upscale_scale",
-                        "internal_prompt"]
+                        "internal_prompt", "external_prompt"]
             gen_sig = {k: kwargs.get(k) for k in gen_keys}
             return f"{cfg}|{gen_sig}"
         except Exception:
@@ -2758,6 +2770,7 @@ class JZL_MiniMaxAssetManagerMini(io.ComfyNode):
     def execute(cls, run_mode="故事拆解模式", video_count=6, aspect_ratio="16:9 (Widescreen)",
                 megapixels=1.0, duration=8, scale_factor=1.0, display_info="",
                 story_style="热血战斗", story_name="", upscale_scale=1.5,
+                external_prompt=None,
                 internal_prompt=None, manager_settings="",
                 clip=None, vae=None, audio_vae=None, model=None) -> io.NodeOutput:
         run_mode = (run_mode or "故事拆解模式").strip()
@@ -2786,6 +2799,8 @@ class JZL_MiniMaxAssetManagerMini(io.ComfyNode):
         if not isinstance(internal_prompt, str):
             internal_prompt = ""
         prompt_input = (internal_prompt or "").strip()
+        if isinstance(external_prompt, str) and external_prompt.strip():
+            prompt_input = external_prompt.strip()  # 接线提示词优先：外部文本覆盖节点内提示词
 
         # 随机种子（LLM 剧本/增强）+ 生成后控制
         seed_control = (enhance.get("seed_control") or "randomize").strip() or "randomize"

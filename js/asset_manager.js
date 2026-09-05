@@ -1249,6 +1249,32 @@ async function chooseFile(kind) {
     return done(await chosen);
 }
 
+// 拖拽上传辅助：按文件类型归类 / multipart 上传 / 文件名→素材名
+function detectAssetKindByFile(file) {
+    try {
+        const ext = String((file && file.name) || "").split(".").pop().toLowerCase();
+        if (["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext)) return "image";
+        if (["mp4", "mov", "webm", "avi", "mkv"].includes(ext)) return "video";
+        if (["wav", "mp3", "flac", "ogg", "m4a", "aac", "opus", "wma"].includes(ext)) return "audio";
+    } catch (_) {}
+    return null;
+}
+function assetNameFromFilename(filename) {
+    try { return String(filename || "").replace(/\.[^.]+$/, ""); } catch (_) { return ""; }
+}
+async function uploadFileObject(file, kind) {
+    try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("kind", kind);
+        const resp = await api.fetchApi(UPLOAD_ENDPOINT, { method: "POST", body: fd });
+        const data = await resp.json().catch(() => ({}));
+        if (data && data.path) return data.path;
+        notify(data?.error || "上传失败", "error");
+    } catch (_) { notify("上传失败", "error"); }
+    return null;
+}
+
 function el(tag, css, text) {
     const e = document.createElement(tag);
     if (css) e.style.cssText = css;
@@ -1634,7 +1660,15 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     pickBtn.title = "选择文件";
     pickBtn.addEventListener("click", async () => {
         const p = await chooseFile(kind);
-        if (p) { item.path = p; refreshThumb(); if (refreshAudio) refreshAudio(); if (typeof refreshVideo === "function") refreshVideo(); onEdit(); }
+        if (p) {
+            item.path = p;
+            // 名称留空时自动以文件名命名（去扩展名）
+            if (!(item.name || "").trim()) {
+                const autoNm = assetNameFromFilename(String(p || "").split(/[\\/]/).pop());
+                if (autoNm) { item.name = autoNm; if (nameInp) nameInp.value = autoNm; }
+            }
+            refreshThumb(); if (refreshAudio) refreshAudio(); if (typeof refreshVideo === "function") refreshVideo(); onEdit();
+        }
     });
 
     row.append(nameInp, descInp, pickBtn);
@@ -1646,6 +1680,30 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
         delBtn.addEventListener("click", onDelete);
         row.append(delBtn);
     }
+
+    // 拖放替换：把文件拖到本素材「缩略图」窗口范围 → 仅替换素材文件（保留名称/简介/类型/编号/启用）
+    thumb.title = `${thumb.title || "缩略图"}（拖文件到此窗口可替换素材）`;
+    thumb.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); try { e.dataTransfer.dropEffect = "copy"; } catch (_) {} thumb.style.borderColor = "#5ecf8a"; });
+    thumb.addEventListener("dragleave", () => { thumb.style.borderColor = ""; });
+    thumb.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        thumb.style.borderColor = "";
+        const files = (e.dataTransfer && e.dataTransfer.files) ? Array.from(e.dataTransfer.files) : [];
+        if (!files.length) return;
+        const file = files[0];
+        const fkind = detectAssetKindByFile(file);
+        if (fkind !== kind) { notify(`类型不符：缩略图为${KIND_LABEL[kind]}，拖入的是${KIND_LABEL[fkind || "未知"]}`, "warning"); return; }
+        const p = await uploadFileObject(file, kind);
+        if (p) {
+            item.path = p;   // 仅替换素材文件，名称/简介/类型/编号/启用均保留
+            refreshThumb();
+            if (refreshAudio) refreshAudio();
+            if (typeof refreshVideo === "function") refreshVideo();
+            onEdit();
+            notify(`已替换 ${KIND_LABEL[kind]} 素材（保留名称与简介）`, "success");
+        }
+    });
 
     refreshThumb();
     return row;
@@ -1669,6 +1727,8 @@ function renderAssetSection(c, kind, list, title) {
             try { e.dataTransfer.dropEffect = "move"; } catch (_) {}
         });
         card.addEventListener("drop", (e) => {
+            // 外部文件拖入（拖拽上传）→ 不拦截，冒泡交给面板统一上传处理
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) return;
             e.preventDefault();
             e.stopPropagation();
             if (dragFrom >= 0 && dragFrom !== i && list[dragFrom] && list[i]) {
@@ -2085,8 +2145,12 @@ function selectControl(options, value, onChange) {
     const s = el("select", "flex:1 1 0;min-width:0;");
     s.className = "jzl-input";
     for (const o of options) {
-        const op = el("option", "", o);
-        if (o === value) op.selected = true;
+        // 兼容字符串选项与 { value, label } 选项（label 仅显示用，value 保持后端识别值）
+        const v = (typeof o === "object" && o !== null && o.value !== undefined) ? String(o.value) : String(o);
+        const t = (typeof o === "object" && o !== null && o.label) ? String(o.label) : String(o);
+        const op = el("option", "", t);
+        op.value = v;
+        if (v === String(value)) op.selected = true;
         s.append(op);
     }
     s.addEventListener("change", () => onChange(s.value));
@@ -2336,6 +2400,7 @@ function renderAssetsPanel(c, s, mode) {
     const assets = s.assets;
     // 素材引用提示（生成路径由引用内容自动推断）
     c.append(el("div", "background:#2b3a4a;border:1px solid #5b9bd5;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#cfe3f7;", `素材引用上限：图片 ≤9 / 视频 ≤3 / 音频 ≤3（生成路径按引用内容自动推断：有视频→多参考，≥2图→首尾帧，1图→首帧，无→纯文本）`));
+    c.append(el("div", "background:#1f2a33;border:1px dashed #5b9bd5;border-radius:6px;padding:6px 12px;margin-bottom:8px;font-size:12px;color:#9fc3e8;", `🖱 可直接把图片/视频/音频文件拖拽到本面板上传，自动按文件名命名素材（也可点卡片「上传素材」）。`));
 
     renderAssetSection(c, "image", assets.images, "🖼️ 图片");
     renderAssetSection(c, "video", assets.videos, "🎬 视频");
@@ -2438,7 +2503,13 @@ function renderPromptPanel(c, s, d, node) {
     localBox.append(field("mirostat_mode", numberControl(llm.mirostat_mode ?? 0, { min: 0, max: 2, step: 1 }, v => { llm.mirostat_mode = Math.round(v); })));
     localBox.append(field("mirostat_eta", numberControl(llm.mirostat_eta ?? 0.1, { min: 0, max: 1, step: 0.01 }, v => { llm.mirostat_eta = v; })));
     localBox.append(field("mirostat_tau", numberControl(llm.mirostat_tau ?? 5.0, { min: 0, max: 10, step: 0.01 }, v => { llm.mirostat_tau = v; })));
-    localBox.append(field("GPU 设备", selectControl(["auto", "0", "1", "2", "3"], llm.gpu_device || "auto", v => { llm.gpu_device = v; })));
+    localBox.append(field("GPU 设备（本地 LLM）", selectControl([
+        { value: "auto", label: "跟随 ComfyUI（推荐·自动同卡）" },
+        { value: "0", label: "GPU 0（手动）" },
+        { value: "1", label: "GPU 1（手动）" },
+        { value: "2", label: "GPU 2（手动）" },
+        { value: "3", label: "GPU 3（手动）" },
+    ], llm.gpu_device || "auto", v => { llm.gpu_device = v; })));
     c.append(localBox);
 
     // ── 在线 API ──
@@ -2943,6 +3014,38 @@ function buildModal(node, data, panelId) {
             };
             panelBox.__jzlBuild = buildAssets;  // 供底部「清除」按钮清空后重渲染资产面板
             buildAssets();
+            // 拖拽上传：文件拖到本面板 → 按文件类型归类上传，自动以文件名命名素材
+            if (!panelBox.__jzlDropBound) {
+                panelBox.__jzlDropBound = true;
+                let _dragDepth = 0;
+                panelBox.addEventListener("dragover", (e) => { e.preventDefault(); try { e.dataTransfer.dropEffect = "copy"; } catch (_) {} });
+                panelBox.addEventListener("dragenter", (e) => { e.preventDefault(); _dragDepth++; panelBox.style.boxShadow = "inset 0 0 0 2px #5b9bd5"; });
+                panelBox.addEventListener("dragleave", () => { if (--_dragDepth <= 0) { _dragDepth = 0; panelBox.style.boxShadow = ""; } });
+                panelBox.addEventListener("drop", async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    _dragDepth = 0;
+                    panelBox.style.boxShadow = "";
+                    const files = (e.dataTransfer && e.dataTransfer.files) ? Array.from(e.dataTransfer.files) : [];
+                    if (!files.length) return;
+                    let added = 0;
+                    for (const file of files) {
+                        const kind = detectAssetKindByFile(file);
+                        if (!kind) continue;
+                        const list = kind === "image" ? settings.assets.images : kind === "video" ? settings.assets.videos : settings.assets.audios;
+                        const p = await uploadFileObject(file, kind);
+                        if (p) {
+                            list.push({ type: (ASSET_TYPES_BY_KIND[kind] || ASSET_TYPES)[0], name: assetNameFromFilename(file.name), path: p, enabled: true, letter: "" });
+                            added++;
+                        }
+                    }
+                    if (added) {
+                        try { panelBox.__jzlBuild?.(); } catch (_) {}
+                        panelBox.dispatchEvent(new Event("change", { bubbles: true }));
+                        notify(`已拖拽上传 ${added} 个素材（自动以文件名命名）`, "success");
+                    }
+                });
+            }
             break;
         }
         case "prompt": renderPromptPanel(panelBox, settings, d, node); break;
@@ -3217,10 +3320,12 @@ app.registerExtension({
             };
             self.__jzlUpdateInfo = updateInfo;  // 设置面板保存后由 saveManager 触发刷新
 
-            // 提示词：内部编辑窗口（DOM 富文本 @ 着色），唯一提示词来源（外部提示词端口已删除）
+            // 提示词：内部编辑窗口（DOM 富文本 @ 着色）。可接外部：用节点顶部「提示词·接线」输入框（同 CLIP Text Encode 的左上圆点）连上游文本，连线后以上游为准。
             const promptLabel = el("div", "font-size:12px;color:#bbb;", "📝 提示词（用 @ 引用素材）");
             const alignStatus = el("span", "font-size:11px;margin-left:8px;", "");
-            promptLabel.appendChild(alignStatus);
+            const extStatus = el("span", "font-size:11px;margin-left:8px;color:#8a9fb8;white-space:nowrap;", "⇶ 可接上游文本");
+            extStatus.title = "提示词接线：把上游 STRING 文本节点输出拖到节点顶部「提示词·接线」输入框（左上角官方圆点，同 CLIP Text Encode）；连线后运行以上游文本为提示词（未接时用本框内容）";
+            promptLabel.append(alignStatus, extStatus);
             container.appendChild(promptLabel);
             const promptBox = document.createElement("div");
             promptBox.contentEditable = "true";
@@ -3256,6 +3361,50 @@ app.registerExtension({
             self.__promptBox = promptBox;
             promptBox.__node = self;
             setupInternalPrompt(self, promptBox, ipWidget);
+
+            // 顶部「提示词·接线」widget：占位提示（接线口）；连线后 ComfyUI 会将其转为本节点输入端口
+            try {
+                const _extW2 = (self.widgets || []).find((w) => w.name === "external_prompt");
+                if (_extW2 && _extW2.inputEl) _extW2.inputEl.placeholder = "连接上游文本，留空则用下方大提示词框";
+            } catch (_) {}
+
+            // 外部提示词接线状态角标（onDraw 每帧同步；接入后锁定大提示词框，以上游为准）
+            const updateExt = () => {
+                try {
+                    const _inp = (self.inputs || []).find((i) => i.name === "external_prompt");
+                    const _on = !!(_inp && _inp.link != null);
+                    const _t = _on ? "⇶ 外部提示词已接入（输入框已锁定）" : "⇶ 可接上游文本";
+                    if (extStatus.textContent !== _t) {
+                        extStatus.textContent = _t;
+                        extStatus.style.color = _on ? "#6fce8a" : "#8a9fb8";
+                    }
+                    // 接入外部提示词 → 节点内大提示词框锁定不可编辑（以上游文本为准）；断开「提示词·接线」后恢复
+                    if (promptBox.isContentEditable === _on) {
+                        if (_on) {
+                            promptBox.contentEditable = "false";
+                            promptBox.style.background = "#202020";
+                            promptBox.style.color = "#8a8a8a";
+                            promptBox.style.cursor = "not-allowed";
+                            promptBox.title = "已接入外部提示词：本框锁定不可编辑（以上游文本为准）；断开「提示词·接线」后可恢复";
+                            try { promptBox.blur(); } catch (_b) {}
+                        } else {
+                            promptBox.contentEditable = "true";
+                            promptBox.style.background = "#2a2a2a";
+                            promptBox.style.color = "#ddd";
+                            promptBox.style.cursor = "";
+                            promptBox.title = "";
+                        }
+                    }
+                    // 放大编辑在锁定时禁用（改了大框也不生效，避免误导）
+                    if (pZoom.disabled !== _on) {
+                        pZoom.disabled = _on;
+                        pZoom.style.opacity = _on ? "0.4" : "";
+                        pZoom.style.cursor = _on ? "not-allowed" : "pointer";
+                    }
+                } catch (_) {}
+            };
+            self.__jzlUpdateExt = updateExt;
+            updateExt();
 
             // 参考元素切换状态（纯文本/显示引用）：默认「纯文本」（关闭）；只由「🎯 参考元素切换」按钮手动切换，
             // 资产变化（新增/修改素材）时保持当前模式、不自动切换。
@@ -3529,7 +3678,10 @@ app.registerExtension({
                 widget.computeLayoutSize = () => ({ minHeight: 300, maxHeight: undefined, minWidth: 600 });
                 // Director 同款：DOM widget 自身每次被绘制时同步宽度（最精准时机，绘制前宽度已对，杜绝闪压）；
                 // afterResize 在节点尺寸变化后同步
-                widget.options.onDraw = () => { try { syncDomWidth(); } catch (_) {} };
+                widget.options.onDraw = () => {
+                    try { syncDomWidth(); } catch (_) {}
+                    try { self.__jzlUpdateExt?.(); } catch (_) {}
+                };
                 widget.options.afterResize = () => { try { syncDomWidth(); } catch (_) {} };
             }
 
