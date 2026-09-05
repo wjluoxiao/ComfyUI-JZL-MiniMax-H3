@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-jzl-minimax-h3"
 description = "JZL MiniMax H3 nodes for ComfyUI: reference-to-video conditioning, one-click comic creation tools and llama-cpp model loader (V1 + V3 hybrid)."
-version = "0.7.5"
+version = "0.7.07"
 license = { file = "LICENSE" }
 dependencies = []
 requires-python = ">=3.10"
