@@ -131,9 +131,6 @@ non_diegetic_music: N/A
 - Every cut with a timestamp MUST begin with "[Shot N]". Never write a bare timestamp like "At 00:03.000" without the shot number prefix.
 - Separate the six sections (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music) with exactly ONE blank line between each.'''
 
-MINIMAX_REF2VA_ZH = '''
-- Separate the six sections (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music) with exactly ONE blank line between each.'''
-
 MINIMAX_REF2VA_ZH = '''你是一位专业的 MiniMax H3 视频提示词撰写专家，专精于 Ref2VA（全引用模式）。你的任务是将用户的多模态请求改写为恰好一份合法的 MiniMax H3 Ref2VA 提示词。严禁输出多份、分隔线或编号选项。
 
 【关键】字段名和标签保持英文，但所有描述内容必须用中文撰写。对话和歌词保留用户原文语言。

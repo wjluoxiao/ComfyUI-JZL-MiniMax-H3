@@ -13,54 +13,13 @@ import re
 # ═══════════════════════════════════════════════════════════════
 
 STORY_STYLES = {
-    "热血战斗": (
-        "风格要素: 高张力对抗, 力量碰撞, 速度感, 技能释放的视觉奇观。"
-        "色调倾向: 高饱和暖色(红/橙/金), 强烈的明暗对比, 粒子特效密集。"
-        "节奏: 快切镜头, 短爆发, 冲击力优先。"
-        "角色关系: 正邪对决、师徒传承、同伴羁绊。"
-    ),
-    "悬疑推理": (
-        "风格要素: 线索的视觉暗示, 人物微表情, 环境细节的慢慢揭示, 反转瞬间。"
-        "色调倾向: 低饱和冷色(蓝灰/墨绿), 单一光源, 阴影中隐藏信息。"
-        "节奏: 缓慢推进, 关键帧停留, 细节点放大。"
-        "角色关系: 侦探与嫌疑人、目击者与追踪者。"
-    ),
-    "温馨日常": (
-        "风格要素: 生活中的微小美好, 人与环境的和谐互动, 情感的自然流露。"
-        "色调倾向: 暖中性色(奶油/淡木/薄荷绿/天空蓝), 柔和的漫反射光, 金色时刻。"
-        "节奏: 舒缓从容, 给情感留白, 环境空镜穿插。"
-        "角色关系: 家人、朋友、宠物、邻里。"
-    ),
-    "奇幻冒险": (
-        "风格要素: 宏大世界观, 奇异生物, 魔法效果, 史诗级场景。"
-        "色调倾向: 高饱和丰富色盘, 发光粒子, 魔法光芒, 异世界质感。"
-        "节奏: 场景跳跃大, 奇观展示与角色反应交替。"
-        "角色关系: 勇者与伙伴、冒险小队、跨种族联盟。"
-    ),
-    "科幻未来": (
-        "风格要素: 高科技环境, 全息投影, 赛博格, 空间站/未来城市, AI 交互。"
-        "色调倾向: 冷峻金属色(银/铬/深蓝), 霓虹点缀(青/品红), 全息扫描线。"
-        "节奏: 科技细节展示, 人机交互, 未来感运镜。"
-        "角色关系: 人类与AI、太空探索者、未来市民。"
-    ),
-    "古风武侠": (
-        "风格要素: 中国古典意境, 轻功身法, 剑气内功, 山水场景。"
-        "色调倾向: 水墨感(青绿/素白/墨色/朱砂), 留白构图, 飘落花瓣。"
-        "节奏: 动静结合, 招式拆解, 意境空镜。"
-        "角色关系: 侠客与江湖、师徒传承、正邪对立。"
-    ),
-    "都市情感": (
-        "风格要素: 现代都市生活, 咖啡馆/办公室/街道, 情感细腻互动。"
-        "色调倾向: 现实主义色彩, 自然窗光, 城市夜景的暖黄与冷蓝交织。"
-        "节奏: 对话聚焦, 反应镜头, 环境氛围渲染。"
-        "角色关系: 恋人、同事、老朋友、偶遇的陌生人。"
-    ),
-    "恐怖惊悚": (
-        "风格要素: 心理恐惧, 未知威胁, 空间压迫感, 突如其来的惊吓。"
-        "色调倾向: 极暗调, 去饱和, 单光源(手电/烛光), 诡异的色彩偏移。"
-        "节奏: 缓慢累积→突然爆发, 荷兰角, 前景遮挡制造不安。"
-        "角色关系: 受害者与未知存在、孤立无援的个体。"
-    ),
+    "热血战斗": ("动作重心：招式/对抗/打击反馈占最大篇幅，忠于用户剧情（见 styles/01-热血战斗.md）。"),
+    "悬疑惊悚": ("悬念重心：信息差/伏笔/压迫感放大，忠于用户剧情（见 styles/02-悬疑惊悚.md）。"),
+    "温馨日常": ("情感重心：微动作/表情/语气/留白为镜头中心，忠于用户剧情（见 styles/03-温馨日常.md）。"),
+    "甜宠爽文": ("反差爽点重心：揭晓/围观反应/浪漫时刻占最多篇幅，忠于用户剧情（见 styles/04-甜宠爽文.md）。"),
+    "宏大奇观": ("世界奇观重心：环境/设定细节与角色「看见」占最多篇幅，忠于用户剧情（见 styles/05-宏大奇观.md）。"),
+    "乡土喜乐": ("喜剧重心：误会/夸张肢体/围观哄笑节奏欢快，忠于用户剧情（见 styles/06-乡土喜乐.md）。"),
+    "歌神舞台": ("音乐节拍重心：表演/灯光/观众反应跟节拍，忠于用户剧情（见 styles/07-歌神舞台.md）。"),
 }
 
 
@@ -91,37 +50,87 @@ def _resolve_segment_count(label):
     if isinstance(label, (int, float)):
         return max(1, min(48, int(label)))
     return 4
+def _parse_duration_spec(duration):
+    """时长设置解析：支持 int/float 或字符串 "5"/"5-5"/"5~5"/"4-10"。返回 (lo, hi, desc)。
+    lo==hi 表示每段固定该秒；lo<hi 为区间（拆解时每段按剧情弧线在区间内取值，写进各段 **时长**）。"""
+    v = duration if duration is not None else 8
+    s = str(v).strip()
+    m = re.search(r"^\s*(\d+(?:\.\d+)?)\s*[~\-—]\s*(\d+(?:\.\d+)?)\s*$", s)
+    if m:
+        lo = float(m.group(1)); hi = float(m.group(2))
+    else:
+        try:
+            n = float(s); lo = n; hi = n
+        except Exception:
+            lo = 8; hi = 8
+    lo = max(4.0, min(15.0, lo)); hi = max(lo, min(15.0, hi))
+    if lo > hi:
+        lo, hi = hi, lo
+    if lo == hi:
+        return (lo, hi, f"统一 {int(lo)} 秒")
+    return (lo, hi, f"{int(lo)}~{int(hi)} 秒区间（每段由你按剧情弧线给实际秒数，写进该段 **时长** 字段）")
+
+
 
 
 # ═══════════════════════════════════════════════════════════════
 #  V2 融合骨架（剧本与镜头处理器专用）
-#  占位符: {Mode_Instruction} {Story_Style} {Segment_Count}
+#  占位符: {Mode_Instruction} {Story_Style} {Segment_Count} {Timing_Plan}
 #          {Decompose_Rules} {Reference_Intro} {H3_Shot_Rules} {User_Story}
 # ═══════════════════════════════════════════════════════════════
 
 SCRIPT_SKELETON_V2 = '''# Role: 顶级短视频编剧 & MiniMax H3 分段提示词工程师
 你是专业的短视频编剧和 MiniMax H3 视频提示词撰写专家。你的任务分两步：
-第一步：把用户故事按「情节」拆解为恰好 {Segment_Count} 个分段——每个分段是一段 {Segment_Duration} 秒的独立视频片段，对应故事的一个完整情节段落（不是单个动作；一个分段内可以包含多个连续动作）。
-第二步：把每个分段当成一段独立视频去润色，写出一条可直接送入 MiniMax H3 模型生成视频的完整提示词，详细描述要覆盖这段视频从头到尾的全部内容。
+第一步：把用户故事按「情节」拆解为恰好 {Segment_Count} 个分段——每个分段是一段独立视频片段（时长见 B「限制框架」；区间设置时按剧情弧线给每段实际秒数，写进该段 **时长** 字段）。
+第二步：把每个分段当成一段独立视频去润色，写出一条可直接送入 MiniMax H3 模型生成视频的完整提示词（六段 Ref2VA + 调度指令，格式见 D）。
 
-## 0. 任务模式
-{Mode_Instruction}
+这是你的工作契约：A = 你拿到的材料（原材料，用于理解，不得修改）；B = 必须遵守的限制框架（硬约束）；C = 执行与审查流程（严格顺序）；D = 输出格式权威（严格遵循）。
 
-## 1. 故事风格
+## 语言设定（CRITICAL — 正文语言跟随用户所选输出语言；字段名/标记保持英文原样）
+- 用户 LLM 输出语言为「中文 [ZH]」：六段正文（subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music 的内容）用**中文**写作；为「英文 [EN]」：正文用**英文**。字段名（subject_definitions 等）与关系标记（fully_preserved / fully_copy / reference / weak_reference 等）始终**英文原样**。
+- 仅 <d> 内台词/歌词/旁白按用户原语言（如 <d>[中文] 原文。</d>）、画面可见文字（横幅/招牌/字幕等）用英文双引号包裹原文字，保留原语言。
+- 下方示例仅示意结构与写法；实际正文语言按「用户所选输出语言」。
+
+## A. 你拿到的材料（原材料，用于理解与取用，不得修改）
+【用户故事】
+{User_Story}
+
+【所选故事风格】（作为导演视角与镜头语言来源；从中取用该风格的「视觉风格 / 色调与光线 / 摄影语言 / 核心导演语法」）
 {Story_Style}
 {User_Tags}
 
-## 2. 分段数量铁律
-必须恰好生成 {Segment_Count} 个分段，不多不少。每个分段都是一段独立的视频片段（对应一个情节段落）。
-
-## 3. 拆解规则
-{Decompose_Rules}
-
+【参考素材标签对照表】（slots 唯一来源；白名单/槽位名规则见 D 与下方拆解规则）
 {Reference_Intro}
-{H3_Shot_Rules}
 
-## 用户故事：
-{User_Story}'''
+## B. 必须遵守的限制框架（硬约束；逐条核对，违反即失败）
+【任务】{Mode_Instruction}
+【分段数】恰好生成 {Segment_Count} 个分段；每段是一段 {Segment_Duration} 的独立视频（实际秒数写进该段 **时长** 字段）。
+
+【镜头语言偏好（景别/运镜/切镜/转场/音乐/字数，逐条执行）】
+{Preference_Block}
+
+【全局节奏统筹（先按弧线给每段定实际秒数与 [Shot N] 数）】
+{Timing_Plan}
+
+## C. 执行与审查流程（严格按顺序，一次指令内完成）
+第 1 步 · 理解：通读 A（故事/风格/素材对照表），识别剧情弧线、人物与台词、本批可调用素材及其「类型:槽位名」。
+第 2 步 · 规划：按 B 的统筹与偏好，给每段定实际秒数与 [Shot N] 数（按弧线分配，开场少/中段推进/高潮多/收束回落）。
+第 3 步 · 执行：逐段输出 [SHOT_START]...[SHOT_END]，每段含（一）分段信息 +（二）六段 Ref2VA + 调度指令（格式见 D）。执行时遵守：
+{Decompose_Rules}
+   - 段边界 = 大切镜：下段 [Shot 1] 紧接上段剧情时间线、画面自足（可换景别/机位/空间）；禁「承接上段末帧/上段…继续」伪引用；人物/物理状态跨段连续（禁回退/重演上段已演事件）；段尾（非末段）用 1-2 句写清物理末态作剧情交接。
+第 4 步 · 审查（写完全部后自检一遍，不满足即改）：
+   - 六段字段齐全、字段间各空一行、无 markdown 代码块；
+   - <Subject N>/<Picture N>/<Video N>/<Audio N> 与 subject_definitions 一致，且与 SCENE/VIDEO/AUDIO_INSTRUCTION.slots 编号严格同源（slots[0]=<Picture 1>…）；
+   - 角色/场景/道具 三字段只用素材声明的元素；slots 只写「类型:槽位名」，严禁自造/缩写/用素材名当槽位名；
+   - 台词原样在 <d>（保留原语言）；无脑补台词/内心独白/语气词；
+   - 每个 [Shot N] 时间戳落在该段时长内、[Shot 1] 无时间戳；
+   - 每个 [Shot N] 都写明该镜景别+运镜，且段内不同 [Shot N] 用**不同景别+不同运镜**混合（长视频 4-6 种递进、短视频 2-3 种，随剧情推进变换），严禁整段只复用一种景别或一种运镜；
+   - 六段正文语言 = 用户所选输出语言（中文[ZH]=中文、英文[EN]=英文；字段名/标记保持英文），仅 <d>/画面文字保留原语言；
+   - retention_analysis 程度标记正确、破折号后列举已定义特征（无「保留」二字）；
+   - 无「承接上段末帧」「上段…继续」伪引用；无状态回退/重演。
+
+## D. 输出格式权威（六段 Ref2VA + 调度指令，严格遵循）
+{H3_Shot_Rules}'''
 
 
 def _build_schedule_rules(lang, enable_scene, enable_props, enable_video, enable_audio):
@@ -243,38 +252,67 @@ def build_shot_prompt(
     lang: "zh" / "en"；segment_duration: 每段视频时长(秒)，约束时间戳范围。
     """
     from ..sheding.mode_instructions import MODE_INSTRUCTIONS as _mi
-    from ..sheding.story_styles import STORY_STYLES as _ss
+    from ..sheding.story_styles import resolve_style as _resolve_style
     from ..sheding.decompose_rules import DECOMPOSE_RULES as _dr
     from ..sheding.h3_shot_rules import H3_SHOT_RULES_ZH, H3_SHOT_RULES_EN
 
     mode_instruction = _mi.get(mode, list(_mi.values())[0] if _mi else "")
-    style = _ss.get(story_style, list(_ss.values())[0] if _ss else "")
+    style = _resolve_style(story_style)
     segment_count = _resolve_segment_count(segment_count_label)
-    segment_duration = max(4, min(15, int(segment_duration or 8)))
+    duration_lo, duration_hi, duration_desc = _parse_duration_spec(segment_duration)
 
     schedule_rules = _build_schedule_rules(lang, enable_scene, enable_props, enable_video, enable_audio)
 
     # 用 replace 而非 format：rules 文本内含 {视觉描述} 等示意大括号，不能走 format
     rules = (H3_SHOT_RULES_ZH if lang == "zh" else H3_SHOT_RULES_EN)
     rules = rules.replace("{Segment_Count}", str(segment_count))
-    rules = rules.replace("{Segment_Duration}", str(segment_duration))
+    rules = rules.replace("{Segment_Duration}", duration_desc)
     rules = rules.replace("{Schedule_Rules}", schedule_rules)
-    rules = rules.replace("{Style_Directing}", _extract_style_directing(style))
+    rules = rules.replace("{Style_Directing}", "- 本段导演语法：按『A. 故事风格』中该风格的「## 核心导演语法」逐条执行（此处不重复注入）。")
     rules = rules.replace("{Detail_Length}", _extract_detail_length(preference))
-    rules = rules.replace("{Preference_Directing}", (preference or "").strip() or "- （无额外镜头语言偏好，按故事风格与标准规则执行）")
+    rules = rules.replace("{Preference_Directing}", "- 本段镜头偏好：按『B. 限制框架』的镜头偏好逐条执行（此处不重复注入）。")
     rules = rules.replace("{Custom_Rules_Directing}", (custom_rules or "").strip() or "- （无自定义规则）")
 
     # 参考素材说明：生成「标签对照表」（槽位名 → 素材名 → 描述），LLM 严格按表写 slots
     reference_intro = _build_material_table(ref_image_intro, ref_video_intro, ref_audio_intro)
 
+    # 顶层高权重偏好块（§1.5）：完整偏好文本；无偏好时给一句占位
+    pref_block = (preference or "").strip()
+    if not pref_block:
+        pref_block = "- 无额外镜头语言偏好：景别/运镜/切镜/转场/音乐/字数按剧情与「故事风格」自然发挥。"
+
+    # 全局节奏统筹（§2.5）：时长区间 + 按弧线分摊时长与切镜预算（规则级导演规划）
+    if duration_lo == duration_hi:
+        _dur_line = f"- 时长设定：全局固定，每段视频 **时长** 统一为 {int(duration_lo)} 秒。"
+    else:
+        _dur_line = (f"- 时长设定：每段视频时长在 {int(duration_lo)}~{int(duration_hi)} 秒区间内。"
+                     f"正式拆解前，先按剧情弧线给每段分配一个实际秒数（开场与收束相对短、发展适中、高潮最长），"
+                     f"并把该秒数写进每段元数据「**时长**」字段（取整秒，不得超区间）。")
+    timing_plan = (
+        "把整部短剧当成一部连续影片来做导演统筹：\n"
+        + _dur_line + "\n"
+        + f"- 切镜预算：每段 [Shot N] 数量 = 该段时长 ÷ 每镜时长（一镜通常 ≥0.8~1 秒；正常语速对白约 4~5 字/秒）。"
+        "先估算整片可用切镜总量（约 {segment_count} 段时长之和 ÷ 每镜时长），再按剧情弧线把切镜密度分配到各段："
+        "开场段少镜长镜（建立）、中段推进（单段 2~4 镜）、高潮段多镜快切、收束段回落；"
+        "对白密集的段自动减镜加长（先保证每句台词+说话人神态+听者反应完整，再补动作/运镜/环境）。"
+        "同一动作只切一次，禁止为凑镜数硬切或重复。\n"
+        "- 大切镜衔接：每段是独立生成的一段——段与段之间是一次大切镜/换场：段 N+1 的 [Shot 1] 是紧接上段剧情时间线的下一镜"
+        "（可换景别/机位/空间），画面自足，**禁止写“承接上段末帧/上段…继续”等伪画面引用**；"
+        "但剧情/人物物理状态必须跨段连续：上段结尾谁在什么位置、什么姿态、发现/触发了什么，下段必须基于该状态继续"
+        "（禁止状态回退：上段已站起/已发现/已下台阶，下段不得又蹲回/装没发现/再踏上同一级台阶），"
+        "禁止把上段已演过的事件重演一遍。段尾（非末段）用 1-2 句交代清楚结束瞬间的物理末态作剧情状态交接。"
+    ).format(segment_count=segment_count)
+
     return SCRIPT_SKELETON_V2.format(
         Mode_Instruction=mode_instruction.format(Segment_Count=segment_count),
         Story_Style=style,
         Segment_Count=segment_count,
-        Segment_Duration=segment_duration,
+        Segment_Duration=duration_desc,
         Decompose_Rules=_dr,
         Reference_Intro=reference_intro,
         H3_Shot_Rules=rules,
+        Preference_Block=pref_block,
+        Timing_Plan=timing_plan,
         User_Story=user_story,
         User_Tags=user_tags,
     )

@@ -13,7 +13,7 @@ import re
 
 from .llama_backend import LLAMA_CPP_STORAGE
 from .nodes_llama import JZL_MiniMax_ScriptProcessor
-from .sheding.prompt_enhancer_rules import build_enhancer_prompt
+from .sheding.prompt_enhancer_rules import build_enhancer_prompt, build_segment_position
 
 
 class JZL_MiniMaxPromptEnhancer:
@@ -125,6 +125,27 @@ class JZL_MiniMaxPromptEnhancer:
 
         return h3_body[:content_start] + ra + h3_body[content_end:]
 
+    @staticmethod
+    def _normalize_h3_blank_lines(body):
+        """兜底规范 H3 块字段间距：
+        - 六个字段名行（subject_definitions / summary / retention_analysis / detailed_description /
+          overall_soundscape / non_diegetic_music）之前保证一个空行；
+        - 调度指令行（===SCENE_INSTRUCTION=== / ===VIDEO_INSTRUCTION=== / ===AUDIO_INSTRUCTION===）
+          之前保证一个空行（防止 non_diegetic_music 与指令粘连同行）。
+        已有空行则不会重复添加，绝不改动内容行。"""
+        field_re = re.compile(
+            r'^(?:subject_definitions|summary|retention_analysis|detailed_description|'
+            r'overall_soundscape|non_diegetic_music)\s*:', re.I)
+        dispatch_re = re.compile(r'^===.*INSTRUCTION===', re.I)
+        lines = (body or "").split("\n")
+        out = []
+        for ln in lines:
+            s = ln.strip()
+            if (field_re.match(s) or dispatch_re.match(s)) and out and out[-1].strip():
+                out.append("")
+            out.append(ln)
+        return "\n".join(out)
+
     # ── LLM 调用 ──────────────────────────────────────────────
 
     @staticmethod
@@ -168,7 +189,7 @@ class JZL_MiniMaxPromptEnhancer:
     # ── 单块润色 ──────────────────────────────────────────────
 
     @classmethod
-    def _build_user_msg(cls, lang, info, subject_defs, dispatch, original_dd):
+    def _build_user_msg(cls, lang, info, subject_defs, dispatch, original_dd, original_music, preference="", seg_index=1, seg_total=1):
         if lang == "en":
             labels = cls._SEGMENT_INFO_KEYS_EN
             head = "[Segment info]"
@@ -177,17 +198,25 @@ class JZL_MiniMaxPromptEnhancer:
             labels = cls._SEGMENT_INFO_KEYS
             head = "【本分段信息】"
             tail = "请输出重写后的 detailed_description 正文。"
+        pos_lines = build_segment_position(lang, seg_index, seg_total)
         info_lines = "\n".join(f"{lab}: {info.get(k) or ''}" for lab, k in zip(labels, cls._SEGMENT_INFO_KEYS))
+        pref_lines = ""
+        if preference and str(preference).strip():
+            pref_lines = f"\n\n【镜头语言偏好（最高优先，逐条执行：景别/运镜/切镜/转场/音乐/字数）】\n{preference}"
+        music_lines = f"\n\n【原 non_diegetic_music 值（据此判断是否需补写音乐）】\n{original_music or '- 空'}"
         return (
-            f"{head}\n{info_lines}\n\n"
+            f"{pos_lines}\n\n"
+            f"{head}\n{info_lines}\n"
+            f"{pref_lines}\n\n"
             f"【subject_definitions（标签编号以此为准）】\n{subject_defs or '- 无'}\n\n"
             f"【调度指令（标签编号以此为准）】\n{dispatch or '- 无'}\n\n"
-            f"【原 detailed_description（在此基础润色）】\n{original_dd}\n\n"
+            f"【原 detailed_description（在此基础润色）】\n{original_dd}\n"
+            f"{music_lines}\n\n"
             f"{tail}"
         )
 
     @classmethod
-    def _enhance_block(cls, block, system_prompt, bus, lang, seed):
+    def _enhance_block(cls, block, system_prompt, bus, lang, seed, preference="", seg_index=1, seg_total=1):
         """润色单块的 detailed_description，返回新块；失败返回 None（调用方保留原块）。"""
         h3_m = re.search(r'(===H3_PROMPT===\n)(.*?)(?====|\Z)', block, re.DOTALL)
         if not h3_m:
@@ -206,18 +235,38 @@ class JZL_MiniMaxPromptEnhancer:
         if not original_dd:
             return None
 
+        original_music = cls._extract_field(h3_body, "non_diegetic_music")
         subject_defs = cls._extract_field(h3_body, "subject_definitions")
         dispatch = cls._extract_dispatch(block)
         info = cls._extract_segment_info(block)
-        user_msg = cls._build_user_msg(lang, info, subject_defs, dispatch, original_dd)
+        user_msg = cls._build_user_msg(lang, info, subject_defs, dispatch, original_dd, original_music, preference, seg_index, seg_total)
 
         new_dd = cls._run_llm(bus, system_prompt, user_msg, False, seed)
         new_dd = (new_dd or "").strip()
         if not new_dd or new_dd.startswith(("[API", "[LLM", "[错误", "[读取")):
             return None  # LLM 失败，保留原块
 
-        new_h3_body = h3_body[:content_start] + "\n" + new_dd + "\n" + h3_body[content_end:]
+        # 分离音乐标记：正文结束后若有 [NON_DIEGETIC_MUSIC] 行 → 剥离并写回 non_diegetic_music 字段
+        new_music = None
+        music_m = re.search(r'(?m)^\[NON_DIEGETIC_MUSIC\]\s*(.+)$', new_dd)
+        if music_m:
+            new_music = music_m.group(1).strip()
+            new_dd = new_dd[:music_m.start()].rstrip()
+
+        # 保证 detailed_description 与前后字段之间各空一行（原用单换行会吞掉字段间空行）
+        new_h3_body = h3_body[:content_start].rstrip() + "\n\n" + new_dd + "\n\n" + h3_body[content_end:]
+        # 若模型按偏好补写了音乐 → 替换 non_diegetic_music 字段
+        if new_music:
+            nm_m = re.search(r'(?m)^non_diegetic_music\s*:\s*', new_h3_body)
+            if nm_m:
+                n_start = nm_m.end()
+                n_tail = new_h3_body[n_start:]
+                n_next = re.search(r'(?m)^[a-z_]+\s*:\s*', n_tail)
+                n_end = n_start + (n_next.start() if n_next else len(n_tail))
+                new_h3_body = new_h3_body[:n_start] + new_music + new_h3_body[n_end:]
         new_h3_body = cls._sync_retention_shots(new_h3_body, new_dd)
+        # 兜底：规范六字段之间、以及 non_diegetic_music 与调度指令之间的空行
+        new_h3_body = cls._normalize_h3_blank_lines(new_h3_body)
         return block[:h3_m.start()] + marker + new_h3_body + block[h3_m.end():]
 
     # ── 主执行 ────────────────────────────────────────────────
@@ -249,8 +298,9 @@ class JZL_MiniMaxPromptEnhancer:
 
         enhanced_blocks = []
         failed = 0
+        total = len(blocks)
         for idx, block in enumerate(blocks, 1):
-            new_block = self._enhance_block(block, system_prompt, bus, lang, seed)
+            new_block = self._enhance_block(block, system_prompt, bus, lang, seed, preference, idx, total)
             if new_block is None:
                 failed += 1
                 enhanced_blocks.append(block)

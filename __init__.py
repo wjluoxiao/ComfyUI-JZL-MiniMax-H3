@@ -413,10 +413,11 @@ async def jzl_generated_videos(request):
 
 @PromptServer.instance.routes.get("/jzl/story_latest_script")
 async def jzl_story_latest_script(request):
-    """读取 {故事名} 最后一次生成的「故事拆解」文件夹内文件，返回内容（供「生成视频查看器」复制/编辑剧本）。
+    """读取 {故事名} 最后一次生成的剧本文本，返回内容（供「生成视频查看器」复制/编辑剧本）。
 
-    目录结构：output/jzl/{故事名}/第NNNNN次生成/故事拆解/*.txt（短剧导演台Max 每批次拆解/增强都会写入）。
-    取编号最大的「第N次生成」批次 → 其「故事拆解」目录内文件（优先「生成故事拆解」，否则最新）。
+    目录结构：output/jzl/{故事名}/第NNNNN次生成/{故事拆解|已增强剧本}/*.txt。
+    取编号最大的「第N次生成」批次 → 优先读其「已增强剧本」目录（该批次开启过增强时增强结果写在这里），
+    否则读「故事拆解」目录（未开启增强时只有拆解结果）。优先「生成故事拆解/增强后剧本」，否则最新。
     """
     try:
         import folder_paths
@@ -429,7 +430,7 @@ async def jzl_story_latest_script(request):
     safe = _safe_story_name(story_name)
     story_dir = os.path.join(out_root, "jzl", safe)
     if not os.path.isdir(story_dir):
-        return web.json_response({"ok": True, "story": safe, "script": "", "batch": None, "file": None})
+        return web.json_response({"ok": True, "story": safe, "script": "", "batch": None, "file": None, "source": None})
     # 找编号最大的「第N次生成」批次目录
     batches = []
     for _dn in os.listdir(story_dir):
@@ -440,34 +441,50 @@ async def jzl_story_latest_script(request):
             except Exception:
                 pass
     if not batches:
-        return web.json_response({"ok": True, "story": safe, "script": "", "batch": None, "file": None})
+        return web.json_response({"ok": True, "story": safe, "script": "", "batch": None, "file": None, "source": None})
     batches.sort(key=lambda x: x[0])
     _batch_no, latest_dir = batches[-1]
-    script = ""
-    picked = None
-    story_dir2 = os.path.join(latest_dir, "故事拆解")
-    if os.path.isdir(story_dir2):
+
+    # 目录优先级：已增强剧本（开启过增强） > 故事拆解（未增强）
+    def _pick_from(_dir):
+        if not os.path.isdir(_dir):
+            return None, None, ""
         files = []
-        for _fn in os.listdir(story_dir2):
-            _fp = os.path.join(story_dir2, _fn)
+        for _fn in os.listdir(_dir):
+            _fp = os.path.join(_dir, _fn)
             if os.path.isfile(_fp) and (_fn.lower().endswith(".txt") or _fn.lower().endswith(".md")):
                 try:
                     files.append((os.path.getmtime(_fp), _fp, _fn))
                 except Exception:
                     pass
-        if files:
-            files.sort(key=lambda x: x[0], reverse=True)
-            for _mt, _fp, _fn in files:  # 优先「生成故事拆解」
-                if "生成故事拆解" in _fn:
-                    picked = _fn
-                    with open(_fp, "r", encoding="utf-8-sig") as _f:
-                        script = _f.read()
-                    break
-            if picked is None:  # 否则最新文件
-                _mt, _fp, picked = files[0]
+        if not files:
+            return None, None, ""
+        files.sort(key=lambda x: x[0], reverse=True)
+        # 优先语义前缀文件（增强后剧本 / 生成故事拆解），否则最新
+        for _mt, _fp, _fn in files:
+            if ("增强后剧本" in _fn) or ("生成故事拆解" in _fn):
                 with open(_fp, "r", encoding="utf-8-sig") as _f:
-                    script = _f.read()
-    return web.json_response({"ok": True, "story": safe, "script": script, "batch": _batch_no, "file": picked})
+                    return _fn, _fp, _f.read()
+        _mt, _fp, _fn = files[0]
+        with open(_fp, "r", encoding="utf-8-sig") as _f:
+            return _fn, _fp, _f.read()
+
+    script = ""
+    picked = None
+    source = None
+    enhanced_dir = os.path.join(latest_dir, "已增强剧本")
+    decompose_dir = os.path.join(latest_dir, "故事拆解")
+    # 优先已增强剧本目录（该批次存在 = 开启过增强）
+    if os.path.isdir(enhanced_dir) and any(
+            _fn.lower().endswith((".txt", ".md"))
+            for _fn in os.listdir(enhanced_dir)
+            if os.path.isfile(os.path.join(enhanced_dir, _fn))):
+        picked, _fp, script = _pick_from(enhanced_dir)
+        source = "已增强剧本"
+    if (not script or picked is None) and os.path.isdir(decompose_dir):
+        picked, _fp, script = _pick_from(decompose_dir)
+        source = "故事拆解"
+    return web.json_response({"ok": True, "story": safe, "script": script, "batch": _batch_no, "file": picked, "source": source})
 
 
 @PromptServer.instance.routes.get("/jzl/video_thumb")
@@ -504,7 +521,12 @@ async def jzl_manager_get(request):
         import folder_paths
         from .llama_backend import chat_handlers as _ch
         from .nodes_asset_manager import _list_models
-        from .presets.script import STORY_STYLES as _story_styles
+        # 与 schema 下拉同源：优先 sheding.story_styles（含 styles/*.md），缺失才回退 presets.script
+        try:
+            from .sheding.story_styles import STORY_STYLES as _story_styles, STYLE_LABELS as _style_labels
+        except Exception:
+            from .presets.script import STORY_STYLES as _story_styles
+            _style_labels = {}
         all_llms = folder_paths.get_filename_list("LLM")
         llm_list = [f for f in all_llms if "mmproj" not in f.lower()]
         mmproj_list = ["None"] + [f for f in all_llms if "mmproj" in f.lower()]
@@ -513,12 +535,15 @@ async def jzl_manager_get(request):
         vae_models = _list_models("vae")
         lora_models = _list_models("loras")
         story_styles = list(_story_styles.keys())
+        # 下拉显示标签：短名 → 「短名（适合 xxx）」，供前端 combo getOptionLabel 使用
+        story_style_labels = {k: (_style_labels.get(k) or k) for k in story_styles}
         save_dir = os.path.join(folder_paths.get_output_directory(), "jzl")
         upscaler_models = folder_paths.get_filename_list("latent_upscale_models")
     except Exception:
         llm_list, mmproj_list, _ch = [], ["None"], ["None"]
         diff_models = clip_models = vae_models = lora_models = []
         story_styles = []
+        story_style_labels = {}
         save_dir = "output/jzl"
         upscaler_models = []
     return web.json_response({
@@ -532,6 +557,7 @@ async def jzl_manager_get(request):
         "vae_models": vae_models,
         "lora_models": lora_models,
         "story_styles": story_styles,
+        "story_style_labels": story_style_labels,
         "save_dir": save_dir,
         "upscaler_models": upscaler_models,
     })
@@ -569,8 +595,9 @@ async def jzl_assets_post(request):
 
 @PromptServer.instance.routes.post("/jzl/export_assets")
 async def jzl_export_assets(request):
-    """把当前素材库导出为 output/jzl/参考素材_{故事名}_{年月日时分秒}.txt
-    （UTF-8，可读格式，供跨机器导入）。故事名取自节点「故事名称」widget，空则省略。"""
+    """把当前素材库导出为 output/jzl/{故事名}/参考素材_{故事名}_{年月日时分秒}.txt
+    （UTF-8，可读格式，供跨机器导入）。故事名取自节点「故事名称」widget：
+    有故事名 → 存入 output/jzl/{故事名}/ 子文件夹；无故事名 → 存 output/jzl/ 根目录。"""
     try:
         import folder_paths
         payload = await request.json()
@@ -578,12 +605,15 @@ async def jzl_export_assets(request):
         story_name = (payload.get("story_name") if isinstance(payload, dict) else "") or ""
         if not isinstance(assets, dict):
             return web.json_response({"error": "缺少素材数据"}, status=400)
-        out_dir = os.path.join(folder_paths.get_output_directory(), "jzl")
-        os.makedirs(out_dir, exist_ok=True)
         import datetime
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         safe_story = _safe_story_name(story_name)
-        if str(story_name).strip():
+        _has_story = bool(str(story_name).strip())
+        base_dir = os.path.join(folder_paths.get_output_directory(), "jzl")
+        # 有故事名 → output/jzl/{故事名}/；无故事名 → output/jzl/
+        out_dir = os.path.join(base_dir, safe_story) if _has_story else base_dir
+        os.makedirs(out_dir, exist_ok=True)
+        if _has_story:
             fname = f"参考素材_{safe_story}_{ts}.txt"
         else:
             fname = f"参考素材_{ts}.txt"
@@ -605,12 +635,211 @@ async def jzl_export_assets(request):
                 lines.append(f"{_cl(item.get('type'))} | {_cl(item.get('letter'))} | {_cl(item.get('name'))} | "
                              f"{_cl(item.get('description'))} | {_cl(item.get('path'))} | "
                              f"{'1' if item.get('enabled', True) else '0'}")
-            lines.append("")
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
-        return web.json_response({"ok": True, "path": path})
+        try:
+            rel = os.path.relpath(path, folder_paths.get_output_directory()).replace("\\", "/")
+        except Exception:
+            rel = ""
+        return web.json_response({"ok": True, "path": path, "rel": rel})
     except Exception as exc:
         return web.json_response({"error": f"导出失败：{exc}"}, status=500)
+
+
+# ── 输出目录文件浏览（跨环境：本机可调系统资源管理器；云机用网页列表 浏览/下载/删除/在线编辑文本）──
+_JZL_FS_TEXT_EXT = {".txt", ".json", ".md", ".csv", ".srt", ".log"}
+
+
+def _jzl_fs_root():
+    import folder_paths
+    return os.path.realpath(os.path.join(folder_paths.get_output_directory(), "jzl"))
+
+
+def _jzl_fs_resolve(rel):
+    """把相对 output/jzl 的路径解析为绝对路径并做沙箱校验；越界返回 None。"""
+    root = _jzl_fs_root()
+    rel = str(rel or "").replace("\\", "/").strip().strip("/")
+    p = os.path.realpath(os.path.join(root, rel))
+    if p != root and not p.startswith(root + os.sep):
+        return None
+    return p
+
+
+@PromptServer.instance.routes.get("/jzl/fs_list")
+async def jzl_fs_list(request):
+    """列出 output/jzl 下的目录内容（供「输出目录」内置文件浏览器）。"""
+    try:
+        root = _jzl_fs_root()
+        abs_p = _jzl_fs_resolve(request.query.get("path", ""))
+        if abs_p is None or not os.path.isdir(abs_p):
+            return web.json_response({"ok": False, "error": "目录不存在或越界"}, status=400)
+        dirs, files = [], []
+        for name in sorted(os.listdir(abs_p), key=lambda s: s.lower()):
+            fp = os.path.join(abs_p, name)
+            try:
+                st = os.stat(fp)
+            except Exception:
+                continue
+            relp = os.path.relpath(fp, root).replace("\\", "/")
+            if os.path.isdir(fp):
+                dirs.append({"name": name, "rel": relp, "mtime": int(st.st_mtime)})
+            else:
+                files.append({"name": name, "rel": relp, "size": int(st.st_size),
+                              "mtime": int(st.st_mtime),
+                              "ext": os.path.splitext(name)[1].lower().lstrip(".")})
+        cur = os.path.relpath(abs_p, root).replace("\\", "/")
+        if cur == ".":
+            cur = ""
+        parent = ""
+        if cur:
+            parent = os.path.relpath(os.path.dirname(abs_p), root).replace("\\", "/")
+            if parent == ".":
+                parent = ""
+        return web.json_response({"ok": True, "rel": cur, "parent": parent, "dirs": dirs, "files": files})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+
+@PromptServer.instance.routes.get("/jzl/fs_download")
+async def jzl_fs_download(request):
+    abs_p = _jzl_fs_resolve(request.query.get("path", ""))
+    if abs_p is None or not os.path.isfile(abs_p):
+        return web.Response(status=404, text="file not found")
+    # inline=1 → 浏览器内联显示（图片/视频/音频预览）；否则作为附件下载
+    inline = str(request.query.get("inline", "")).lower() in ("1", "true", "yes")
+    headers = {} if inline else {"Content-Disposition": 'attachment; filename="%s"' % os.path.basename(abs_p)}
+    return web.FileResponse(abs_p, headers=headers)
+
+
+@PromptServer.instance.routes.post("/jzl/fs_delete")
+async def jzl_fs_delete(request):
+    try:
+        import shutil
+        payload = await request.json()
+        root = _jzl_fs_root()
+        abs_p = _jzl_fs_resolve(payload.get("path", ""))
+        if abs_p is None or abs_p == root or not os.path.exists(abs_p):
+            return web.json_response({"ok": False, "error": "路径无效或不允许删除 output/jzl 根目录"}, status=400)
+        if os.path.isdir(abs_p):
+            shutil.rmtree(abs_p)
+        else:
+            os.remove(abs_p)
+        return web.json_response({"ok": True})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"删除失败：{exc}"}, status=500)
+
+
+@PromptServer.instance.routes.get("/jzl/fs_read")
+async def jzl_fs_read(request):
+    abs_p = _jzl_fs_resolve(request.query.get("path", ""))
+    if abs_p is None or not os.path.isfile(abs_p):
+        return web.json_response({"ok": False, "error": "文件不存在"}, status=404)
+    if os.path.splitext(abs_p)[1].lower() not in _JZL_FS_TEXT_EXT:
+        return web.json_response({"ok": False, "error": "仅支持编辑文本文件"}, status=400)
+    try:
+        with open(abs_p, "r", encoding="utf-8", errors="replace") as f:
+            return web.json_response({"ok": True, "text": f.read()})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"读取失败：{exc}"}, status=500)
+
+
+@PromptServer.instance.routes.post("/jzl/fs_write")
+async def jzl_fs_write(request):
+    try:
+        payload = await request.json()
+        abs_p = _jzl_fs_resolve(payload.get("path", ""))
+        if abs_p is None:
+            return web.json_response({"ok": False, "error": "路径越界"}, status=400)
+        if os.path.splitext(abs_p)[1].lower() not in _JZL_FS_TEXT_EXT:
+            return web.json_response({"ok": False, "error": "仅支持写入文本文件"}, status=400)
+        os.makedirs(os.path.dirname(abs_p), exist_ok=True)
+        with open(abs_p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(str(payload.get("text", "")))
+        return web.json_response({"ok": True})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"保存失败：{exc}"}, status=500)
+
+
+def _jzl_win_focus_folder(path):
+    """Windows：把刚打开的资源管理器窗口带到前台。
+
+    os.startfile 从 ComfyUI 进程（通常处于后台）调起时，受 Windows 前台锁限制
+    只在后台弹出、不抢占焦点。这里枚举 CabinetWClass 窗口，匹配目标文件夹名后
+    用 AttachThreadInput + SetForegroundWindow 强制激活置顶。失败静默（不影响已打开窗口）。"""
+    try:
+        import ctypes
+        import time
+        from ctypes import wintypes
+        time.sleep(0.35)  # 等资源管理器窗口建立
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        base = os.path.basename(os.path.normpath(path)).lower()
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _enum(hwnd, _l):
+            try:
+                if user32.IsWindowVisible(hwnd):
+                    cls = ctypes.create_unicode_buffer(64)
+                    user32.GetClassNameW(hwnd, cls, 64)
+                    if cls.value == "CabinetWClass":  # 资源管理器主窗口
+                        buf = ctypes.create_unicode_buffer(512)
+                        user32.GetWindowTextW(hwnd, buf, 512)
+                        found.append((hwnd, buf.value.lower()))
+            except Exception:
+                pass
+            return True
+
+        user32.EnumWindows(_enum, 0)
+        target = None
+        for hwnd, title in reversed(found):   # 从最新打开的开始匹配
+            if base and (base in title or title in base):
+                target = hwnd
+                break
+        if target is None and found:
+            target = found[-1][0]
+        if target is None:
+            return
+        fg = user32.GetForegroundWindow()
+        tid_fg = user32.GetWindowThreadProcessId(fg, None)
+        tid_cur = kernel32.GetCurrentThreadId()
+        attached = False
+        try:
+            if tid_fg and tid_fg != tid_cur:
+                attached = bool(user32.AttachThreadInput(tid_fg, tid_cur, True))
+            user32.ShowWindow(target, 9)          # SW_RESTORE
+            user32.SetForegroundWindow(target)
+            user32.BringWindowToTop(target)
+        finally:
+            if attached:
+                user32.AttachThreadInput(tid_fg, tid_cur, False)
+    except Exception:
+        pass
+
+
+@PromptServer.instance.routes.post("/jzl/fs_open")
+async def jzl_fs_open(request):
+    """在服务器本机用系统文件管理器打开目录。仅桌面环境有效；云机/无桌面会失败（前端提示用内置列表浏览）。"""
+    try:
+        import subprocess
+        import sys
+        payload = await request.json()
+        abs_p = _jzl_fs_resolve(payload.get("path", ""))
+        if abs_p is None or not os.path.isdir(abs_p):
+            return web.json_response({"ok": False, "error": "目录不存在或越界"}, status=400)
+        if sys.platform.startswith("win"):
+            open_fn = getattr(os, "startfile", None)
+            if open_fn is None:
+                raise RuntimeError("当前系统不支持 startfile")
+            open_fn(abs_p)
+            _jzl_win_focus_folder(abs_p)   # startfile 常在后台弹出 → 尝试把该资源管理器窗口置顶/激活
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", abs_p])
+        else:
+            subprocess.Popen(["xdg-open", abs_p])
+        return web.json_response({"ok": True})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"无法在本机打开系统文件夹（云机/无桌面环境请用列表浏览）：{exc}"}, status=500)
 
 
 def _parse_assets_text(text):

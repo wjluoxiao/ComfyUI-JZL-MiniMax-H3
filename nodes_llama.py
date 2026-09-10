@@ -880,7 +880,7 @@ class JZL_MiniMax_ScriptProcessor:
                 enable_scene, enable_props, enable_video, enable_audio,
                 seed, force_offload, save_states,
                 llm_backend="local", llama_model=None, parameters=None, api_config=None, preference=None, custom_rule_path=None, gen_dir=None):
-        from .presets.script import build_shot_prompt, SEGMENT_COUNT_OPTIONS, _resolve_segment_count
+        from .presets.script import build_shot_prompt, SEGMENT_COUNT_OPTIONS, _resolve_segment_count, _parse_duration_spec
 
         if not story_input or not story_input.strip():
             return ("[错误] 请输入故事内容", {})
@@ -899,7 +899,9 @@ class JZL_MiniMax_ScriptProcessor:
             custom_rules=custom_rules,
         )
         segment_count = _resolve_segment_count(segment_count)
-        user_msg = f"请生成恰好 {segment_count} 个分段，每段视频固定 {segment_duration} 秒，输出 [SHOT_START]...[SHOT_END] 完整块（分段信息 + 六段提示词 + 调度指令）。"
+        _dlo, _dhi, _ddesc = _parse_duration_spec(segment_duration)
+        _dur_clause = f"每段视频固定 {_dlo} 秒" if _dlo == _dhi else f"每段视频时长在 {_dlo}~{_dhi} 秒区间内，由你按剧情弧线给每段分配实际秒数（写进该段 **时长** 字段）"
+        user_msg = f"请生成恰好 {segment_count} 个分段，{_dur_clause}，输出 [SHOT_START]...[SHOT_END] 完整块（分段信息 + 六段提示词 + 调度指令）。"
 
         if "api" in str(llm_backend) and api_config:
             print("[JZL-API] 使用在线 API 生成，跳过本地模型加载")
@@ -1036,7 +1038,8 @@ class JZL_MiniMax_ScriptProcessor:
             "story_style": story_style,
             "mode": mode,
             "segment_count": segment_count,
-            "segment_duration": segment_duration,
+            "segment_duration": int(_dlo),
+            "segment_duration_desc": _ddesc,
             "prompt_lang": prompt_lang,
             "lang": lang,
             "custom_rules": custom_rules,
@@ -1134,6 +1137,47 @@ class JZL_MiniMaxPreset:
         "哥特萝莉 / Gothic Lolita": "Gothic Lolita fashion and atmosphere — NOT a material override but a costume and world style. Characters wear elaborate dark Victorian-inspired Lolita clothing: lace-trimmed black dresses, ruffled petticoats, corsets, platform boots, ornate headpieces with ribbons and roses. Architecture is moody Gothic with pointed arches, stained glass, wrought iron. Dramatic chiaroscuro lighting with deep shadows. Color palette: black, deep purple, burgundy, ivory, silver accents. Atmosphere is darkly romantic and theatrical.",
     }
 
+    _STYLE_HINTS_ZH = {
+        "电影感 / Cinematic": "电影感的灯光，浅景深、胶片颗粒、专业调色。",
+        "实拍 / Live-action": "照片级实拍素材，自然光线与真实布景。",
+        "复古胶片 / Vintage film": "复古胶片质感，暖色调、轻微颗粒，怀旧氛围。",
+        "黑白电影 / Black & White": "高对比度黑白电影摄影，戏剧性阴影。",
+        "纪录片 / Documentary": "观察式纪录片风格，自然手持摄影与随性构图。",
+        "极简广告 / Minimalist commercial": "干净极简的产品电影摄影，平滑推轨、柔和均匀光线、简洁构图。",
+        "微距摄影 / Macro photography": "极限特写微距镜头，极浅景深，揭示细腻的纹理与细节。",
+        "航拍 / Aerial drone": "开阔航拍无人机镜头，宽大视野、缓慢宏大的揭示、广阔景观。",
+        "二维动画 / 2D-animated": "传统二维手绘动画，表现力线条与流畅的角色运动。",
+        "三维CG / 3D CG": "高质量三维渲染，逼真材质、全局光照、流畅动画。",
+        "日系二次元 / Anime": "日本动漫赛璐璐上色，鲜艳饱和色彩、干净线条、表现力角色设计。",
+        "美式漫画 / American Comic": "美式漫画风格，粗犷黑色墨水描边、半调网点阴影、动感构图。",
+        "皮克斯3D / Pixar-style 3D": "皮克斯级三维，平滑曲面、丰富鲜艳色彩、表现力角色动画、精致灯光。",
+        "定格动画 / Stop-motion": "全局材质覆盖——整个视觉世界是定格动画。角色是手工制作的偶，带可见材质纹理，逐帧触点式卡顿运动。环境是微缩实体布景，用真实布料、手绘背景、实拍灯光。一切都是摄影机下的实体模型。",
+        "手绘发光 / Hand-drawn glow": "全局材质覆盖——整个视觉世界是暗纸上的粗糙手绘线稿。角色与环境以发光的霓虹色描边勾勒，有机地闪烁脉动。光迹如残影般跟随运动。世界本身是活的画，每条线被实时重绘。",
+        "像素艺术 / Pixel art": "全局材质覆盖——整个视觉世界由可见像素块构成。角色、环境、水、火、烟、天空——一切由清晰的方形像素组成，使用有限的复古调色板。运动为低帧率逐帧，刻意像素级变化。粒子是单个像素点。像素网格就是宇宙本身。",
+        "赛博朋克 / Cyberpunk": "高对比霓虹赛博朋克都市，雨湿街道、全息屏与镀铬义体。",
+        "蒸汽朋克 / Steampunk": "精密的黄铜机械与维多利亚蒸汽科技，铜管、齿轮、棕褐色调。",
+        "故障艺术 / Glitch art": "数字故障扭曲，RGB 通道分离、扫描线、数据损坏伪影、VHS 噪点。",
+        "羊毛毡 / Wool felt": "全局材质覆盖——整个视觉世界由毛茸的羊毛毡手工制成。角色有柔软的毡布身体，可见纤维纹理与缝合线迹。风拂动毡草，毡水随纤维流动，毡云飘过毡天空。环境是缝制毡立体布景。不要把毡玩具放进真实场景——一切都是毡。",
+        "折纸 / Origami": "全局材质覆盖——整个宇宙由折纸构成。角色是折纸人偶，有锐利干净的折痕与几何折叠的形体。纸鸟扇动带折痕的翅膀，纸水以折叠层涟漪，纸火如卷曲纸片爆裂。世界本身是纸——万物皆被折叠、压痕、干脆。",
+        "水彩 / Watercolor": "全局材质覆盖——整个视觉世界是纸上的二维水彩画。角色不是真人——身体是半透明色洗，脸是湿纸上的柔和色晕，边缘溶入纸纹。头发是晕染色带，皮肤是纸的白注染色洗。雨如颜料水滴落，光透过层叠色洗扩散。没有写实皮肤、没有三维——只有纸上的湿颜料。",
+        "粘土动画 / Claymation": "全局材质覆盖——整个视觉世界是手塑粘土。角色不是真人——身体是带圆润触感的粘土，可见指纹与工具痕。头发是塑形粘土丝，皮肤是光滑的橡皮泥，衣服是压制的粘土片。粘土水以雕塑液滴飞溅，粘土烟以可塑团翻滚。没有真实皮肤——只有人手塑形的粘土。",
+        "水墨 / Ink wash": "全局材质覆盖——整个视觉世界是宣纸上的二维水墨画。角色不是真人——身体是流动的黑色笔触，脸是纸上的墨线，衣服是分级墨洗。头发如挥洒笔触流动，肤色是纸本白加墨晕。水如飞溅墨点，风留笔触轨迹，雾是湿纸上的晕墨。没有写实皮肤、没有真实布料、没有三维——只有墨与纸。",
+        "油画 / Oil painting": "全局材质覆盖——整个视觉世界是画布上的二维油画。角色不是真人——身体是刮刀堆叠的厚油彩，脸由层叠笔触构建，衣服是厚涂颜料。头发是扫过的颜料，皮肤是画布上调和的油彩，眼睛是精确的笔触点。水以厚重油彩涟漪，火是刮刀质感，云是涂抹的白漆。没有写实皮肤、没有真实布料、没有三维——只有画布上的油彩。",
+        "纸艺拼贴 / Paper collage": "全局材质覆盖——整个视觉世界是层叠撕纸。角色不是真人——身体从带纹理的纸上裁出、撕边，脸是印刷纸片，衣服是不同纸张（新闻纸、牛皮纸、薄页纸）。纸鸟扇动撕边翅膀，纸水在层叠纸上涟漪。没有真实皮肤——只有纸。",
+        "剪纸 / Paper cutout": "全局材质覆盖——整个视觉世界是中国剪纸艺术。角色不是真人——身体是精巧的红色纸剪影，剪出对称图案，用纸关节活动。阴影透过纸格投下戏剧形状。没有真实皮肤——只有剪纸。",
+        "铅笔素描 / Pencil sketch": "全局材质覆盖——整个视觉世界是纹理纸上的二维石墨铅笔素描。角色不是真人——身体是石墨线条、排线与交叉排线，落在纸上。脸是速写铅笔痕，头发是扫过的石墨笔触，肤色是纸的白随手压力变化。运动是线条擦除重画。橡皮痕留下幽灵尾迹。没有写实皮肤、没有三维——只有纸上的铅笔。",
+        "浮世绘 / Ukiyo-e": "全局材质覆盖——整个视觉世界是二维日本浮世绘木版画。角色不是真人——身体是印在和纸上的平涂色块配粗黑轮廓。脸是印刷的木刻五官，头发是雕线黑墨，衣服是平涂色块。没有写实皮肤、没有三维——只有和纸上的木刻墨。",
+        "敦煌壁画 / Dunhuang Murals": "全局材质覆盖——整个视觉世界是壁画墙上的二维动画敦煌洞窟壁画。角色不是真人——身体是矿物颜料绘画（赭石、绿松石、青金石）配风化石壁裂纹。飞天拖曳褪色颜料飘带。没有写实皮肤、没有三维——只有灰泥上的古壁画矿物颜料。",
+        "青花瓷 / Blue-white Porcelain": "全局材质覆盖——整个宇宙是活的三维青花瓷。角色不是真人——身体是白釉瓷，钴蓝手绘图案作为五官与衣服在皮肤上流动。瓷鸟以咔哒瓷翼起飞，瓷水如液态釉流动，瓷树绽放钴蓝花。没有真实皮肤——只有釉面瓷。",
+        "工笔画 / Gongbi Painting": "全局材质覆盖——整个视觉世界是平绢上的二维工笔画。角色不是真人——身体是极细笔描边填平涂矿物色洗，落于绢上。每根发丝每片花瓣都被单独描绘。颜料下可见绢丝纤维。没有写实皮肤、没有三维——只有笔与绢。",
+        "皮影戏 / Shadow Puppetry": "全局材质覆盖——整个视觉世界是半透明幕上的二维皮影戏。角色不是真人——身体是精巧雕刻的皮影剪影，带关节，由温暖琥珀背光照亮。没有写实皮肤、没有三维——只有幕上的皮革影。",
+        "中国风插画 / Chinese Illustration": "现代中国插画，融合传统水墨美学与当代数字艺术，优雅流畅线条、诗意构图、梦幻色彩和谐。",
+        "年画 / New Year Painting": "全局材质覆盖——整个视觉世界是二维鲜艳的中国民间年画木版印刷。角色不是真人——身体是平印纸上的大胆原色块配粗黑轮廓。门神走出画框行走，鲤鱼作为印刷图案跃起。没有写实皮肤、没有三维——只有民间印刷在纸上。",
+        "布艺 / Fabric Art": "全局材质覆盖——整个视觉世界由缝制布料与纺织品构成。角色不是真人——是有缝线的布偶、纽扣眼、刺绣五官、纱线头发与拼布衣服。环境是绗缝布景：草是绿毡、水是流动蓝绸、云是簇绒棉、树是刺绣挂毯。每面可见线、缝线与布纹。没有写实皮肤、没有真实材质——只有布与线。",
+        "蜡笔画 / Crayon drawing": "全局材质覆盖——整个视觉世界是纹理纸上的二维蜡笔画。角色不是真人——身体是纸上的蜡质蜡笔笔触，纸纹透过蜡可见。亮色具有独特的颗粒、稍不均匀的蜡笔质感。线条粗且蜡质，可见笔触方向。所有色区透出纸纹。没有三维深度、没有数字CG、没有写实皮肤——只有纸上的蜡笔。",
+        "哥特萝莉 / Gothic Lolita": "哥特萝莉服饰与氛围——不是材质覆盖而是服装与世界风格。角色穿精致暗黑维多利亚风萝莉装：蕾丝黑裙、荷叶衬裙、束腰、厚底靴、带丝带与玫瑰的华丽头饰。建筑是阴郁哥特，尖拱、彩窗、锻铁。戏剧性明暗光线，深阴影。调色：黑、深紫、酒红、象牙白、银点缀。氛围暗黑浪漫且戏剧化。",
+    }
+
     _MUSIC = [
         "禁止音乐 / No Music",
         "不指定 / Unspecified",
@@ -1166,6 +1210,22 @@ class JZL_MiniMaxPreset:
         "科幻未来 / Sci-fi Electronic": "a low electronic pulse with atmospheric synth pads at a slow tempo and subtle rhythmic layers",
         "神秘探索 / Mysterious Adventure": "warm woodwinds and soft strings at a moderate tempo with gentle dynamic swells",
         "史诗悲剧 / Tragic Epic": "a slow orchestral theme with muted brass and low strings, fading out softly",
+    }
+
+    _MUSIC_HINTS_ZH = {
+        "禁止音乐 / No Music": "绝对没有任何背景音乐；non_diegetic_music 必须严格输出 \"N/A\"，不得添加任何配乐/旋律/节奏。",
+        "史诗战争 / Epic Orchestral": "史诗管弦乐配乐，强劲铜管、轰鸣定音鼓、层层递进的弦乐，中速推进、气势不断攀升。",
+        "动作追逐 / Action Chase": "急促打击乐与快速弦乐固定音型，快节奏，随动作起伏陡然增强。",
+        "紧张悬疑 / Tense Suspense": "低音持续弦乐长音，配稀疏不和谐钢琴单音与突然的打击乐重击，缓慢节奏，营造紧张。",
+        "恐怖惊悚 / Horror Atmosphere": "低沉低频持续音、稀疏金属刮擦声与突然的不和谐膨胀，极慢节奏，营造阴森。",
+        "温馨治愈 / Warm & Gentle": "稀疏钢琴独奏，慢速，柔和持续和弦，结尾轻柔淡出。",
+        "浪漫爱情 / Romantic Strings": "丰满小提琴与温柔大提琴，慢速，竖琴滑奏，渐强渐淡。",
+        "悲伤抒情 / Melancholic": "缓慢的独奏大提琴旋律，配稀疏钢琴伴奏，音量渐渐减弱。",
+        "轻松喜剧 / Light Comedy": "俏皮拨弦弦乐与轻快木管，轻快节奏，活泼跳跃的重音。",
+        "古风武侠 / Chinese Wuxia": "古琴与二胡，五声旋律流动，缓慢节奏，配稀疏打击乐。",
+        "科幻未来 / Sci-fi Electronic": "低频电子脉冲，合成器氛围垫音，缓慢节奏，微妙的节奏层。",
+        "神秘探索 / Mysterious Adventure": "温暖木管与柔和弦乐，中速，柔和起伏的动态。",
+        "史诗悲剧 / Tragic Epic": "缓慢管弦乐主题，弱奏铜管与低音弦乐，结尾轻柔淡出。",
     }
 
     _ASPECTS = [
@@ -1248,14 +1308,14 @@ class JZL_MiniMaxPreset:
             if "不指定" not in style:
                 en_name = style.split(" / ")[0]
                 zh_name = style.split(" / ")[-1]
-                hint = self._STYLE_HINTS.get(style, "")
+                hint = self._STYLE_HINTS_ZH.get(style, "")
                 params.append(f"- 视觉风格：{zh_name} ({en_name}) — {hint}")
                 params.append(f"  ⚠️ [Shot 1] 必须以 \"{en_name}\" 开头，然后立即用1-2句话详细描述{zh_name}在画面中的具体视觉呈现——材质、光影、色彩、动作特征。严禁只写风格名称就跳到下一句！必须写出该风格\"长什么样\"。")
                 params.append(f"  正确示例: \"[Shot 1] 粘土动画，画面中的角色呈现手工泥塑的圆润质感，表面可见细微指痕和工具刮痕，动作带有定格动画特有的逐帧卡顿节奏...\"")
                 params.append(f"  错误示例: \"[Shot 1] 粘土动画，中全景镜头...\"（只写了名称，没有视觉描述）")
             if "不指定" not in music:
                 zh_name = music.split(" / ")[-1]
-                hint = self._MUSIC_HINTS.get(music, "")
+                hint = self._MUSIC_HINTS_ZH.get(music, "")
                 params.append(f"- 背景音乐风格：{zh_name} — {hint}")
                 if "禁止音乐" in music:
                     params.append(f"  ⚠️ 整个视频不得出现任何背景音乐。non_diegetic_music 必须严格输出 \"N/A\"。")
@@ -1327,9 +1387,16 @@ class JZL_MiniMaxRef2vaPreset:
         "多种风格转换 / Style Transformation": "STYLE TRANSFORMATION — the ENTIRE frame undergoes a smooth, visible transition from one visual style to another over the course of the video. Examples: live-action gradually becomes 2D-animated; claymation transforms into origami; watercolor washes over a realistic scene. ALL shapes, proportions, and spatial relationships must be preserved during the transformation — only the rendering style changes. The transformation must be smooth and continuous, not an abrupt switch.",
     }
 
+    _STYLE_HINTS_ZH = {
+        "保持统一风格 / Consistent Style": "严格风格一致——所有角色、环境与视觉元素必须共享由参考图得出的完全相同的视觉风格。每帧都必须像属于同一个统一视觉宇宙。没有任何角色看起来像来自另一幅作品。",
+        "多种风格混搭 / Mixed Styles": "风格混搭——不同角色或元素可保留各自参考中的独特风格。示例：真人角色与二维动画角色互动；两个像素艺术角色走过照片级背景；粘土人偶旁边放折纸人偶。关键：每个参考元素必须在视觉上保持稳定——真人在整个视频里保持真实，动漫角色保持动漫，粘土保持粘土。挑战是让它们在同一个空间自然共存。",
+        "多种风格转换 / Style Transformation": "风格转换——整个画面在视频过程中从一种视觉风格平滑、可见地过渡到另一种。示例：真人逐渐变成二维动画；粘土动画变成折纸；水彩晕染写实场景。转换期间所有形状、比例与空间关系必须保持——只有渲染风格变化。转换必须平滑连续，而非生硬切换。",
+    }
+
     _CUTS = JZL_MiniMaxPreset._CUTS
     _MUSIC = JZL_MiniMaxPreset._MUSIC
     _MUSIC_HINTS = JZL_MiniMaxPreset._MUSIC_HINTS
+    _MUSIC_HINTS_ZH = JZL_MiniMaxPreset._MUSIC_HINTS_ZH
     _ASPECTS = JZL_MiniMaxPreset._ASPECTS
     _ASPECT_HINTS = JZL_MiniMaxPreset._ASPECT_HINTS
 
@@ -1390,11 +1457,11 @@ class JZL_MiniMaxRef2vaPreset:
             if auds.strip():
                 params.append(f"- 参考音频说明：{auds.strip()}")
             params.append(f"- 视频时长：正好 {duration} 秒（镜头切分和时间戳必须精确落在此范围内，最后一个镜头必须在第{duration}秒前结束）")
-            hint = self._STYLE_HINTS.get(style, "")
+            hint = self._STYLE_HINTS_ZH.get(style, "")
             params.append(f"- 视觉风格策略：{style.split('/')[-1].strip()} ({style.split('/')[0].strip()}) — {hint}")
             if "不指定" not in music:
                 zh_name = music.split(" / ")[-1]
-                hint_m = self._MUSIC_HINTS.get(music, "")
+                hint_m = self._MUSIC_HINTS_ZH.get(music, "")
                 params.append(f"- 背景音乐风格：{zh_name} — {hint_m}")
                 if "禁止音乐" in music:
                     params.append(f"  ⚠️ 整个视频不得出现任何背景音乐。non_diegetic_music 必须严格输出 \"N/A\"。")

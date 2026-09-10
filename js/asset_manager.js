@@ -19,10 +19,19 @@ const MINI_NODE_TYPE = "JZL_MiniMaxAssetManagerMini";
 const MAX_NODE_TYPE = "JZL_MiniMaxAssetManagerMax";
 const VIEWER_NODE_TYPE = "JZL_MiniMaxVideoViewer";
 
-// ── 「仅提示词输出」自动静音上游（model/clip/vae/audio_vae，参考 XB-BOX - 🔗 引用任意 的 mute 逻辑）──
+// ── 纯文本模式（仅提示词输出 / 故事扩写模式）自动静音 ─────────────────
+// 上游：model/clip/vae/audio_vae；下游：除「剧本文本输出(已处理剧本/已拆解剧本)」外的其它输出所连节点。
 const JZL_PURE_MUTE_INPUTS = new Set(["model", "clip", "vae", "audio_vae"]);
+const JZL_PURE_TEXT_MODES = new Set(["仅提示词输出", "故事扩写模式"]);
 const JZL_MODE_ACTIVE = 0;   // 活跃（ComfyUI node.mode）
 const JZL_MODE_MUTE = 2;     // 静音
+// run_mode 下拉显示带表情前缀（🛠️拆解 / 📚扩写 / 📝仅提示词 / 🪄穿透）；比较前剥表情归一化。
+const JZL_RUN_MODE_EMOJIS = ["🛠️", "📚", "📝", "🪄"];
+function jzlNormalizeRunMode(v) {
+    let s = String(v || "").trim();
+    for (const e of JZL_RUN_MODE_EMOJIS) { if (s.startsWith(e)) { s = s.slice(e.length).trim(); break; } }
+    return s;
+}
 
 function jzlCollectMuteUpstream(node) {
     const graph = node.graph || (window.app && window.app.graph);
@@ -51,8 +60,55 @@ function jzlCollectMuteUpstream(node) {
     return list;
 }
 
-// 无状态同步（与 XB-BOX - 🔗 引用任意 的 applySelection 一致）：每次 run_mode 变化都把所有
-// model/clip/vae/audio_vae 上游按当前模式全量重设——「仅提示词输出」→ 全部静音(mode=2)；
+// 收集本节点除「剧本文本输出端口(STRING/script: 已处理剧本/已拆解剧本)」外的下游节点
+// （用于纯文本模式静音）。剧本文本端口是要保活输出文本的链路，其下游永不 mute。
+// 识别依据：该端口 type 为 STRING 且 name/display_name 含 "script"；三节点的剧本文本端口均如此，
+// 而图像/音频/模型/条件/Latent/VAE/放大参数等输出 type 均非 STRING。
+function jzlCollectMuteDownstream(node) {
+    const graph = node.graph || (window.app && window.app.graph);
+    const list = [];
+    if (!graph || !node) return list;
+    const seen = new Set();
+    const isScriptOut = (out) => {
+        if (!out) return false;
+        const nm = String(out.name || "") + "|" + String(out.display_name || "") + "|" + String(out.label || "");
+        const ty = String(out.type || "");
+        return (ty.toUpperCase().indexOf("STRING") >= 0) && (nm.indexOf("script") >= 0 || nm.indexOf("剧本") >= 0 || nm.indexOf("已处理") >= 0 || nm.indexOf("已拆解") >= 0);
+    };
+    const addTarget = (targetId) => {
+        if (targetId == null) return;
+        let cur = graph.getNodeById ? graph.getNodeById(targetId) : null;
+        for (let k = 0; k < 20 && cur; k++) {
+            if (cur.type && String(cur.type).includes("Reroute")) {
+                if (seen.has(cur.id)) return;
+                seen.add(cur.id);
+                // Reroute 只有一个输出，继续沿下游
+                const rout = (cur.outputs || [])[0];
+                const rl = rout && rout.link != null
+                    ? ((graph.links && graph.links[rout.link]) || (graph._links && graph._links.get && graph._links.get(rout.link)))
+                    : null;
+                cur = rl ? (graph.getNodeById ? graph.getNodeById(rl.target_id) : null) : null;
+                continue;
+            }
+            if (!seen.has(cur.id)) { seen.add(cur.id); list.push(cur); }
+            return;
+        }
+    };
+    for (const out of node.outputs || []) {
+        if (isScriptOut(out)) continue;      // 剧本文本链路保活（永不 mute）
+        const links = (out.links != null)
+            ? (Array.isArray(out.links) ? out.links : [out.links])
+            : [];
+        for (const lid of links) {
+            const link = (graph.links && graph.links[lid]) || (graph._links && graph._links.get && graph._links.get(lid));
+            if (link) addTarget(link.target_id);
+        }
+    }
+    return list;
+}
+
+// 无状态同步：每次 run_mode 变化都把所有上游(model/clip/vae/audio_vae) + 非 script 下游
+// 按当前模式全量重设——纯文本模式（仅提示词输出/故事扩写模式）→ 全部静音(mode=2)；
 // 其它模式 → 全部恢复活跃(mode=0)。即时生效、无记录状态残留（幂等）。
 function jzlSetPurePromptMute(node, pure) {
     const graph = node.graph || (window.app && window.app.graph);
@@ -60,6 +116,9 @@ function jzlSetPurePromptMute(node, pure) {
     const want = pure ? JZL_MODE_MUTE : JZL_MODE_ACTIVE;
     let changed = false;
     for (const n of jzlCollectMuteUpstream(node)) {
+        if (n && n.mode !== want) { try { n.mode = want; } catch (_) {} changed = true; }
+    }
+    for (const n of jzlCollectMuteDownstream(node)) {
         if (n && n.mode !== want) { try { n.mode = want; } catch (_) {} changed = true; }
     }
     if (changed) graph.setDirtyCanvas?.(true, true);
@@ -141,7 +200,7 @@ const OPTIONS = {
 
 const PANELS = {
     assets: { label: "📁 参考素材管理" },
-    prompt: { label: "📝 剧本拆解配置" },
+    prompt: { label: "🤖 大语言模型配置" },
     preference: { label: "🎭 采样解码设置" },
     preference_settings: { label: "🎯 镜头参数预设" },
     prompt_elements: { label: "➕ 常用提示词元素" },
@@ -154,7 +213,7 @@ const PANELS = {
 // 节点表面按钮定义（前端 addWidget 添加）
 const PANEL_BUTTONS = [
     { widget: "btn_assets", label: "📁 参考素材管理", panel: "assets" },
-    { widget: "btn_prompt", label: "📝 剧本拆解配置", panel: "prompt" },
+    { widget: "btn_prompt", label: "🤖 大语言模型配置", panel: "prompt" },
     { widget: "btn_pref", label: "🎭 采样解码设置", panel: "preference" },
     { widget: "btn_save", label: "💾 视频保存设置", panel: "save_settings" },
     { widget: "btn_elements", label: "➕ 常用提示词元素", panel: "prompt_elements" },
@@ -1094,7 +1153,7 @@ function createReshootSection(ctx) {
             const single = `[SHOT_START]\n${p}\n[SHOT_END]`;
             return {
                 apply() {
-                    if (rmW) setWidgetValue(rmW, "穿透生成模式");
+                    if (rmW) setWidgetValue(rmW, "🪄 穿透生成模式");
                     if (vcW) setWidgetValue(vcW, 1);
                     if (ipWidget) setWidgetValue(ipWidget, single);
                 },
@@ -1283,6 +1342,156 @@ function el(tag, css, text) {
 }
 
 // ── 文本复制 / 放大编辑（主提示词框与重拍编辑窗右上角悬浮按钮）──
+// ── 编辑文本 Ctrl/⌘+滚轮缩放（全局共享字号记忆）──────────────
+// 放大编辑弹窗 + 各二级弹窗(footer 字号 A−/A+)共用同一份字号：任一弹窗调整 → localStorage 记忆 → 其它弹窗/下次打开保持一致。
+const JZL_ZOOM_MIN = 8, JZL_ZOOM_MAX = 40;
+let __jzlZoomSize = null;  // null=用户从未调过 → 不干预各编辑区原有字号
+function jzlZoomGet() {
+    if (__jzlZoomSize == null) {
+        try { const v = parseInt(localStorage.getItem("jzl_text_zoom") || "", 10); if (Number.isFinite(v)) __jzlZoomSize = v; } catch (_) {}
+    }
+    return __jzlZoomSize;  // null = 从未设置
+}
+function jzlZoomDisplay() { return jzlZoomGet() == null ? 13 : jzlZoomGet(); }
+function jzlZoomSet(v) {
+    __jzlZoomSize = Math.max(JZL_ZOOM_MIN, Math.min(JZL_ZOOM_MAX, Math.round(v)));
+    try { localStorage.setItem("jzl_text_zoom", String(__jzlZoomSize)); } catch (_) {}
+}
+function jzlZoomBump(delta) { jzlZoomSet((jzlZoomGet() == null ? 13 : jzlZoomGet()) + delta); }
+function jzlZoomApplyTo(el) {
+    // 仅当用户设置过字号才覆盖（未设置时保留各编辑区默认字号，避免打开就改变原样）
+    if (!el) return;
+    if (jzlZoomGet() == null) return;
+    const px = jzlZoomGet() + "px";
+    if (el.tagName === "TEXTAREA" || el.isContentEditable) el.style.fontSize = px;
+}
+function jzlZoomApplyContainer(container) {
+    if (!container || !container.querySelectorAll) return;
+    container.querySelectorAll("textarea, [contenteditable='true']").forEach((el) => jzlZoomApplyTo(el));
+}
+function jzlSyncZoomVal(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll(".jzl-zoom-val").forEach((el) => { el.textContent = String(jzlZoomDisplay()); });
+}
+// 容器级 Ctrl/⌘+滚轮委托：光标在编辑元素(或其子孙)上时才缩放，返回是否消费
+function jzlBindWheelZoom(container, onZoom) {
+    if (!container) return;
+    container.addEventListener("wheel", (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        if (!e.target || !e.target.closest) return;
+        if (!e.target.closest("textarea, [contenteditable='true'], .jzl-zoomable")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = e.deltaY < 0 ? 1 : -1;
+        jzlZoomBump(delta);
+        jzlZoomApplyContainer(container);
+        jzlSyncZoomVal(container);
+        onZoom && onZoom(jzlZoomDisplay());
+    }, { passive: false });
+}
+// 共享字号行控件（A− / 当前值 / A+）：点击步进并应用到 container 内全部文本编辑区
+function jzlBuildZoomRow(container) {
+    const row = el("span", "display:inline-flex;align-items:center;gap:4px;margin-left:2px;user-select:none;");
+    const minus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:11px;cursor:pointer;padding:0;", "A−");
+    const val = el("span", "min-width:26px;text-align:center;font-size:12px;color:#e8a87c;font-variant-numeric:tabular-nums;", String(jzlZoomDisplay()));
+    val.classList.add("jzl-zoom-val");
+    const plus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:11px;cursor:pointer;padding:0;", "A+");
+    minus.title = "缩小编辑字号（Ctrl+滚轮 同样可调）";
+    plus.title = "放大编辑字号（Ctrl+滚轮 同样可调）";
+    const step = (d) => {
+        minus.disabled = plus.disabled = true;
+        try {
+            jzlZoomBump(d);
+            jzlZoomApplyContainer(container);
+            jzlSyncZoomVal(container);
+        } finally { minus.disabled = plus.disabled = false; }
+    };
+    minus.addEventListener("mousedown", (e) => e.stopPropagation());
+    plus.addEventListener("mousedown", (e) => e.stopPropagation());
+    minus.addEventListener("click", (e) => { e.stopPropagation(); step(-1); });
+    plus.addEventListener("click", (e) => { e.stopPropagation(); step(1); });
+    row.append(minus, val, plus);
+    return row;
+}
+// ── 界面整体缩放（弹窗本体比例缩放，独立于网页/画布缩放；字号 A± 与之叠加）──
+const JZL_UI_ZOOM_MIN = 0.5, JZL_UI_ZOOM_MAX = 3.0, JZL_UI_ZOOM_STEP = 0.05;  // 每次 ±5%
+let __jzlUIZoom = null;  // null = 未设置过 → 弹窗保持 100%
+function jzlUIGet() {
+    if (__jzlUIZoom == null) {
+        try { const v = parseFloat(localStorage.getItem("jzl_ui_zoom") || ""); if (Number.isFinite(v) && v > 0) __jzlUIZoom = v; } catch (_) {}
+    }
+    return __jzlUIZoom == null ? 1 : __jzlUIZoom;
+}
+function jzlUISet(v) {
+    __jzlUIZoom = Math.max(JZL_UI_ZOOM_MIN, Math.min(JZL_UI_ZOOM_MAX, Math.round(v / JZL_UI_ZOOM_STEP) * JZL_UI_ZOOM_STEP));
+    __jzlUIZoom = Math.round(__jzlUIZoom * 100) / 100;
+    try { localStorage.setItem("jzl_ui_zoom", String(__jzlUIZoom)); } catch (_) {}
+}
+function jzlUIStep(dir) {
+    const cur = jzlUIGet();
+    jzlUISet(cur + dir * JZL_UI_ZOOM_STEP);
+    return jzlUIGet();
+}
+function jzlUIApply(el) {
+    if (!el) return;
+    const z = jzlUIGet();
+    el.dataset.jzlUiTarget = "1";  // 供窗口 resize 时重算高度上限
+    // 记录元素【原始】高度上限（仅首次）：'none'/空 → 视为无上限
+    if (el.dataset.jzlUiMaxH == null) {
+        const cs = parseFloat(getComputedStyle(el).maxHeight);
+        el.dataset.jzlUiMaxH = Number.isFinite(cs) ? String(cs) : "none";
+    }
+    el.style.zoom = String(z);  // zoom 同时影响布局尺寸（Chromium），弹窗整体按比例缩放
+    // 高度封顶：zoom 会把 max-height(vh/px) 一并放大 → 弹窗上下溢出屏幕。
+    // 上限 = min(原始上限, 视口高度×0.92 / zoom)，使【视觉高度】恒定≤视口的 92%：
+    // 放大到上限后高度不再增长、只横向变宽（与「提示词放大编辑」一致）。
+    // 注意必须用 min() 而不是直接清空——清空会把内联的 max-height（如 dialog 的 90vh）一起丢掉，
+    // 导致 100%（zoom=1）时反而没有上限、素材多就撑出屏幕。
+    const _orig = parseFloat(el.dataset.jzlUiMaxH);
+    const _cap = Math.round((window.innerHeight * 0.92) / z);
+    el.style.maxHeight = (Number.isFinite(_orig) ? Math.min(_orig, _cap) : _cap) + "px";
+}
+// 窗口尺寸变化时重算已打开弹窗的高度上限（保证视觉高度始终不超过视口）
+window.addEventListener("resize", () => {
+    document.querySelectorAll("[data-jzl-ui-target]").forEach((el) => { try { jzlUIApply(el); } catch (_) {} });
+});
+// 构建「界面缩放」行：− / 百分比 / ＋，作用于 target（弹窗本体），与字号 A± 独立记忆
+function jzlBuildUIRow(target) {
+    const row = el("span", "display:inline-flex;align-items:center;gap:4px;margin-left:2px;user-select:none;");
+    const lab = el("span", "font-size:11px;color:#888;white-space:nowrap;", "界面");
+    const minus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:13px;cursor:pointer;padding:0;", "−");
+    const val = el("span", "min-width:40px;text-align:center;font-size:12px;color:#ffd98a;font-variant-numeric:tabular-nums;", Math.round(jzlUIGet() * 100) + "%");
+    val.classList.add("jzl-ui-zoom-val");
+    const plus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:13px;cursor:pointer;padding:0;", "+");
+    minus.title = "缩小整个界面（不缩放网页/画布）";
+    plus.title = "放大整个界面（不缩放网页/画布）";
+    const step = (d) => {
+        minus.disabled = plus.disabled = true;
+        try {
+            jzlUIStep(d);
+            jzlUIApply(target);
+            target.querySelectorAll && target.querySelectorAll(".jzl-ui-zoom-val").forEach((el) => { el.textContent = Math.round(jzlUIGet() * 100) + "%"; });
+        } finally { minus.disabled = plus.disabled = false; }
+    };
+    minus.addEventListener("mousedown", (e) => e.stopPropagation());
+    plus.addEventListener("mousedown", (e) => e.stopPropagation());
+    minus.addEventListener("click", (e) => { e.stopPropagation(); step(-1); });
+    plus.addEventListener("click", (e) => { e.stopPropagation(); step(1); });
+    row.append(lab, minus, val, plus);
+    return row;
+}
+// 弹窗本体绑定 Ctrl/⌘+滚轮 = 界面缩放（抢在浏览器整页缩放前 preventDefault）
+function jzlBindUIWheel(target) {
+    if (!target) return;
+    target.addEventListener("wheel", (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        jzlUIStep(e.deltaY < 0 ? 1 : -1);
+        jzlUIApply(target);
+        target.querySelectorAll && target.querySelectorAll(".jzl-ui-zoom-val").forEach((el) => { el.textContent = Math.round(jzlUIGet() * 100) + "%"; });
+    }, { passive: false });
+}
 function copyTextToClipboard(text, label, successMsg) {
     if (!text) { notify("没有可复制的内容", "warning"); return; }
     const done = () => notify(successMsg || `已复制${label ? ` ${label}` : ""}`, "success");
@@ -1352,6 +1561,13 @@ function openTextZoomEditor(title, getText, onSave, node) {
     cBtn.addEventListener("click", () => copyTextToClipboard(getPromptText(editor), ""));
     const sBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5ecf8a;background:#2d5a3a;color:#fff;font-size:12px;cursor:pointer;font-weight:600;", "💾 保存");
     const xBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #666;background:#3a3a3a;color:#ccc;font-size:12px;cursor:pointer;", "取消");
+    // 放大编辑弹窗支持全局共享字号（A−/A+）+ 界面整体缩放（−/＋）：字号改文字、界面改整个弹窗
+    // 顺序要求：字号放大 / 界面放大 调节按钮 排在「显示引用」按钮【前面】
+    const zoomRow = jzlBuildZoomRow(box);
+    zoomRow.title = "调整编辑字号（全局共享，各编辑界面一致）";
+    const uiRow = jzlBuildUIRow(box);
+    uiRow.title = "调整整个弹窗界面大小（不缩放网页/画布）";
+    head.append(zoomRow, uiRow);
     if (node) head.append(aBtn);
     head.append(cBtn, sBtn, xBtn);
     // 资产显示窗（点击素材插入 @ 引用到放大编辑器；仅当节点存在时显示）
@@ -1424,9 +1640,15 @@ function openTextZoomEditor(title, getText, onSave, node) {
     });
     xBtn.addEventListener("click", close);
     modal.addEventListener("mousedown", (e) => { if (e.target === modal) close(); });
+    modal.style.overflow = "auto";  // 界面放大后超高可滚动查看
     box.append(head, body);
     modal.appendChild(box);
     document.body.appendChild(modal);
+    // 打开时应用已记忆的全局字号 + 界面缩放（未设置过则保持默认）
+    jzlZoomApplyTo(editor);
+    jzlUIApply(box);
+    jzlBindUIWheel(box);   // 弹窗内 Ctrl/⌘+滚轮 = 界面缩放（抢在浏览器整页缩放前）
+    jzlBindWheelZoom(box); // 弹窗内编辑文本上 Ctrl/⌘+滚轮 = 字号缩放（与界面缩放可叠加）
     setTimeout(() => editor.focus(), 50);
 }
 
@@ -2366,7 +2588,7 @@ function defaultSettings() {
                 transition: "随机", music_style: "禁止音乐 / No Music",
                 creative_req: "无特别要求", detail_length: "标准 (350-500字)", custom: "",
             },
-            custom_prompt: "", system_prompt: "",
+            custom_prompt: "", system_prompt: "", expand_words: 500, expand_source: "素材",
             inference_mode: "one by one", max_frames: 24, max_size: 256,
         },
         gen_params: {
@@ -2426,7 +2648,7 @@ function renderAssetsTools(c, s, build, node) {
         status.style.color = isErr ? "#e08a8a" : "#9fd6a4";
         try { notify(msg, isErr ? "error" : "success"); } catch (_) {}
     };
-    exp.title = "把当前已添加的素材保存为 output/jzl/参考素材_{故事名}_{年月日时分秒}.txt";
+    exp.title = "把当前已添加的素材保存为 output/jzl/{故事名}/参考素材_{故事名}_{年月日时分秒}.txt（未填故事名则存 output/jzl/）";
     imp.title = "选择素材库 txt 文件并载入（覆盖当前列表）";
     exp.addEventListener("click", async () => {
         exp.disabled = true; say("正在导出…");
@@ -2441,8 +2663,10 @@ function renderAssetsTools(c, s, build, node) {
             });
             const data = await resp.json().catch(() => ({}));
             if (data?.ok) {
-                const fn = data.path ? String(data.path).split(/[\\/]/).pop() : "参考素材_*.txt";
-                say(`✅ 已导出：output/jzl/${fn}`);
+                const rel = data.rel
+                    ? String(data.rel)
+                    : (data.path ? "jzl/" + String(data.path).split(/[\\/]/).pop() : "jzl/参考素材_*.txt");
+                say(`✅ 已导出：output/${rel}`);
             }
             else say(`❌ ${data?.error || ("导出失败（HTTP " + resp.status + "）——请确认已重启 ComfyUI 且新版已部署")}`, true);
             console.log("[JZL 素材库] export resp", resp.status, data);
@@ -2547,6 +2771,37 @@ function renderPromptPanel(c, s, d, node) {
     c.append(field("故事拆解", checkboxControl(p.story_decompose !== false, "把故事通过 LLM 拆解为分段提示词", v => { p.story_decompose = v; })));
     c.append(field("开启增强", checkboxControl(p.enabled === true, "拆解后对每个分段的详细描述再做润色", v => { p.enabled = v; })));
     c.append(field("强制卸载", checkboxControl(p.force_offload === true, "LLM 用完即卸载（增强开启时等增强后再卸）", v => { p.force_offload = v; })));
+
+    // ── 故事扩写设置（📚 故事扩写模式专用）──
+    c.append(makeSectionTitle("故事扩写设置"));
+    const expandRow = el("div", "display:flex;flex-direction:column;gap:6px;margin-bottom:10px;");
+    const expandCbs = [];
+    const expandOpts = [
+        { val: "素材", label: "使用参考扩写", tip: "严格按照「参考素材管理」勾选的角色/场景/道具进行扩写" },
+        { val: "自由", label: "自由发挥扩写", tip: "在用户输入故事的基础上，按所选故事风格自由发挥扩写" },
+    ];
+    const mkExpandCb = (opt) => {
+        const lab = el("label", "display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+        const rb = el("input", "width:16px;height:16px;accent-color:#f59e0b;margin-top:1px;cursor:pointer;");
+        rb.type = "radio";
+        rb.name = "jzl_expand_source";
+        rb.value = opt.val;
+        rb.checked = (p.expand_source || "素材") === opt.val;
+        const span = el("span", "", opt.label + (opt.tip ? `（${opt.tip}）` : ""));
+        rb.addEventListener("change", () => { if (rb.checked) { p.expand_source = opt.val; } });
+        lab.append(rb, span);
+        expandRow.append(lab);
+        expandCbs.push(rb);
+        return rb;
+    };
+    expandOpts.forEach(mkExpandCb);
+    // 扩写字数（放「故事扩写设置」最底部，与上方两单选同属一个分区）
+    const wordsRow = el("div", "display:flex;align-items:center;gap:12px;margin-top:2px;");
+    wordsRow.append(el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,#999);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "扩写字数（扩写模式）"));
+    wordsRow.append(numberControl(p.expand_words ?? 500, { min: 100, max: 3000, step: 50 }, v => { p.expand_words = Math.round(v); }));
+    expandRow.append(wordsRow);
+    c.append(expandRow);
+    // 迁移兼容：旧配置无 expand_source → 默认「素材」（初次打开渲染已默认，无需额外处理）
 
     // ── LLM 后端（方形勾选单选：本地 / 在线API，切换只显示对应设置区块；样式与「故事拆解」一致）──
     c.append(makeSectionTitle("LLM 后端"));
@@ -2678,10 +2933,28 @@ function renderPrefPanel(c, s, d) {
     c.append(field("启用二次采样", checkboxControl(!!sec.enabled,
         "一采后➡️分离latent➡️ 视频latent放大➡️合并latent➡️二次采样",
         v => { sec.enabled = v; })));
-    const upModels = (d?.upscaler_models && d.upscaler_models.length) ? d.upscaler_models : ["minimax_h3_latent_upscaler_3d_fp32.pth"];
-    c.append(field("latent放大模型选择", selectControl(upModels, sec.upscaler_model || upModels[0], v => { sec.upscaler_model = v; })));
     c.append(field("运行设备", selectControl(["cuda", "rocm", "cpu"], sec.device || "cuda", v => { sec.device = v; })));
-    c.append(field("精度", selectControl(["fp32", "fp16", "bf16"], sec.precision || "fp32", v => { sec.precision = v; })));
+    // ── latent 放大模型（磁盘 latent_upscale_models 实时扫描列表；可选「自动」由精度匹配）──
+    // 官方把同一权重拆成 fp32/fp16/bf16 三套独立文件；「自动」= 后端按下方精度扫描对应文件，
+    // 也可显式选择磁盘上任意 latent 放大模型（含自定义模型），选择优先于精度。
+    const upModels = (d && Array.isArray(d.upscaler_models) && d.upscaler_models.length)
+        ? d.upscaler_models
+        : ["minimax_h3_latent_upscaler_3d_fp32.pth", "minimax_h3_latent_upscaler_3d_fp16.safetensors", "minimax_h3_latent_upscaler_3d_bf16.safetensors"];
+    const _AUTO_MODEL = "自动（按精度匹配）";
+    const _curModel = (sec.upscaler_model && upModels.includes(sec.upscaler_model)) ? sec.upscaler_model : _AUTO_MODEL;
+    c.append(field("latent放大模型", selectControl([_AUTO_MODEL, ...upModels], _curModel, v => {
+        sec.upscaler_model = (v === _AUTO_MODEL) ? "" : v;
+        const m = String(v).match(/(fp32|fp16|bf16)/i);  // 显式选标准精度文件 → 同步精度下拉，保持一致
+        if (m) sec.precision = m[1].toLowerCase();
+    })));
+    // 精度 = 决定加载哪个官方权重文件（fp32/fp16/bf16 三套独立文件）；「模型」为自动时按此精度匹配磁盘文件。
+    // 仅当模型为空（自动）或属于标准 MiniMax 名时才交回精度自动匹配；显式自定义模型不被精度覆盖。
+    c.append(field("精度（自动匹配模型）", selectControl(["fp32", "fp16", "bf16"], sec.precision || "fp32", v => {
+        sec.precision = v;
+        if (!sec.upscaler_model || /minimax_h3_latent_upscaler_3d_(fp32|fp16|bf16)/i.test(sec.upscaler_model)) {
+            sec.upscaler_model = "";
+        }
+    })));
 
     // ── Sigmas 模式（单选：调度器 / 自定义）──
     // 调度器=用 调度器+采样步数+降噪系数 生成 sigmas 二采；自定义=直接用下方输入的自定义 sigmas 序列（对齐 1190 ManualSigmas）
@@ -2807,11 +3080,12 @@ const USAGE_FALLBACK_HTML = `
 <p style="margin:4px 0;">提示：不接模型也能运行——只做剧本分段 + 调度，不做采样解码。</p>
 <h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">二、运行模式</h4>
 <ul style="padding-left:20px;margin:4px 0;">
-<li><b>故事拆解模式</b>：按情节拆解为 N 段（不创意扩展）</li>
-<li><b>故事扩展模式</b>：先扩写故事正文，再拆解为 N 段</li>
-<li><b>穿透生成模式</b>：跳过 LLM 拆解与增强，直接用提示词生成</li>
-<li><b>仅提示词输出</b>：只用 LLM 处理提示词经「已处理剧本」输出文本，不生成视频</li>
+<li><b>🛠️ 故事拆解模式</b>：按情节拆解为 N 段（不创意扩展）</li>
+<li><b>📚 故事扩写模式</b>：只按故事风格 + 扩写字数把故事扩写为丰满正文（不拆解；纯文本经剧本端口输出 + 落盘，不生成视频）</li>
+<li><b>🪄 穿透生成模式</b>：跳过 LLM 拆解与增强，直接用提示词生成</li>
+<li><b>📝 仅提示词输出</b>：拆解 + 增强的完整分段剧本文本经剧本端口输出，不生成视频</li>
 </ul>
+<p style="margin:4px 0;">注：📚 故事扩写模式 / 📝 仅提示词输出 为纯文本模式，会自动静音上游（模型/CLIP/VAE）与除剧本端口外的下游节点，只跑 LLM 文本处理。</p>
 <h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">三、素材与参考调度</h4>
 <ul style="padding-left:20px;margin:4px 0;">
 <li>引用上限：图片 ≤9 / 视频 ≤3 / 音频 ≤3，总参考 ≤12（官方上限）</li>
@@ -3089,8 +3363,8 @@ function buildModal(node, data, panelId) {
     const d = data || { llm_models: [], mmproj_models: ["None"], chat_handlers: ["None"] };
     const title = (PANELS[panelId] && PANELS[panelId].label) || "🎬 JZL - 🤖 MiniMax-H3短剧导演台Pro";
 
-    const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:9999;display:flex;align-items:center;justify-content:center;");
-    const dialog = el("section", "background:#1c1c1e;border:1px solid #333;border-radius:8px;width:820px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);");
+    const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:9999;display:flex;align-items:center;justify-content:center;overflow:auto;");
+    const dialog = el("section", "background:#1c1c1e;border:1px solid #333;border-radius:8px;width:820px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);flex:0 0 auto;");
     dialog.className = "jzl-modal";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
@@ -3164,13 +3438,20 @@ function buildModal(node, data, panelId) {
     const cancelBtn = el("button", "background:transparent;border:1px solid var(--border-color,#555);color:#fff;border-radius:4px;padding:8px 20px;font-size:14px;cursor:pointer;", "取消");
     const saveBtn = el("button", "background:#2d5a88;color:#fff;border:none;border-radius:4px;padding:8px 20px;font-size:14px;font-weight:600;cursor:pointer;", "💾 保存");
     // 自动保存：统一移到弹窗底部，与「取消/保存」同行并靠左（样式与其他勾选框一致）
-    const autoSaveRow = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;margin-right:auto;");
+    const autoSaveRow = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
     const autoSaveCb = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
     autoSaveCb.type = "checkbox";
     autoSaveCb.checked = settings.auto_save !== false;
     autoSaveCb.addEventListener("change", () => { settings.auto_save = autoSaveCb.checked; });
     autoSaveRow.append(autoSaveCb, el("span", "", "自动保存"));
-    footer.append(autoSaveRow, cancelBtn, saveBtn);
+    // 字号 A−/A+（全局共享记忆，紧跟「自动保存」后面）；界面缩放 −/＋（整个弹窗本体，不缩放网页）
+    const footerZoomRow = jzlBuildZoomRow(dialog);
+    footerZoomRow.title = "调整本面板文本编辑字号（全局共享）";
+    const footerUIRow = jzlBuildUIRow(dialog);
+    footerUIRow.title = "调整整个弹窗界面大小（不缩放网页/画布）";
+    const footerLeft = el("div", "display:flex;align-items:center;gap:16px;margin-right:auto;flex-wrap:wrap;");
+    footerLeft.append(autoSaveRow, footerZoomRow, footerUIRow);
+    footer.append(footerLeft, cancelBtn, saveBtn);
     // 「清除」按钮（仅参考素材管理面板显示）：一键清空所有素材，需二次弹窗确认
     if (panelId === "assets") {
         const clearBtn = el("button", "background:#7a2a2a;color:#ffd0d0;border:1px solid #a44;border-radius:4px;padding:8px 18px;font-size:14px;font-weight:600;cursor:pointer;", "🗑 清除");
@@ -3187,10 +3468,16 @@ function buildModal(node, data, panelId) {
         footer.insertBefore(clearBtn, cancelBtn);
     }
     dialog.append(error, footer);
-    if (panelId === "help") { saveBtn.style.display = "none"; autoSaveRow.style.display = "none"; }  // 使用说明面板无需保存/自动保存
+    if (panelId === "help") { saveBtn.style.display = "none"; autoSaveRow.style.display = "none"; footerZoomRow.style.display = "none"; footerUIRow.style.display = "none"; }  // 使用说明面板无需保存/自动保存/字号/界面缩放
 
+    overlay.style.overflow = "auto";  // 界面放大后超高可滚动查看
     overlay.append(dialog);
     document.body.append(overlay);
+    // 打开时应用已记忆的全局字号 + 界面缩放（未设置过则保持默认）；Ctrl/⌘+滚轮 = 界面缩放（抢在浏览器整页缩放前）
+    jzlZoomApplyContainer(dialog);
+    jzlUIApply(dialog);
+    jzlBindUIWheel(dialog);
+    jzlBindWheelZoom(dialog);
 
     const close = () => { overlay.remove(); modal = null; };
 
@@ -3315,8 +3602,9 @@ app.registerExtension({
                     : PANEL_BUTTONS);
             self.__jzlButtons = buttons;
 
-            // 「仅提示词输出」模式 → 自动静音 模型/CLIP/VAE/音频VAE 上游（参考 XB-BOX - 🔗 引用任意 的 mute 逻辑）：
-            // 切到该模式只跑 LLM 处理（已处理剧本输出），不再触发上游模型加载/参考编码；切回其它模式自动恢复。
+            // 纯文本模式（「仅提示词输出」/「故事扩写模式」）→ 自动静音 上游(model/clip/vae/audio_vae)
+            // + 下游（除剧本文本端口：已处理剧本/已拆解剧本链路保活）：切到这些模式只跑 LLM 文本处理，
+            // 不触发上游模型加载/参考编码、不让下游编码/采样空跑；切回其它模式自动恢复。
             try {
                 const _rmW = (self.widgets || []).find((w) => w.name === "run_mode");
                 if (_rmW) {
@@ -3328,7 +3616,7 @@ app.registerExtension({
                             const _cur = (val !== undefined && val !== null && String(val).trim() !== "")
                                 ? String(val).trim()
                                 : String(_rmW.value != null ? _rmW.value : "").trim();
-                            jzlSetPurePromptMute(self, _cur === "仅提示词输出");
+                            jzlSetPurePromptMute(self, JZL_PURE_TEXT_MODES.has(jzlNormalizeRunMode(_cur)));
                         } catch (_e) {}
                     };
                 }
@@ -3336,7 +3624,7 @@ app.registerExtension({
                 setTimeout(() => {
                     try {
                         const _rw = (self.widgets || []).find((w) => w.name === "run_mode");
-                        if (_rw) jzlSetPurePromptMute(self, String(_rw.value || "").trim() === "仅提示词输出");
+                        if (_rw) jzlSetPurePromptMute(self, JZL_PURE_TEXT_MODES.has(jzlNormalizeRunMode(String(_rw.value || ""))));
                     } catch (_e) {}
                 }, 300);
             } catch (_e) {}
@@ -3672,17 +3960,31 @@ app.registerExtension({
                 };
                 const ar = gv("aspect_ratio") || "16:9 (Widescreen)";
                 const mp = parseFloat(gv("megapixels")) || 1.0;
-                const dur = parseInt(gv("duration"), 10) || 8;
+                // duration 兼容区间（"5" / "5-5" / "4-10"）：解析出 lo/hi
+                const durRaw = ((gv("duration") ?? "5-5") + "").trim();
+                const durM = durRaw.match(/^(\d+(?:\.\d+)?)\s*[~\-—]\s*(\d+(?:\.\d+)?)$/);
+                let dlo, dhi;
+                if (durM) {
+                    dlo = Math.max(4, Math.min(15, parseFloat(durM[1]) || 8));
+                    dhi = Math.max(dlo, Math.min(15, parseFloat(durM[2]) || dlo));
+                } else {
+                    const dv = Math.max(4, Math.min(15, parseFloat(durRaw) || 8));
+                    dlo = dv; dhi = dv;
+                }
                 const count = parseInt(gv("video_count"), 10) || 6;
                 const [wr, hr] = AR_MAP[ar] || [16, 9];
                 const total = mp * 1024 * 1024;
                 const scale = Math.sqrt(total / (wr * hr));
                 const W = Math.max(32, Math.round((wr * scale) / 32) * 32);
                 const H = Math.max(32, Math.round((hr * scale) / 32) * 32);
-                const base = Math.max(5, Math.round(dur * 24));
-                const frames = base + (5 - (base % 17)) % 17;
+                const calcF = (d) => { const b = Math.max(5, Math.round(d * 24)); return b + (5 - (b % 17)) % 17; };
+                const flo = calcF(dlo), fhi = calcF(dhi);
+                const ds = dlo === dhi ? `${dlo}` : `${dlo}~${dhi}`;
+                const fs = flo === fhi ? `${flo}` : `${flo}~${fhi}`;
+                const tfs = flo === fhi ? `${flo * count}` : `${flo * count}~${fhi * count}`;
+                const ts = dlo === dhi ? `${dlo * count}` : `${dlo * count}~${dhi * count}`;
                 const disp = (self.widgets || []).find((x) => x.name === "display_info");
-                if (disp) setWidgetValue(disp, `分辨率：${W}x${H}丨每段帧数：${frames}丨共计段数：${count}丨总帧数：${frames * count}丨总时长：${dur * count}秒`);
+                if (disp) setWidgetValue(disp, `分辨率：${W}x${H}丨每段时长：${ds}s丨每段帧数：${fs}丨共计段数：${count}丨总帧数：${tfs}丨总时长：${ts}秒`);
             };
             const watchChange = (nm) => {
                 const w = (self.widgets || []).find((x) => x.name === nm);
@@ -3889,6 +4191,190 @@ app.registerExtension({
 // 「📋 复制剧本 / 📖 编辑剧本（放大编辑）」。
 // 0 个物理输入端口：自动识别 = 跟随同图「短剧导演台Max」的「故事名称」→ 同名文件夹；
 // 剧本 = 直接读盘 output/jzl/{故事名}/第N次生成/故事拆解/ 最后一次生成文件（后端 /jzl/story_latest_script）。
+// ── 「输出目录」内置文件浏览器（跨环境：浏览/进入/下载/删除/在线编辑文本）──
+// 后端接口 /jzl/fs_list|fs_download|fs_delete|fs_read|fs_write|fs_open（沙箱限制在 output/jzl）。
+// ── 文件预览弹窗（图片/视频/音频/文本；点击文件名触发）──
+function openFilePreview(rel, name, ext) {
+    document.querySelectorAll(".jzl-fspreview").forEach((m) => m.remove());
+    const _u = (inline) => {
+        const q = `/jzl/fs_download?path=${encodeURIComponent(rel)}${inline ? "&inline=1" : ""}`;
+        return (api && api.apiURL) ? api.apiURL(q) : q;
+    };
+    const mkBtn = (label, bg, fg) => el("button", `height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "#3a3a3a"};color:${fg || "#eee"};font-size:12px;cursor:pointer;`, label);
+    const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:100001;display:flex;align-items:center;justify-content:center;overflow:auto;");
+    overlay.classList.add("jzl-fspreview");
+    const box = el("div", "max-width:94vw;max-height:92vh;background:#1c1c1e;border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:10px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.6);");
+    const head = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;");
+    head.appendChild(el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#eee;", name));
+    const dl = mkBtn("⬇️ 下载", "#2a4a6a", "#cfe3f7");
+    dl.addEventListener("click", () => window.open(_u(false), "_blank"));
+    const close = mkBtn("关闭");
+    close.addEventListener("click", () => overlay.remove());
+    head.append(dl, close);
+    box.appendChild(head);
+    const body = el("div", "flex:1 1 auto;min-height:0;max-height:84vh;overflow:auto;display:flex;align-items:center;justify-content:center;background:#111;border-radius:6px;padding:6px;box-sizing:border-box;");
+    box.appendChild(body);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const imgExt = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"];
+    const vidExt = ["mp4", "webm", "mov", "mkv", "m4v"];
+    const audExt = ["mp3", "wav", "m4a", "flac", "ogg", "aac"];
+    const txtExt = ["txt", "json", "md", "csv", "srt", "log"];
+    if (imgExt.includes(ext)) {
+        const im = el("img", "max-width:90vw;max-height:82vh;object-fit:contain;");
+        im.src = _u(true);
+        im.onerror = () => { body.textContent = "❌ 图片加载失败"; };
+        body.appendChild(im);
+    } else if (vidExt.includes(ext)) {
+        const v = document.createElement("video");
+        v.controls = true;
+        v.autoplay = true;
+        v.style.cssText = "max-width:90vw;max-height:82vh;outline:none;background:#000;";
+        v.src = _u(true);
+        v.onerror = () => { body.textContent = "❌ 视频无法播放（浏览器可能不支持该编码，可下载后用播放器打开）"; };
+        body.appendChild(v);
+    } else if (audExt.includes(ext)) {
+        const a = document.createElement("audio");
+        a.controls = true;
+        a.autoplay = true;
+        a.style.cssText = "width:min(680px,86vw);";
+        a.src = _u(true);
+        body.appendChild(a);
+    } else if (txtExt.includes(ext)) {
+        body.style.alignItems = "flex-start";
+        body.style.justifyContent = "flex-start";
+        const pre = el("pre", "margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;color:#ddd;width:100%;");
+        pre.textContent = "加载中…";
+        body.appendChild(pre);
+        api.fetchApi(`/jzl/fs_read?path=${encodeURIComponent(rel)}`)
+            .then((r) => r.json())
+            .then((d) => { pre.textContent = (d && d.ok) ? (d.text || "") : ("❌ " + ((d && d.error) || "读取失败")); })
+            .catch((e) => { pre.textContent = "❌ 读取失败：" + ((e && e.message) || e); });
+    } else {
+        body.textContent = "该文件类型不支持在线预览，请点「⬇️ 下载」。";
+    }
+}
+
+function openOutputBrowser(startRel) {
+    document.querySelectorAll(".jzl-fsbrowser").forEach((m) => m.remove());
+    const fmtSize = (n) => {
+        n = Number(n) || 0;
+        if (n < 1024) return n + " B";
+        if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+        if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+        return (n / 1073741824).toFixed(2) + " GB";
+    };
+    const fmtTime = (t) => { try { const d = new Date((Number(t) || 0) * 1000); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; } catch (_) { return ""; } };
+    let cur = String(startRel || "").replace(/^\/+|\/+$/g, "");
+    let parent = "";
+    const mkBtn = (label, bg, fg) => el("button", `flex:0 0 auto;height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "#3a3a3a"};color:${fg || "#eee"};font-size:12px;cursor:pointer;`, label);
+    const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100000;display:flex;align-items:center;justify-content:center;overflow:auto;");
+    overlay.classList.add("jzl-fsbrowser");
+    const box = el("div", "width:880px;max-width:94vw;max-height:92vh;background:var(--comfy-menu-bg,#242424);border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
+    const head = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;");
+    head.appendChild(el("span", "font-size:14px;font-weight:600;color:#eee;white-space:nowrap;", "📁 输出目录"));
+    const pathBox = el("span", "flex:1 1 140px;min-width:0;font-size:12px;color:#9fd6a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "");
+    const upBtn = mkBtn("⬆️ 上级");
+    const refreshBtn2 = mkBtn("🔄 刷新");
+    const sysBtn = mkBtn("🖥️ 资源管理器", "#2a4a6a", "#cfe3f7");
+    sysBtn.title = "在服务器本机用系统文件管理器打开（仅桌面环境；云机/无桌面会提示，请直接用下方列表浏览）";
+    const closeBtn = mkBtn("关闭");
+    head.append(pathBox, upBtn, refreshBtn2, sysBtn, closeBtn);
+    box.appendChild(head);
+    const list = el("div", "flex:1 1 auto;overflow-y:auto;min-height:140px;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;");
+    box.appendChild(list);
+    box.appendChild(el("div", "font-size:11px;color:#888;margin-top:6px;white-space:pre-wrap;", "文本文件（.txt/.json/.md/.csv/.srt/.log）可在线「编辑」并保存；视频/图片点「下载」；云机无需系统文件管理器即可浏览/下载/删除。"));
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const load = async () => {
+        list.textContent = "加载中…";
+        let data = {};
+        try {
+            const r = await api.fetchApi(`/jzl/fs_list?path=${encodeURIComponent(cur)}`);
+            data = await r.json().catch(() => ({}));
+        } catch (e) { list.textContent = "❌ 加载失败：" + ((e && e.message) || e); return; }
+        if (!data || !data.ok) { list.textContent = "❌ " + ((data && data.error) || "无法读取目录"); return; }
+        cur = data.rel || "";
+        parent = data.parent || "";
+        pathBox.textContent = "output/jzl/" + (cur ? cur + "/" : "");
+        list.innerHTML = "";
+        for (const dd of data.dirs || []) {
+            const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;cursor:pointer;");
+            row.addEventListener("mouseenter", () => { row.style.background = "#242424"; });
+            row.addEventListener("mouseleave", () => { row.style.background = ""; });
+            row.append(el("span", "flex:0 0 auto;font-size:13px;color:#ffd98a;", "📁"),
+                el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#ddd;", dd.name),
+                el("span", "flex:0 0 auto;font-size:11px;color:#666;", fmtTime(dd.mtime)));
+            row.addEventListener("click", () => { cur = dd.rel; load(); });
+            list.appendChild(row);
+        }
+        for (const ff of data.files || []) {
+            const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;");
+            const icon = ff.ext === "mp4" ? "🎬" : (["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ff.ext) ? "🖼️" : (["txt", "json", "md", "csv", "srt", "log"].includes(ff.ext) ? "📄" : "📦"));
+            const nameEl = el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#ddd;cursor:pointer;", ff.name);
+            nameEl.title = "点击预览（图片/视频/音频/文本）";
+            nameEl.addEventListener("click", () => openFilePreview(ff.rel, ff.name, ff.ext));
+            row.append(el("span", "flex:0 0 auto;font-size:13px;", icon),
+                nameEl,
+                el("span", "flex:0 0 auto;font-size:11px;color:#888;", fmtSize(ff.size)),
+                el("span", "flex:0 0 auto;font-size:11px;color:#666;", fmtTime(ff.mtime)));
+            const dl = mkBtn("⬇️ 下载", "#2a4a6a", "#cfe3f7");
+            dl.addEventListener("click", () => { const u = `/jzl/fs_download?path=${encodeURIComponent(ff.rel)}`; window.open((api && api.apiURL) ? api.apiURL(u) : u, "_blank"); });
+            row.appendChild(dl);
+            if (["txt", "json", "md", "csv", "srt", "log"].includes(ff.ext)) {
+                const ed = mkBtn("✏️ 编辑");
+                ed.addEventListener("click", async () => {
+                    try {
+                        const rr = await api.fetchApi(`/jzl/fs_read?path=${encodeURIComponent(ff.rel)}`);
+                        const rd = await rr.json().catch(() => ({}));
+                        if (!rd || !rd.ok) { notify((rd && rd.error) || "读取失败", "error"); return; }
+                        openTextZoomEditor("📄 " + ff.name, () => rd.text || "", async (text) => {
+                            try {
+                                const wr = await api.fetchApi("/jzl/fs_write", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: ff.rel, text: text || "" }) });
+                                const wd = await wr.json().catch(() => ({}));
+                                notify(wd && wd.ok ? "✅ 已保存" : ("❌ " + ((wd && wd.error) || "保存失败")), wd && wd.ok ? "success" : "error");
+                            } catch (e2) { notify("保存失败：" + ((e2 && e2.message) || e2), "error"); }
+                        }, null);
+                    } catch (e) { notify("读取失败：" + ((e && e.message) || e), "error"); }
+                });
+                row.appendChild(ed);
+            }
+            const del = mkBtn("🗑 删除", "#7a2a2a", "#ffd0d0");
+            del.addEventListener("click", async () => {
+                if (!window.confirm(`确定删除「${ff.name}」？此操作不可恢复。`)) return;
+                try {
+                    const rr = await api.fetchApi("/jzl/fs_delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: ff.rel }) });
+                    const rd = await rr.json().catch(() => ({}));
+                    if (rd && rd.ok) { notify("🗑 已删除 " + ff.name, "success"); load(); }
+                    else notify((rd && rd.error) || "删除失败", "error");
+                } catch (e) { notify("删除失败：" + ((e && e.message) || e), "error"); }
+            });
+            row.appendChild(del);
+            list.appendChild(row);
+        }
+        if (!(data.dirs || []).length && !(data.files || []).length) {
+            list.appendChild(el("div", "font-size:12px;color:#888;padding:8px;", "（空目录）"));
+        }
+    };
+
+    upBtn.addEventListener("click", () => { cur = parent; load(); });
+    refreshBtn2.addEventListener("click", () => load());
+    sysBtn.addEventListener("click", async () => {
+        try {
+            const r = await api.fetchApi("/jzl/fs_open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: cur }) });
+            const data = await r.json().catch(() => ({}));
+            if (data && data.ok) notify("🖥️ 已在本机打开文件夹", "success");
+            else notify((data && data.error) || "无法打开（云机请用列表浏览）", "error");
+        } catch (e) { notify("无法打开：" + ((e && e.message) || e), "error"); }
+    });
+    closeBtn.addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    load();
+}
+
 function setupVideoViewerNode(self) {
     // socketless story_name widget：隐藏 + 持久化「当前故事」（自动识别/手动选择时写入）
     const _storyW = (self.widgets || []).find((x) => x.name === "story_name");
@@ -3901,8 +4387,9 @@ function setupVideoViewerNode(self) {
             w.computeSize = () => [0, -4];
         }
     }
-    // 剧本（由「故事拆解」文件填充，复制/编辑基于它）；当前故事初值 = 上次持久化的 story_name
+    // 剧本（由磁盘最后一次生成文件填充：开启增强=已增强剧本，未开启=故事拆解；复制/编辑基于它）；当前故事初值 = 上次持久化的 story_name
     self.__viewerScript = "";
+    self.__viewerSource = "";   // 剧本来源：已增强剧本 / 故事拆解
     self.__viewerStory = String(_storyW ? String(readWidgetValue(_storyW) || "").trim() : "");
     const _setStoryWidget = (sn) => {
         if (_storyW && String(readWidgetValue(_storyW) || "").trim() !== sn) {
@@ -3924,22 +4411,24 @@ function setupVideoViewerNode(self) {
     const refreshBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;", "🔄 刷新目录");
     refreshBtn.title = "重新同步「短剧导演台Max」的故事名并读取视频/剧本";
     refreshBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-    refreshBtn.addEventListener("click", () => { refresh().then(() => { try { notify("🔄 已同步（视频 + 最后一次故事拆解）", "success"); } catch (_) {} }); });
+    refreshBtn.addEventListener("click", () => { refresh().then(() => { try { notify("🔄 已同步（视频 + 最后一次" + (self.__viewerSource || "剧本") + "）", "success"); } catch (_) {} }); });
     const copyBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;", "📋 复制剧本");
     copyBtn.title = "复制当前已处理剧本全文";
     const viewBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;", "📖 编辑剧本");
     viewBtn.title = "放大编辑当前已处理剧本（可改后保存）";
+    const dirBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:12px;cursor:pointer;", "📁 输出目录");
+    dirBtn.title = "打开当前故事的输出目录（output/jzl/{故事名}）：浏览 / 下载 / 删除 / 在线编辑文本（云机同样可用）";
     const storyName = el("span", "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#9fd6a4;", "");
     storyName.title = "当前加载的故事文件夹（自动识别=跟随「短剧导演台Max」的故事名称同名文件夹）";
-    ctrlRow.append(storySel, storyName, refreshBtn, copyBtn, viewBtn);
+    ctrlRow.append(storySel, storyName, refreshBtn, copyBtn, viewBtn, dirBtn);
     container.appendChild(ctrlRow);
     // 状态行（剧本字数 / 提示）
     const scriptStat = el("div", "font-size:11px;color:#888;flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:14px;", "");
     container.appendChild(scriptStat);
     const updateScriptStat = () => {
         const t = self.__viewerScript || "";
-        if (t.trim()) { scriptStat.textContent = `📄 已处理剧本 ${t.length} 字`; scriptStat.style.color = "#9fd6a4"; }
-        else { scriptStat.textContent = "尚未获取剧本：先跑一次「短剧导演台Max」，再点「🔄 刷新目录」自动读取其故事拆解"; scriptStat.style.color = "#888"; }
+        if (t.trim()) { scriptStat.textContent = `📄 已处理剧本 ${t.length} 字${self.__viewerSource ? "（" + self.__viewerSource + "）" : ""}`; scriptStat.style.color = "#9fd6a4"; }
+        else { scriptStat.textContent = "尚未获取剧本：先跑一次「短剧导演台Max」，再点「🔄 刷新目录」自动读取（开启增强读已增强剧本，否则读故事拆解）"; scriptStat.style.color = "#888"; }
     };
     self.__viewerUpdate = updateScriptStat;
 
@@ -3975,6 +4464,28 @@ function setupVideoViewerNode(self) {
             updateScriptStat();
             notify("✅ 剧本已保存（可用「📋 复制剧本」复制到别处）", "success");
         }, self);
+    });
+    dirBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    // 桌面端（Windows/macOS/Linux 有图形界面）：点击 = 直接用系统文件管理器打开文件夹，不弹内置界面；
+    // 云机/无桌面（os.startfile 无效）→ 自动回退内置文件浏览器，保证浏览/下载/删除仍可用。
+    dirBtn.addEventListener("click", async () => {
+        const sn = String(self.__viewerStory || "").trim();
+        let lastErr = "";
+        const _tryOpen = async (p) => {
+            try {
+                const r = await api.fetchApi("/jzl/fs_open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: p }) });
+                let data = {};
+                try { data = await r.json(); } catch (_) { data = {}; }
+                if (data && data.ok) return true;
+                lastErr = (data && data.error) || ("HTTP " + r.status + (r.status === 404 ? "（后端路由未注册 → 请重启 ComfyUI）" : ""));
+                return false;
+            } catch (e) { lastErr = (e && e.message) || String(e); return false; }
+        };
+        try { notify("📁 正在打开输出目录…", "success"); } catch (_) {}
+        if (await _tryOpen(sn)) { notify("🖥️ 已在本机打开输出文件夹", "success"); return; }
+        if (sn && await _tryOpen("")) { notify("该故事目录暂不存在，已打开 output/jzl 根目录", "warning"); return; }
+        try { notify("⚠️ 系统文件夹打不开（云机/无桌面，或后端未重启）→ 已改用内置浏览器。原因：" + lastErr, "warning"); } catch (_) {}
+        openOutputBrowser(sn);   // 一定兜底：网页内置文件浏览器（浏览/下载/删除/在线编辑）
     });
 
     // 视频宫格（2 列，右侧留滚动条位，随节点拉大卡片自适应放大）
@@ -4042,9 +4553,9 @@ function setupVideoViewerNode(self) {
                     grid.append(card);
                 });
             }
-            // 剧本：以磁盘「最后一次故事拆解」为准（空则不覆盖用户已编辑内容）
+            // 剧本：以磁盘「最后一次生成文件」为准（开启增强=已增强剧本，否则=故事拆解；空则不覆盖用户已编辑内容）
             const sc = (sdata && sdata.ok && sdata.script) || "";
-            if (sc) self.__viewerScript = sc;
+            if (sc) { self.__viewerScript = sc; self.__viewerSource = (sdata && sdata.source) || ""; }
             updateScriptStat();
         } catch (e) {
             grid.append(el("div", "font-size:12px;color:#e88;padding:6px;", `加载失败：${(e && e.message) || e}`));

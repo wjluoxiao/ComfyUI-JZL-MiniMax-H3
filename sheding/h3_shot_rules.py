@@ -5,7 +5,12 @@
 # 占位符: {Segment_Duration} 分段时长(秒), {Schedule_Rules} 调度开关规则。
 
 # 中文版：输出格式说明（分段块 + 六段 Ref2VA + 调度指令）
-H3_SHOT_RULES_ZH = '''## 4. 输出格式（CRITICAL — 严格遵循，违反即失败）
+H3_SHOT_RULES_ZH = '''
+## 语言设定（CRITICAL — 正文语言跟随用户所选输出语言；字段名/标记保持英文原样）
+- 用户 LLM 输出语言为「中文 [ZH]」：六段正文（subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music 的内容）用**中文**写作；为「英文 [EN]」：正文用**英文**。字段名（subject_definitions 等）与关系标记（fully_preserved / fully_copy / reference / weak_reference 等）始终**英文原样**。
+- 仅 <d> 内台词/歌词/旁白按用户原语言（如 <d>[中文] 原文。</d>）、画面可见文字（横幅/招牌/字幕等）用英文双引号包裹原文字。
+- 下方示例仅示意结构与写法；实际正文语言按「用户所选输出语言」。
+## 4. 输出格式（CRITICAL — 严格遵循，违反即失败）
 每个分段严格包裹在 [SHOT_START]...[SHOT_END] 之间。块内依次包含：
 （一）分段信息：**标题/**时长/**景别/**运镜/**角色/**场景/**道具/**动作描述/**氛围光影
 （二）提示词与调度指令：四个固定标记段
@@ -13,7 +18,7 @@ H3_SHOT_RULES_ZH = '''## 4. 输出格式（CRITICAL — 严格遵循，违反即
 ### 4.1 分段信息格式
 - 分段标题命名（CRITICAL）：每个分段块的第一行写 `### Video_XXX`（Video 编号从 001 三位补零递增：Video_001、Video_002...），这是分段标题，与 detailed_description 内的切镜标签 [Shot N] 完全无关，严禁写成 `### Shot_XXX`。
 **标题**: [2-10字中文标题，根据本段内容自动生成]
-**时长**: [固定为 {Segment_Duration} 秒，不可改动]
+**时长**: [写本段实际秒数：固定设置时统一为该值；区间设置时按剧情弧线在本段**时长**取值]
 **景别**: [远景/全景/中景/近景/特写]
 **运镜**: [固定/推/拉/摇/移/跟/升/降]
 **角色**: [本段出场角色名，顿号分隔；无人写"无"。只写「参考素材说明」里声明的角色，严禁自造未声明的角色]
@@ -32,7 +37,7 @@ detailed_description: {...}
 overall_soundscape: {...}
 non_diegetic_music: {...}
 
-六个字段之间各空一行。禁止用 markdown 代码块（```）包裹。
+六个字段之间各空一行。禁止用 markdown 代码块（```）包裹。 `non_diegetic_music` 之后（块内）与 `===SCENE_INSTRUCTION===` 之间**必须换行**，严禁把 non_diegetic 内容与 `===SCENE_INSTRUCTION===` 写在同一行。
 
 #### subject_definitions（主体定义）
 用户的参考素材说明用「槽位名 = 素材名（描述）」声明，例如「角色A = 孙悟空（橙色武道服）」。槽位名（如「角色A」）与素材节点标题一一对应，素材名（如「孙悟空」）是 <Subject N> 里写的内容。subject_definitions 写素材名、调度指令 slots 写槽位名，二者靠 <Picture N>/<Video N>/<Audio N> 编号绑定。严禁拆分/缩写槽位名、严禁自造。
@@ -54,7 +59,7 @@ non_diegetic_music: {...}
 - 音频写"reference - <Subject N> 的对话遵循 <Audio N>"。严禁自编音色描述（如"年轻""低沉""清脆"），除非用户音频说明里明确写了该音色特征；严禁写"不复制原信号"尾缀。
 
 #### detailed_description（详细描述，主体——视频质量的核心，务必详写）
-- 定位（CRITICAL）：本分段是一段 {Segment_Duration} 秒的独立视频，detailed_description 必须完整描述这段视频从头到尾的全部内容（用多个 [Shot N] 切镜串起来），不是一个动作或一个画面的简单描述。
+- 定位（CRITICAL）：本分段时长以分段信息「**时长**」字段为准（全局时长设定：{Segment_Duration}），detailed_description 必须完整描述这段视频从头到尾的全部内容（用多个 [Shot N] 切镜串起来），不是一个动作或一个画面的简单描述。
 - 风格开场（CRITICAL）：在 [Shot 1] 之前用 1-2 句确立整体风格，必须逐字落实「## 1. 故事风格」里当前风格的「视觉风格 + 色调与光线 + 摄影语言」。禁止写「实拍/电影感/唯美/明亮通透」这类与风格无关的通用词——热血战斗就写高饱和暖色、明暗对比、粒子特效、速度感；每个分段块的风格开场必须与「## 1. 故事风格」一致，禁止每个分段自由发挥不同风格。
 - 本段导演语法（CRITICAL，写动作时逐条执行，禁止只写"谁做了什么事"的剧情梗概）：
 {Style_Directing}
@@ -64,24 +69,34 @@ non_diegetic_music: {...}
 {Custom_Rules_Directing}
 - 每个分段必须写全七要素：①构图景别 ②主体外貌与位置 ③环境与光影 ④动作与状态变化 ⑤运镜（类型+幅度+速度）⑥当前声音 ⑦引用内容实际出现/生效的确切位置。禁止写成剧情梗概或"某人做了某事"的干瘪句子。
 - 动作必须连续、具体、可被相机拍到：肢体轨迹、接触点、表情变化、物体位移、状态变化。禁止概括（"两人交谈起来"✗），要拆解成可见动作（"她把茶杯轻轻推过去，指尖在杯沿停顿了一下，随后收回"✓）。
-- 动作/战斗节奏规则（按风格执行，禁止跨风格套用）：攻防同步、力量链、速度表现、对手反制、环境限幅等「稳准狠快」铁律，仅适用于动作/战斗类风格（热血战斗、古风武侠、修仙问道、末日废土、谍战风云、恐怖惊悚、逆袭打脸、乡村喜剧等），由该风格「## 核心导演语法」逐条给出。抒情/日常/情感/悬疑/权谋等非动作风格严禁套用这些铁律，应遵循本风格自己的节奏规则（舒缓/微动作/留白/克制）。
-- 运镜写成自然动作（CRITICAL，官方协议）：运镜必须作为画面的自然动作主语融入句子，绝不允许作为独立标签堆砌在句尾——写成自然流动的语句，如"摄影机以小幅慢速向前推进，同时主角拔出长剑"。具体运镜类型/幅度/速度的选用由「## 1. 故事风格」的「镜头语言库」按本风格决定。
-- 切镜必须引入新信息（主体/空间/状态/视角/时间至少变一项）；只是换个距离或角度优先用运镜而非切镜。转场可用：切/叠化/淡入淡出/擦除。
-- 时间戳铁律：[Shot 1] 无时间戳，直接写内容；后续每镜一行，格式 `[Shot N] At MM:SS.mmm, 内容`，[Shot N] 每镜只写一次，禁止写成 `[Shot N] At MM:SS.mmm, [Shot N] 内容`。时间戳严格递增，全部落在 0 ~ {Segment_Duration} 秒内。
-- 篇幅铁律（CRITICAL）：每一个分段块（每个 [SHOT_START]...[SHOT_END] 块）的 detailed_description 必须单独写满 {Detail_Length} 字（中文按字数算，不是多个分段的总和）。[Shot N] 切镜数量由切镜偏好决定，每个 [Shot N] 写足字数，所有 [Shot N] 加起来必须达到 {Detail_Length} 字。禁止两句话打发一个分段、禁止只写一个 [Shot 1] 就结束、禁止把字数分摊到其他分段。
+- 动作/战斗节奏规则（按风格执行，禁止跨风格套用）：攻防同步、力量链、速度表现、对手反制、环境限幅等「稳准狠快」铁律，仅适用于当前风格为「热血战斗」这类动作/战斗向分段（以该风格「## 核心导演语法」逐条给出，**含其 D 节打戏密度铁律：一镜内 ≥3 拍连续攻防防回合制、每次攻防写全受力闭环、错身立即追击不停顿、收尾三拍逼防→变线→命中**）；其它风格（悬疑惊悚/温馨日常/甜宠爽文/宏大奇观/乡土喜乐/歌神舞台）即使分段内含动作场面，也按各自风格的节奏规则执行（舒缓/微动作/留白/克制或本风格对动作的专门处理），严禁把动作类铁律整体套上。
+- 运镜写成自然动作（CRITICAL，官方协议）：运镜必须作为画面的自然动作主语融入句子，绝不允许作为独立标签堆砌在句尾——写成自然流动的语句，如"摄影机以小幅慢速向前推进，同时主角拔出长剑"。幅度/速度仅在真正有意义时才写（官方协议：中等幅度与正常速度通常省略、不必每个运镜都标注），需要时用中文自然描述（小幅/大幅、慢速/快速）。具体运镜类型/幅度/速度的选用由「## 1. 故事风格」的「镜头语言库」按本风格决定。
+- 切镜必须引入新信息（主体/空间/状态/视角/时间至少变一项）；只是换个距离或角度优先用运镜而非切镜。转场可用：切/叠化/淡入淡出/擦除。 相邻 [Shot N] 严禁复制/重述上一个 [Shot N] 已演的动作、结果或台词——同一动作只出现一次，每个 [Shot N] 必须推进新的节拍/新信息（主体/空间/状态/视角/时间至少变一项），禁止把上个镜头换个机位重演一遍。
+- 时间戳铁律：[Shot 1] 无时间戳，直接写内容；后续每镜一行，格式 `[Shot N] At MM:SS.mmm, 内容`，[Shot N] 每镜只写一次，禁止写成 `[Shot N] At MM:SS.mmm, [Shot N] 内容`。时间戳严格递增，全部落在 0 ~ 本段「**时长**」秒内。 时间戳一律 `[Shot N] At MM:SS.mmm`（分:秒.毫秒，用冒号分隔，如 `At 00:01.200`）；严禁用点号写成 `00.01.200`/`00.009.400`。
+- 篇幅铁律（CRITICAL）：每一个分段块（每个 [SHOT_START]...[SHOT_END] 块）的 detailed_description 必须单独写满 {Detail_Length} 字（中文按字数算，不是多个分段的总和）。[Shot N] 切镜数量由切镜偏好决定（见 §1.5：选 2~5镜 就写 2-5 个 [Shot N]，选 5~9镜 就写 5-9 个，一镜到底只写 1 个），每个 [Shot N] 写足字数，所有 [Shot N] 加起来必须达到 {Detail_Length} 字。禁止两句话打发一个分段、禁止只写一个 [Shot 1] 就结束、禁止把字数分摊到其他分段。对白密集豁免（官方协议）：若本段对白占大头，优先完整铺满对白时间线——每句台词、说话人动作神态、听者反应都要写全，先保证对白与反应完整，再在非对白部分补足动作/运镜/环境细节；不得借"对白豁免"把整段缩水成只写对白的干条。景别铁律（见 §1.5）：偏好选定景别档位（如 特写为主）时，每个 [Shot N] 的景别必须匹配该档位，禁止与偏好冲突地写「中景/远景」开头交代；若 §1.5 无景别偏好（根据剧情/随机组合）才按风格自由安排景别层次。
 - 引用参考素材用 <Subject N>/<Picture N>/<Video N>/<Audio N> 标签，首次出现即标注并展开描述。
-- 对话与发声源铁律（CRITICAL）：说话人 (S1)/(S2) 只在本分段有人实际说话时使用；无对话分段严禁在动作描写里写 (Sx)。多人同时发声使用联合 ID，如 (S1,S2)。对话用 `<Subject N> (S1) 说道：<d>[中文] 原文。</d>`，<d> 内保留原文语言及基础标点（, . ? !），剔除表情符号与冗余标点、禁止翻译。
-- 画外音/内心独白（CRITICAL）：必须明确写"以画外音说道（says in an off-screen voiceover）"，并在该 <d> 后紧跟描写说话角色在画面中"嘴唇保持完全闭合（while his lips remain completely closed）"，防止 AI 强制生成口型。跨切镜对话用 <scenetrans>，结尾截断用 <cutoff>。
+- 对话与发声源铁律（CRITICAL）：说话人 (S1)/(S2) 只在本分段有人实际说话时使用；无对话分段严禁在动作描写里写 (Sx)。多人同时发声使用联合 ID，如 (S1,S2)。【对白必须独立成行，严禁与动作/描述挤在同一行】书写格式：说话人的动作、神态与 (Sx) 写在上一行句末并以“说道：”或“回应道：”结尾 → 换行后**独立一行**写 `<d>[中文] 原文。</d>`（台词独占一行）→ 说毕的听者反应或后续动作再**另起一行**。正例：
+```
+[Shot 1] 张伟 (S1) 拔剑直指小雨，以参考自 <Audio 1> 的低沉音色说道：
+<d>[中文] 今晚，做个了断。</d>
+小雨 (S2) 下巴微扬，目光毫不退缩。
+```
+<d> 内保留原文语言及基础标点（, . ? !），剔除表情符号与冗余标点、禁止翻译。
+- 画外音/内心独白（CRITICAL）：写“以画外音说道（says in an off-screen voiceover）”，台词同样独立成行（<d> 独占一行）；在该台词行后**另起一行**描写画面中该角色“嘴唇保持完全闭合（while his lips remain completely closed）”，防止 AI 强制生成口型。跨切镜对话用 <scenetrans>，结尾截断用 <cutoff>。
 - 可视文本双引号原则（CRITICAL）：画面中任何实际可见的横幅、标志、信件文字、霓虹灯招牌，必须用英文双引号 "" 包裹其原文并保留原语言不得翻译。例如：门上方亮起写着 "营业中" 的红色霓虹灯招牌。
-- 首帧锚定（条件规则，CRITICAL）：当本分段 slots 里的参考图被声明为 [Shot 1] 首帧（<Picture N> 作为 [Shot 1] 的第一帧锚点）时，[Shot 1] 必须首先建立参考图中的构图、主体初始姿态、服装/道具和场景锚点，再推进下一个动作。禁止在 [Shot 1] 第一句话就让角色飞出去，必须有"从静止（首帧状态）到启动"的过程。
+- 首帧锚定（条件规则，CRITICAL）：当本分段 slots 里的参考图被声明为 [Shot 1] 首帧（<Picture N> 作为 [Shot 1] 的第一帧锚点）时，本段的整体风格/渲染质感/色调光线应从该参考图推导（官方协议：有首帧参考图时风格从图推导，禁止另起炉灶套无关风格），[Shot 1] 必须首先建立参考图中的构图、主体初始姿态、服装/道具和场景锚点，再推进下一个动作。禁止在 [Shot 1] 第一句话就让角色飞出去，必须有"从静止（首帧状态）到启动"的过程。
 - 物理矢量描述（CRITICAL，彻底禁用文学修辞）：每一句必须对应物理世界中可见/可听的事实。禁用一切主观情感抒情与抽象文学形容词（禁止写"绝望的氛围""如诗如画"）。情感必须转化为物理动作："他感到悲伤"必须写成"他低下头，肩膀垮塌，半张脸隐没在阴影中"；环境必须物化："风吹过"必须写成"树叶向右侧剧烈摇晃，掀起角色的斗篷下摆"。具体可见的颜色与光线（如"冷白月光透过竹叶洒下"）属于物理事实，保留；只禁抽象情绪词与主观抒情。
+- 禁止情绪性收尾套话（CRITICAL）：禁止用抽象抒情句给镜头/分段收尾——严禁"阳光正好""画面定格在这份惬意中""时光仿佛静止""岁月静好""一切尽在不言中""气氛温馨而美好""仿佛在诉说…""世界都安静了"等无物理载体的情绪总结句；禁止"话音刚落""说完这句话""话声未落"这类叙述性衔接词占据镜头内容。若镜头有可见收束（角色合眼/光影移动/道具落定/动作结束），用具体的物理末态描写，并写明"谁、在什么位置、保持什么姿态/视线/道具状态"（供下一镜头复位）；不写情绪结论。
+
+- - 大切镜自足 + 剧情状态连续（CRITICAL — 本次任务一次输出 {Segment_Count} 个 Video_XXX 分段时适用；单独生成单个分段忽略）：每段是独立生成的视频，严禁写“承接上段末帧/接住上一段结尾”这类跨段画面引用与复述。段与段之间是一次大切镜：①非首段：本段 [Shot 1] 是紧接上段剧情时间线的“新一镜”，从“上段结束时的剧情状态”（谁在哪/姿态/已发现什么/刚发生什么）沿时间线直接续推，可换景别/机位/空间；禁止重演上段已演的事件、禁止状态回退（上段已站起/已发现/已下台阶，本段不得又蹲回/装作没发现/再踏上同一级台阶）。②非末段：本段最后一个 [Shot N] 用 1-2 句写清本段结束时的物理末态（谁/在哪/姿态/正进行动作），作剧情状态交接；禁止用对视/一笑/定格/转身等封闭收尾给中段画句号。③只有首段可完整开场、只有末段可真正收束。④切去别的空间再切回某场景时，保持该场景此前的机位/景别/光线语言一致。⑤转述上段状态时不写抽象“继续/承接上文”，直接按状态推进本段画面。
+
 - 切镜/运镜/景别的具体导演语法（切镜时机、连续状态链、事件密度、动作语法等）由「## 1. 故事风格」中的「镜头语言库」按本风格逐条提供，此处不再重复。
 
 #### overall_soundscape（整体声景）
 1-4 句：环境音、物理动作音、非语言人声。
 
 #### non_diegetic_music（非剧情音乐）
-默认输出 N/A（本工作流默认不使用背景音乐）。仅当镜头语言偏好中明确指定了背景音乐风格时，才按官方写法输出 1-3 句英文配乐描述，聚焦「乐器 + 速度 + 节奏 + 动态变化」，禁止使用抽象情绪词（dramatic/emotional/creepy 等）、禁止解释配乐的情感功能；未指定或明确禁止音乐时输出 N/A。角色能听到的歌声、乐器、广播、电视、手机音乐是剧情音（diegetic），写在 detailed_description，不属于本字段。
+默认输出 N/A（本工作流默认不使用背景音乐）。**仅当 §1.5 镜头语言偏好中明确指定了背景音乐风格时（即偏好含「背景音乐风格：XXX」且非「禁止音乐」/「不指定」），MUST 输出 1-3 句英文配乐描述**，聚焦「乐器 + 速度 + 节奏 + 动态变化」，风格与该偏好一致；禁止使用抽象情绪词（dramatic/emotional/creepy 等）、禁止解释配乐的情感功能。§1.5 指定了音乐就严禁写 N/A；未指定或明确禁止音乐时才输出 N/A。角色能听到的歌声、乐器、广播、电视、手机音乐是剧情音（diegetic），写在 detailed_description，不属于本字段。
 
 ### 4.3 切镜与运镜节奏
 切镜与运镜的具体节奏、时机、类型由「## 1. 故事风格」中的「镜头语言库」按本风格逐条提供（不同风格切镜节奏完全不同，如动作类快切、抒情类舒缓），并配合「镜头语言偏好」参数动态搭配，此处不再做全局统一规定。
@@ -114,7 +129,7 @@ non_diegetic_music: {...}
 [SHOT_START]
 ### Video_001
 **标题**: 竹林对峙
-**时长**: {Segment_Duration}
+**时长**: 5
 **景别**: 中景
 **运镜**: 推
 **角色**: 张伟、小雨
@@ -143,8 +158,10 @@ retention_analysis:
 
 detailed_description:
 目标视频采用电影感实拍风格，冷白月光穿透竹叶形成逆光剪影。
-[Shot 1] 中景镜头确立 <Subject 1> 的月夜竹林，竹影在地面随风摇曳。摄影机以小幅慢速向前推进，<Subject 2> 张伟 (S1) 右手五指扣住腰间青铜剑柄，缓缓抽出剑身，冷光顺着剑脊流淌，随即抬臂直指 <Subject 3> 小雨 (S2)，剑尖在月光下凝出一个光点。张伟以参考自 <Audio 1> 的低沉音色说道：<d>[中文] 今晚，做个了断。</d>
-[Shot 2] At 00:03.000, 镜头切至 <Subject 3> 小雨 (S2) 的面部特写，逆光勾勒出她发丝的轮廓。她下巴微扬，目光从剑尖移向张伟的眼睛，嘴角勾起一丝笑意，以参考自 <Audio 2> 的清脆音色回应：<d>[中文] 奉陪到底。</d>
+[Shot 1] 中景镜头确立 <Subject 1> 的月夜竹林，竹影在地面随风摇曳。摄影机以小幅慢速向前推进，<Subject 2> 张伟 (S1) 右手五指扣住腰间青铜剑柄，缓缓抽出剑身，冷光顺着剑脊流淌，随即抬臂直指 <Subject 3> 小雨 (S2)，剑尖在月光下凝出一个光点。张伟以参考自 <Audio 1> 的低沉音色说道：
+<d>[中文] 今晚，做个了断。</d>
+[Shot 2] At 00:03.000, 镜头切至 <Subject 3> 小雨 (S2) 的面部特写，逆光勾勒出她发丝的轮廓。她下巴微扬，目光从剑尖移向张伟的眼睛，嘴角勾起一丝笑意，以参考自 <Audio 2> 的清脆音色回应：
+<d>[中文] 奉陪到底。</d>
 
 overall_soundscape: 夜风穿过竹林沙沙作响，剑鞘摩擦发出金属轻响，远处传来断续虫鸣。
 
@@ -163,7 +180,7 @@ non_diegetic_music: N/A
 [SHOT_START]
 ### Video_002
 **标题**: 剑锋逼喉
-**时长**: {Segment_Duration}
+**时长**: 5
 **景别**: 近景
 **运镜**: 推
 **角色**: 张伟、小雨
@@ -190,7 +207,9 @@ retention_analysis:
 
 detailed_description:
 目标视频采用电影感实拍风格，冷白月光在剑尖凝成一点寒芒。
-[Shot 1] 近景镜头中，<Subject 1> 张伟 (S1) 跨步逼近，手中青铜剑直抵 <Subject 2> 小雨 (S2) 咽喉。摄影机以小幅慢速推进，张伟以参考自 <Audio 1> 的低沉音色逼问：<d>[中文] 认输吗？</d> 小雨仰头退后半步，喉结轻颤，目光却毫不退缩。
+[Shot 1] 近景镜头中，<Subject 1> 张伟 (S1) 跨步逼近，手中青铜剑直抵 <Subject 2> 小雨 (S2) 咽喉。摄影机以小幅慢速推进，张伟以参考自 <Audio 1> 的低沉音色逼问：
+<d>[中文] 认输吗？</d>
+小雨仰头退后半步，喉结轻颤，目光却毫不退缩。
 
 overall_soundscape: 剑尖轻微嗡鸣，夜风穿过竹林，两人呼吸声清晰可闻。
 
@@ -214,7 +233,7 @@ non_diegetic_music: N/A
 ## 6. 铁律（违反任何一条都算失败）
 1. 分段数量必须恰好 {Segment_Count} 个，不多不少。
 2. 六个字段名 subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music 必须原样英文输出，字段间各空一行。
-3. [Shot 1] 无时间戳，直接写内容；后续每镜写 [Shot N] At MM:SS.mmm（[Shot N] 每镜只写一次，禁止写成 [Shot N] At MM:SS.mmm, [Shot N]），时间戳严格递增且不超过 {Segment_Duration} 秒。
+3. [Shot 1] 无时间戳，直接写内容；后续每镜写 [Shot N] At MM:SS.mmm（[Shot N] 每镜只写一次，禁止写成 [Shot N] At MM:SS.mmm, [Shot N]），时间戳严格递增且不超过本段「**时长**」秒。
 4. 禁止用 markdown 代码块（```）包裹任何内容。
 5. 禁止翻译 <d> 标签内的对话，原文语言保留。
 6. 禁止臆造 <Subject N>/<Picture N>/<Video N>/<Audio N> 标签；没有参考素材就不写。
@@ -226,14 +245,19 @@ non_diegetic_music: N/A
 12. 调度指令 slots 的每个元素必须原样照抄用户素材说明里的槽位名（格式「类型:槽位名」，如「场景:场景A」「角色:角色A」），严禁拆分/缩写/改用素材名/自造。
 13. 每个 [SHOT_START]...[SHOT_END] 块内的 <Picture N>/<Video N>/<Audio N> 编号独立从 1 开始（= slots 下标+1），严禁跨分段沿用编号、严禁沿用用户素材说明里的全局图片编号。
 14. 每个分段必须输出完整块：[SHOT_START] + 分段信息九行 + ===H3_PROMPT=== 六段 + ===SCENE_INSTRUCTION=== + ===VIDEO_INSTRUCTION=== + ===AUDIO_INSTRUCTION=== + [SHOT_END]，缺任何一部分都算失败。
-15. non_diegetic_music 默认输出 N/A；仅当镜头语言偏好明确指定了背景音乐风格时才输出英文配乐描述（禁止写中文、禁止无中生有添加未指定的配乐）。
+15. non_diegetic_music 默认输出 N/A；仅当镜头语言偏好明确指定了背景音乐风格时才输出配乐描述——**按用户所选输出语言**（中文[ZH]用中文、英文[EN]用英文；聚焦乐器+速度+节奏+动态），禁止无中生有添加未指定的配乐。
 16. AUDIO_INSTRUCTION.slots 必须按本分段说话顺序排列（先说话的排第 1 位 = <Audio 1>），严禁按槽位名 A/B/C 固定排。
 17. 无对话分段（detailed_description 里没有 <d>）禁止输出 <Audio N> 定义、禁止 AUDIO_INSTRUCTION.slots 含音频、禁止在动作描写里写 (Sx)。
 18. 每个分段的 detailed_description 必须独一无二，严禁复制/复用其他分段的内容；剧情相似也必须换景别、换动作细节、换运镜、换画面，逐段重写。'''
 
 
 # 英文版：输出格式说明
-H3_SHOT_RULES_EN = '''## 4. Output Format (CRITICAL — follow exactly, violation = failure)
+H3_SHOT_RULES_EN = '''
+## 0. LANGUAGE (CRITICAL — body language follows the user-selected output language; field names & markers stay English)
+- If the LLM output language is "中文 [ZH]", write the six-field body (subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music content) in CHINESE; if "英文 [EN]", write it in ENGLISH. Field names and relation markers (fully_preserved / fully_copy / reference / weak_reference) remain ENGLISH verbatim.
+- Keep ONLY the following in the original language: 1) <d> dialogue/lyrics (per user, e.g. <d>[中文] 原文。</d>); 2) on-screen text wrapped in English double quotes.
+- The examples below only show structure; the actual body language follows the selected output language.
+## 4. Output Format (CRITICAL — follow exactly, violation = failure)
 Each segment is strictly wrapped in [SHOT_START]...[SHOT_END]. Inside each block, in order:
 (1) Shot info: **Title/**Duration/**Shot Size/**Camera Movement/**Characters/**Scene/**Props/**Action Description/**Mood & Lighting
 (2) Prompt + scheduling instructions: four fixed marker sections
@@ -241,7 +265,7 @@ Each segment is strictly wrapped in [SHOT_START]...[SHOT_END]. Inside each block
 ### 4.1 Shot Info Format
 - Segment-title naming (CRITICAL): the first line of every segment block is `### Video_XXX` (Video numbers zero-padded to three digits, incrementing: Video_001, Video_002...). This is the segment title and is completely unrelated to the cut label [Shot N] inside detailed_description — never write `### Shot_XXX`.
 **Title**: [2-10 word English title, auto-derived from the segment]
-**Duration**: [fixed at {Segment_Duration} seconds, do NOT change]
+**Duration**: [write this segment's actual seconds: fixed value when globally fixed; pick a value within the range by the story arc when a range is set]
 **Shot Size**: [Extreme Long/Long/Medium/Close-up/Extreme Close-up]
 **Camera Movement**: [Static/Push/Pull/Pan/Tilt/Truck/Tracking/Pedestal/Crane]
 **Characters**: [comma-separated names; "none" if no one. ONLY characters declared in the material intro; never invent undeclared characters]
@@ -260,7 +284,7 @@ detailed_description: {...}
 overall_soundscape: {...}
 non_diegetic_music: {...}
 
-Exactly ONE blank line between fields. Do NOT wrap in markdown code blocks.
+Exactly ONE blank line between fields. Do NOT wrap in markdown code blocks. After `non_diegetic_music`, ALWAYS start a new line before `===SCENE_INSTRUCTION===` — never join them on the same line.
 
 #### subject_definitions
 Define one label per line for each reference actually used in this segment. Only define material the user provided; never invent.
@@ -282,7 +306,7 @@ One line per label with markers: fully_preserved / partially_preserved / attribu
 - Audio: "reference - <Subject N>'s dialogue follows <Audio N>". Do NOT invent a timbre description (e.g. "low"/"clear"/"young") unless the user's audio intro explicitly states it; do NOT write "the original signal is not copied".
 
 #### detailed_description (main body — the core of video quality, write in full detail)
-- Positioning (CRITICAL): this segment is a standalone {Segment_Duration}-second video; detailed_description MUST fully describe the video from start to end (chained with multiple [Shot N] cuts), not just one action or one frame.
+- Positioning (CRITICAL): this segment's duration follows the **Duration** field of the segment info (global duration setting: {Segment_Duration}); detailed_description MUST fully describe the video from start to end (chained with multiple [Shot N] cuts), not just one action or one frame.
 - Style opening (CRITICAL): establish the overall style in 1-2 sentences BEFORE `[Shot 1]`, grounding the "visual style + color & lighting + cinematography" of the current style under "## 1. Story Style" in concrete imagery. Forbid generic words unrelated to the style ("live-action", "cinematic", "beautiful", "bright and clear") — if the style is hot-blooded combat, write high-saturation warm colors, chiaroscuro, particle effects, and speed. The style opening of every segment block MUST match "## 1. Story Style"; never invent a different style per segment.
 - This segment's directing grammar (CRITICAL, follow every rule when writing actions; never a plot synopsis):
 {Style_Directing}
@@ -292,24 +316,34 @@ One line per label with markers: fully_preserved / partially_preserved / attribu
 {Custom_Rules_Directing}
 - Every segment MUST cover seven elements: ①composition & shot size ②subject appearance & position ③environment & lighting ④action & state change ⑤camera motion (type + amplitude + speed) ⑥current sound ⑦the exact point where referenced content appears or takes effect. Do NOT write a plot synopsis or a dry "someone does something" sentence.
 - Action must be continuous, concrete, and camera-capturable: limb trajectories, contact points, expression changes, object displacement, state changes. Forbid summaries ("they talk" ✗); break it down into visible action ("she slides the teacup toward him, her fingertip pausing at the rim before she pulls her hand back" ✓).
-- Action/combat pacing rules (follow the story style; never apply across styles): the "fast, precise, ruthless" rules (simultaneous attack & defense, full force chain, visible speed, opponent must counter, limited environment) apply ONLY to action/combat styles (热血战斗 / 古风武侠 / 修仙问道 / 末日废土 / 谍战风云 / 恐怖惊悚 / 逆袭打脸 / 乡村喜剧, etc.), provided by each style's "## 核心导演语法". Lyrical/daily/emotional/suspense/intrigue styles MUST NOT use them; follow that style's own pacing rules (gentle micro-actions, negative space, restraint) instead.
-- Camera motion as a natural action (CRITICAL, official protocol): camera motion MUST be written as a natural action within the shot, not stacked as separate labels at the end of a sentence — e.g. "The camera pushes in with small amplitude at slow speed as the hero draws his sword." The concrete type/amplitude/speed of camera motion is decided per style by the "镜头语言库" in "## 1. Story Style".
-- A cut MUST introduce new information (at least one of subject/space/state/viewpoint/time changes); if only distance or angle changes, prefer camera motion over a cut. Transitions available: cut / cross-dissolve / fade / wipe.
-- Timestamp rule: [Shot 1] has NO timestamp, write the content directly; each later cut is one line in the format `[Shot N] At MM:SS.mmm, content`, and [Shot N] appears exactly ONCE per cut — never write `[Shot N] At MM:SS.mmm, [Shot N] content`. Timestamps strictly increase, all within 0 ~ {Segment_Duration} seconds.
-- Length rule (CRITICAL): EACH segment block's (each [SHOT_START]...[SHOT_END] block's) detailed_description MUST fill {Detail_Length} words on its own (NOT the sum across multiple shots). The number of [Shot N] cuts follows the cut preference; write each [Shot N] fully so all [Shot N] together reach {Detail_Length} words. Never dismiss a segment in two sentences, never end after a single [Shot 1], never spread the word count across other segments.
+- Action/combat pacing rules (follow the story style; never apply across styles): the "fast, precise, ruthless" rules (simultaneous attack & defense, full force chain, visible speed, opponent must counter, limited environment) apply ONLY when the current style is the action/combat-oriented "热血战斗" type (provided item by item by that style's "## 核心导演语法", INCLUDING its D-section pacing laws: ≥3 consecutive beats per [Shot N] to avoid turn-based fighting, every exchange completes a force-response loop, chase immediately after a clash with no pause, and a three-beat finisher of bait-defend → change-line → land); the other styles (悬疑惊悚 / 温馨日常 / 甜宠爽文 / 宏大奇观 / 乡土喜乐 / 歌神舞台) follow their own pacing rules even when a segment contains action (gentle micro-actions, negative space, restraint, or the style's dedicated handling of action) — never apply the whole combat rule set.
+- Camera motion as a natural action (CRITICAL, official protocol): camera motion MUST be written as a natural action within the shot, not stacked as separate labels at the end of a sentence — e.g. "The camera pushes in with small amplitude at slow speed as the hero draws his sword." Add amplitude/speed only when they are meaningful (official protocol: medium amplitude and normal speed are usually omitted — do not tag every move). The concrete type/amplitude/speed of camera motion is decided per style by the "镜头语言库" in "## 1. Story Style".
+- A cut MUST introduce new information (at least one of subject/space/state/viewpoint/time changes); if only distance or angle changes, prefer camera motion over a cut. Transitions available: cut / cross-dissolve / fade / wipe. Adjacent [Shot N] MUST NOT copy or re-state the actions/results/dialogue already shown in the previous [Shot N] — each action happens exactly once; every [Shot N] must push a NEW beat / new information (at least one of subject/space/state/viewpoint/time).
+- Timestamp rule: [Shot 1] has NO timestamp, write the content directly; each later cut is one line in the format `[Shot N] At MM:SS.mmm, content`, and [Shot N] appears exactly ONCE per cut — never write `[Shot N] At MM:SS.mmm, [Shot N] content`. Timestamps strictly increase, all within 0 ~ this segment's **Duration** seconds. Timestamps are always `[Shot N] At MM:SS.mmm` (colon-separated, e.g. `At 00:01.200`); NEVER use dots like `00.01.200`/`00.009.400`.
+- Length rule (CRITICAL): EACH segment block's (each [SHOT_START]...[SHOT_END] block's) detailed_description MUST fill {Detail_Length} words on its own (NOT the sum across multiple shots). The number of [Shot N] cuts follows the cut preference in §1.5 (2~5镜 → 2-5 [Shot N]; 5~9镜 → 5-9; one-take → only 1); write each [Shot N] fully so all [Shot N] together reach {Detail_Length} words. Never dismiss a segment in two sentences, never end after a single [Shot 1], never spread the word count across other segments. Shot-size rule (see §1.5): when the preference fixes a shot-size tier (e.g. close-up dominant), EVERY [Shot N] must match that tier — never open with a conflicting "medium/wide" establishing shot; only when §1.5 leaves shot size free (根据剧情/随机组合) may you arrange size levels by the style. Dialogue-dense exemption (official protocol): when dialogue dominates a segment, fully covering the spoken timeline comes first — every line with the speaker's action/expression and the listener's reaction must be written completely; only then fill the remaining length with action/camera/environment detail. Do not use this exemption to shrink the whole segment into bare dialogue lines.
 - Use <Subject N>/<Picture N>/<Video N>/<Audio N> labels at first appearance and expand on them.
-- Speakers & dialogue (CRITICAL): (S1)/(S2) are used ONLY when someone actually speaks in this segment; never write (Sx) in action descriptions of segments with no dialogue. When multiple already-numbered speakers speak or sing together, use a compound ID such as (S1,S2). Dialogue: `<Subject N> (S1) says: <d>[English] text.</d>`; keep <d> content in the original language with basic punctuation (, . ? !), removing emoji and decorative punctuation, never translate.
-- Voiceover / inner monologue (CRITICAL): write the exact phrase "says in an off-screen voiceover", and immediately after the <d> block state that the on-screen character's lips remain completely closed, to prevent the AI from forcing lip movement. Cross-shot dialogue uses <scenetrans>; truncation at the end uses <cutoff>.
+- Speakers & dialogue (CRITICAL): (S1)/(S2) are used ONLY when someone actually speaks in this segment; never write (Sx) in action descriptions of segments with no dialogue. When multiple already-numbered speakers speak or sing together, use a compound ID such as (S1,S2). 【Dialogue MUST be on its own line, never inline with action/narration】Format: put the speaker's action, expression, and (Sx) at the end of the preceding line ending with "says:" or "replies:" → on the NEXT line write `<d>[English] text.</d>` ALONE (dialogue occupies its own line) → put the listener's reaction or the following action on ANOTHER new line. Correct example:
+```
+[Shot 1] Zhang Wei (S1) draws his sword and points it at Xiao Yu, saying in a low voice referenced from <Audio 1>:
+<d>[English] Tonight, we settle this.</d>
+Xiao Yu (S2) lifts her chin, her gaze unwavering.
+```
+Keep <d> content in the original language with basic punctuation (, . ? !), removing emoji and decorative punctuation, never translate.
+- Voiceover / inner monologue (CRITICAL): write the exact phrase "says in an off-screen voiceover", with the dialogue <d> on its own line; on the line right after the <d> block, state that the on-screen character's lips remain completely closed, to prevent the AI from forcing lip movement. Cross-shot dialogue uses <scenetrans>; truncation at the end uses <cutoff>.
 - On-screen text (CRITICAL): place any banner, sign, label, subtitle, or neon text that is actually visible on screen in English double quotation marks, preserving the original text verbatim without translation: `A red neon sign reading "营业中" glows above the doorway.`
-- First-frame anchoring (conditional, CRITICAL): when a reference image in this segment's slots is declared as the first frame of [Shot 1] (<Picture N> as [Shot 1]'s frame anchor), [Shot 1] MUST first establish the style, subjects, composition, and scene anchors in the image, then describe the next action. Forbid the character flying out in the very first sentence of [Shot 1]; there must be a "from rest (first-frame state) to motion" process.
+- First-frame anchoring (conditional, CRITICAL): when a reference image in this segment's slots is declared as the first frame of [Shot 1] (<Picture N> as [Shot 1]'s frame anchor), derive this segment's overall style, render texture, color and lighting FROM that reference image (official protocol: style comes from the image when a first-frame reference exists; do not impose an unrelated style). [Shot 1] MUST first establish the style, subjects, composition, and scene anchors in the image, then describe the next action. Forbid the character flying out in the very first sentence of [Shot 1]; there must be a "from rest (first-frame state) to motion" process.
 - Physical-vector description (CRITICAL, kill literary fluff): every sentence must correspond to something physically visible or audible. Forbid all subjective emotion and abstract literary adjectives ("a desperate atmosphere", "picturesque"). Turn emotions into physical action: "he feels sad" becomes "he lowers his head, his shoulders slump, and half his face sinks into shadow". Physicalize the environment: "the wind blows" becomes "leaves shake violently to the right, lifting the hem of the character's cloak". Concrete visible color and light (e.g. "cold white moonlight filters through the bamboo leaves") are physical facts and stay; only abstract emotion words and subjective lyricism are banned.
+- No emotional closing clichés (CRITICAL): never close a shot/segment with abstract lyrical summary — ban "the sunlight is just right", "the scene freezes in this cozy moment", "time seems to stand still", "all is well", "words are unnecessary", "the atmosphere is warm and lovely", "as if telling…", "the whole world falls silent", and similar emotion-summary sentences with no physical carrier; also ban narrative filler like "the moment the words ended" taking up shot content. If the shot has a visible settlement (character closing eyes / light shifting / prop settling / action finishing), describe the concrete physical end-state and state who, at what position, keeps what pose/gaze/prop state (for the next shot to reset); do NOT write an emotional conclusion.
+
+- - Big-cut self-sufficiency + story-state continuity (CRITICAL — applies when this task outputs {Segment_Count} Video_XXX segments in one pass; ignore for single-segment generation): every segment is independently generated, so NEVER write cross-segment frame references like "continuing the previous segment's last frame / picking up from the previous ending" or re-describe the previous segment's footage. Segments relate as one big cut: 1) If not the first: this segment's [Shot 1] is the NEXT shot right after the previous segment on the story timeline — advance directly from the end state of the previous segment (who was where / in what pose / what had just been discovered or happened), and you MAY change shot size / camera / space. Never replay an event already shown, never regress state (already stood up / discovered / stepped down -> do not squat back / act unaware / step onto the same stair again). 2) If not the last: close the final [Shot N] by stating the physical end-state in 1-2 sentences (who / where / pose / action in progress) as the story-state hand-off; never close a middle segment with a tableau (lock eyes / smile / freeze / turn away). 3) Only the first segment may fully open the story, only the last may truly close it. 4) When cutting back to a scene visited earlier, keep that scene's camera/shot-size/lighting language consistent. 5) When advancing from the previous state, do not write abstract "continuing from above" — just push the action forward.
+
 - Specific cut/camera/shot-size directing grammar (cut timing, continuous state chain, event density, action grammar) is provided per style by the "镜头语言库" in "## 1. Story Style"; not repeated here.
 
 #### overall_soundscape
 1-4 sentences: ambient sound, physical action sounds, non-verbal human sounds.
 
 #### non_diegetic_music
-Output N/A by default (this workflow uses no background music by default). Only when the camera-language preference explicitly specifies a background music style, output 1-3 English sentences focused on instrumentation, speed, rhythm, and dynamic changes, matching that style; do NOT use abstract mood words (dramatic/emotional/creepy) or explain the score's emotional function; if unspecified or music is explicitly banned, output N/A. Singing, instruments, radio, TV, or phone music audible to the characters are diegetic events and belong in detailed_description, not in this field.
+Output N/A by default (this workflow uses no background music by default). **Only when §1.5 camera-language preference explicitly specifies a background music style (i.e. the preference contains "背景音乐风格:" and is neither "禁止音乐" nor "不指定"), you MUST output 1-3 English sentences** focused on instrumentation, speed, rhythm, and dynamic changes, matching that style; do NOT use abstract mood words (dramatic/emotional/creepy) or explain the score's emotional function. When §1.5 specifies music, never write N/A; only output N/A when unspecified or music is explicitly banned. Singing, instruments, radio, TV, or phone music audible to the characters are diegetic events and belong in detailed_description, not in this field.
 
 ### 4.3 Cut & Camera Rhythm
 The concrete rhythm, timing, and type of cuts and camera motion are provided per style by the "镜头语言库" in "## 1. Story Style" (different styles cut completely differently: action styles cut fast, lyrical styles cut gently), combined dynamically with the camera-language preference parameters; not unified here.
@@ -342,7 +376,7 @@ Assume the user's material intro declares: 场景A Moonlit bamboo grove, 角色A
 [SHOT_START]
 ### Video_001
 **Title**: Duel in the Bamboo Grove
-**Duration**: {Segment_Duration}
+**Duration**: 5
 **Shot Size**: Medium
 **Camera Movement**: Push
 **Characters**: Zhang Wei, Xiao Yu
@@ -371,8 +405,10 @@ retention_analysis:
 
 detailed_description:
 The target video uses a live-action cinematic style, cold white moonlight piercing the bamboo leaves to form rim-lit silhouettes.
-[Shot 1] A medium shot establishes <Subject 1>, the moonlit bamboo grove, bamboo shadows swaying across the ground. The camera pushes in with small amplitude at slow speed as <Subject 2> Zhang Wei (S1) wraps his fingers around the bronze sword hilt at his waist and slowly draws the blade, cold light running along its spine, then raises it toward <Subject 3> Xiao Yu (S2), the sword tip condensing a point of light in the moonlight. Zhang Wei says in a low voice referenced from <Audio 1>: <d>[English] Tonight, we settle this.</d>
-[Shot 2] At 00:03.000, the shot cuts to a close-up of <Subject 3> Xiao Yu (S2), rim light outlining her hair. She lifts her chin, shifts her gaze from the sword tip to Zhang Wei's eyes, and a faint smile tugs at her lips as she replies in a clear voice referenced from <Audio 2>: <d>[English] I'm ready.</d>
+[Shot 1] A medium shot establishes <Subject 1>, the moonlit bamboo grove, bamboo shadows swaying across the ground. The camera pushes in with small amplitude at slow speed as <Subject 2> Zhang Wei (S1) wraps his fingers around the bronze sword hilt at his waist and slowly draws the blade, cold light running along its spine, then raises it toward <Subject 3> Xiao Yu (S2), the sword tip condensing a point of light in the moonlight. Zhang Wei says in a low voice referenced from <Audio 1>:
+<d>[English] Tonight, we settle this.</d>
+[Shot 2] At 00:03.000, the shot cuts to a close-up of <Subject 3> Xiao Yu (S2), rim light outlining her hair. She lifts her chin, shifts her gaze from the sword tip to Zhang Wei's eyes, and a faint smile tugs at her lips as she replies in a clear voice referenced from <Audio 2>:
+<d>[English] I'm ready.</d>
 
 overall_soundscape: Night wind rustles through the bamboo grove as the scabbard scrapes with a metallic ring, and distant crickets chirp intermittently.
 
@@ -391,7 +427,7 @@ non_diegetic_music: N/A
 [SHOT_START]
 ### Video_002
 **Title**: Sword at the Throat
-**Duration**: {Segment_Duration}
+**Duration**: 5
 **Shot Size**: Close-up
 **Camera Movement**: Push
 **Characters**: Zhang Wei, Xiao Yu
@@ -418,7 +454,9 @@ retention_analysis:
 
 detailed_description:
 The target video uses a live-action cinematic style, cold white moonlight condensing to a point on the sword tip.
-[Shot 1] In a close-up, <Subject 1> Zhang Wei (S1) steps forward, pressing the bronze sword against <Subject 2> Xiao Yu's (S2) throat. The camera pushes in with small amplitude at slow speed as Zhang Wei demands in a low voice referenced from <Audio 1>: <d>[English] Do you yield?</d> Xiao Yu leans back half a step, her throat trembling, yet her gaze never wavers.
+[Shot 1] In a close-up, <Subject 1> Zhang Wei (S1) steps forward, pressing the bronze sword against <Subject 2> Xiao Yu's (S2) throat. The camera pushes in with small amplitude at slow speed as Zhang Wei demands in a low voice referenced from <Audio 1>:
+<d>[English] Do you yield?</d>
+Xiao Yu leans back half a step, her throat trembling, yet her gaze never wavers.
 
 overall_soundscape: A faint hum from the sword tip, night wind through the bamboo, both characters' breathing clearly audible.
 
@@ -442,7 +480,7 @@ Output the remaining segments in the same format, Video numbers zero-padded to t
 ## 6. Iron Rules (violating any one is a failure)
 1. Exactly {Segment_Count} segments, no more, no less.
 2. The six field names subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music must be output verbatim in English, one blank line between fields.
-3. [Shot 1] has no timestamp, write the content directly; later cuts use [Shot N] At MM:SS.mmm ([Shot N] appears only once per cut, never write [Shot N] At MM:SS.mmm, [Shot N]) with strictly increasing timestamps, never exceeding {Segment_Duration} seconds.
+3. [Shot 1] has no timestamp, write the content directly; later cuts use [Shot N] At MM:SS.mmm ([Shot N] appears only once per cut, never write [Shot N] At MM:SS.mmm, [Shot N]) with strictly increasing timestamps, never exceeding this segment's **Duration** seconds.
 4. Do NOT wrap anything in markdown code blocks (```).
 5. Do NOT translate dialogue inside <d> tags; preserve the original language.
 6. Do NOT invent <Subject N>/<Picture N>/<Video N>/<Audio N> labels; omit them if no reference material exists.

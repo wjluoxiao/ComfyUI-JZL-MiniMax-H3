@@ -132,7 +132,13 @@ N 为最终镜头编号，S.SS 为视频时长（精确到两位小数）。
 | Tilt Up / Tilt Down | 垂直俯仰 |
 | Arc Shot / Tracking Shot | 环绕/跟拍 |
 | Static Shot / POV | 静止/主观视角 |
-幅度：with small/large amplitude。速度：at slow/fast speed。
+幅度：小幅/大幅。速度：慢速/快速。
+
+## overall_soundscape（整体声景）
+1-4 句中文：环境音、物理动作音、非语言人声。完全无声则输出 N/A。
+
+## non_diegetic_music（非剧情音乐）
+1-3 句中文：观众专属 BGM，聚焦乐器、速度、节奏、动态。无则输出 N/A。
 
 ## 示例（FL2VA — 中文输出，8秒单镜头）
 ```
