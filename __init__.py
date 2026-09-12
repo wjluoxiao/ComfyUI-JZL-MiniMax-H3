@@ -51,6 +51,7 @@ from .nodes_prompt_enhancer import JZL_MiniMaxPromptEnhancer
 from .nodes_asset_manager import (
     JZL_MiniMaxAssetManager,
     JZL_MiniMaxAssetManagerMax,
+    JZL_MiniMaxAssetManagerInfinite,
     JZL_MiniMaxAssetManagerMini,
     JZL_MiniMaxVideoSaveDistributor,
     JZL_MiniMaxVideoViewer,
@@ -97,6 +98,7 @@ NODE_CLASS_MAPPINGS = {
     "JZL_MiniMaxPromptEnhancer": JZL_MiniMaxPromptEnhancer,
     "JZL_MiniMaxAssetManager": JZL_MiniMaxAssetManager,
     "JZL_MiniMaxAssetManagerMax": JZL_MiniMaxAssetManagerMax,
+    "JZL_MiniMaxAssetManagerInfinite": JZL_MiniMaxAssetManagerInfinite,
     "JZL_MiniMaxAssetManagerMini": JZL_MiniMaxAssetManagerMini,
     "JZL_MiniMaxVideoSaveDistributor": JZL_MiniMaxVideoSaveDistributor,
     "JZL_MiniMaxVideoViewer": JZL_MiniMaxVideoViewer,
@@ -134,6 +136,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "JZL_MiniMaxPromptEnhancer": "JZL - ✨ 提示词增强",
     "JZL_MiniMaxAssetManager": "JZL - 🤖 MiniMax-H3短剧导演台Pro",
     "JZL_MiniMaxAssetManagerMax": "JZL - 🤖 MiniMax-H3短剧导演台Max",
+    "JZL_MiniMaxAssetManagerInfinite": "JZL - 🤖 MiniMax-H3无限时长",
     "JZL_MiniMaxAssetManagerMini": "JZL - 🤖 MiniMax-H3短剧导演台Mini",
     "JZL_MiniMaxVideoSaveDistributor": "JZL - 💾 视频保存分配",
     "JZL_MiniMaxVideoViewer": "JZL - 🎬 生成视频查看器",

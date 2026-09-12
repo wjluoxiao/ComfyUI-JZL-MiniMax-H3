@@ -653,6 +653,31 @@
       "0": { "name": "Processed Script" }
     }
   },
+  "JZL_MiniMaxAssetManagerInfinite": {
+    "display_name": "JZL - 🤖 MiniMax-H3 Infinite Length",
+    "inputs": {
+      "run_mode": { "name": "Run Mode" },
+      "display_info": { "name": "Generation Info" },
+      "aspect_ratio": { "name": "Aspect Ratio" },
+      "megapixels": { "name": "Megapixels (MP)" },
+      "duration": { "name": "Duration per Video" },
+      "scale_factor": { "name": "Reference Scale" },
+      "upscale_scale": { "name": "Upscale Scale" },
+      "video_count": { "name": "Segment Count" },
+      "story_style": { "name": "Story Style" },
+      "story_name": { "name": "Story Name" },
+      "external_prompt": { "name": "Prompt (wire input)" },
+      "internal_prompt": { "name": "Prompt (in-node)" },
+      "manager_settings": { "name": "Node Config" },
+      "model": { "name": "Model" },
+      "clip": { "name": "CLIP" },
+      "vae": { "name": "VAE" },
+      "audio_vae": { "name": "Audio VAE" }
+    },
+    "outputs": {
+      "0": { "name": "Processed Script" }
+    }
+  },
   "JZL_MiniMaxVideoViewer": {
     "display_name": "JZL - 🎬 Generated Video Viewer",
     "inputs": {

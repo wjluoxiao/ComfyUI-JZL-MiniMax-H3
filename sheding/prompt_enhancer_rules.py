@@ -44,6 +44,7 @@ detailed_description 必须完整覆盖本段「**时长**」从头到尾的全�
 2. 引用标签严格沿用输入里已有的 <Subject N>/<Picture N>/<Video N>/<Audio N>，不得新增、删减或改变编号。尤其 <Picture N> 必须与输入 subject_definitions 里的声明完全一致（subject_definitions 说某道具是 <Picture 6>，正文就必须写 <Picture 6>，禁止改成 <Picture 4> 等别的编号）。
 3. 说话人 (Sx) 只在输入已出现时沿用；无对话分段严禁新增 (Sx)。【严禁新增对白】：输入里没有的 <d> 对话/旁白/内心独白，一律不得新增——输入无对白，输出就无对白，只润色动作与画面。
 4. 【对白独立成行，严禁与动作/描述挤在同一行】：说话人的动作、神态与 (Sx) 写在上一行句末并以“说道：/回应道：”结尾 → 换行后**独立一行**写 `<d>[中文] 原文。</d>`（台词独占一行）→ 说毕的听者反应或后续动作再**另起一行**。多人同时发声用联合 ID（如 (S1,S2)）。<d> 内保留原文语言及基础标点（, . ? !），剔除表情符号与冗余标点、禁止翻译。画外音/内心独白写“以画外音说道（says in an off-screen voiceover）”，台词 <d> 独立成行，其后**另起一行**写“嘴唇保持完全闭合（while his lips remain completely closed）”。跨切镜对话用 <scenetrans>，结尾截断用 <cutoff>。
+4b. 【对白时长 + 段首静默（CRITICAL）】：①台词必须与镜头时长匹配——按正常语速估算（中文约 4~5 字/秒、英文约 2~3 词/秒，含自然停顿），镜头时长必须容纳镜内全部台词；放不下则拉长该镜头时间戳（其后镜头相应后移）或拆句到相邻镜头并用 <scenetrans>。②每一段**开头 0.8 秒内严禁出现任何 <d> 台词**（含对白/画外音/内心独白），第一句台词的最早时间必须 ≥ 0.8 秒；若本段段首是会被裁掉的延续段，台词须在其之后才开始。
 5. 保留原有情节与动作链：不改变故事走向、不改写人物/地点/事件、不新增对白，只做画面质感、动作细节、运镜与氛围的润色扩写。你的职责是「扩写已有内容」，严禁创作输入里不存在的情节、对白、动作、人物、道具。
 6. 写全七要素：①构图景别 ②主体外貌与位置 ③环境与光影 ④动作与状态变化 ⑤运镜（类型+幅度+速度）⑥当前声音 ⑦引用内容实际出现/生效的确切位置。禁止写成剧情梗概或"某人做了某事"的干瘪句子。
 7. 风格开场：在 [Shot 1] 之前用 1-2 句确立整体风格，必须逐字落实「故事风格」。
@@ -59,13 +60,14 @@ detailed_description 必须完整覆盖本段「**时长**」从头到尾的全�
   ②禁“话说完了”的过渡句（本次重点，见到即失败）：台词 <d> 结束后，严禁再写任何“话音刚落 / 话音未落 / 话音落下 / 话声未落 / 话音甫落 / 话音方落 / 语毕 / 话毕 / 言罢 / 说完这句话 / 话说完”这类“话已说完”的垫场衔接词占镜头——台词说完，下一句必须直接是听者反应、或角色下一个可见动作、或下一镜内容，禁止先用“话音未落/话音落下，…”垫一句再接动作。若镜头确有可见收束（角色合眼/光影移动/道具落定/动作结束），直接写具体物理末态：谁、在什么位置、保持什么姿态/视线/道具状态（供下一镜头复位）；不写情绪结论、不写“话刚说完”。
 16. 动作/打斗段防"回合制慢打"（CRITICAL，仅当当前风格为动作/战斗向如「热血战斗」时适用；其它风格跳过本条）：①**一镜多拍防回合制**：一个 [Shot N] 内必须连续完成 ≥3 拍有效攻防（如劈→格→变线撩→闪→反刺→震开→换位），禁止"一人出一招就切下一镜"的回合制；②**每次攻防写全受力闭环**：攻击要有起势→明确线路→明确接触点→对方按自身条件防御/闪避/反制→受力形变→位移→环境反应，禁止只写"命中/格挡/一刀劈出"而无受击者失衡位移（这正是画面假、慢、轻的根因）；③**不等待不停顿**：错身/被震开后立即追击，禁止打一下停一下；对峙/蓄力仅 ≤1 秒且须伴随实质张力，禁止长时间静止凝视空镜；④**收尾三拍**：决胜一击用"逼防→变线→命中"三拍收束，命中后写清败者被击飞/撞入环境/武器脱手/失衡跪地等可见结果，禁止软绵绵打完双方无事；⑤**镜头快剪跟打**：打斗段切镜快、景别近（接触点特写/中景全招/甩镜跟位移），禁止慢速横移/长镜空拍拖节奏；慢动作仅用于放大"看清致命一击"且必须立刻回快。
 
-17. 大切镜自足 + 剧情状态连续（CRITICAL — 先读输入开头的【段位指令】；本段在整片中的位置决定能否“开场/收尾”）：
-  ①非首段：本段 [Shot 1] 是紧接上段剧情时间线的“新一镜”，画面在本段自足建立（可换景别/机位/空间）；严禁写“承接上段末帧/上段…继续”等跨段画面引用与复述。上段状态只作“剧情逻辑”参考——本段必须基于上段结束时的剧情状态沿时间线推进（上段已发现石佛机关，本段就基于已发现继续），严禁状态回退、严禁重演上段已演事件（同一动作只演一次）。
-  ②非末段：本段最后一个 [Shot N] 用 1-2 句写清结束时的物理末态（谁/在哪/姿态/正进行的动作）作剧情交接；严禁新增“对视/一笑/定格/转身/情绪余韵”式封闭收尾镜头给中段画句号、严禁新增原 detailed_description 里不存在的收尾性镜头。
-  ③只有末段可真正收束、只有首段可完整开场；切走再切回某场景时保持该场景镜头语言一致。润色只把给定 detailed_description 写得更丰满，禁止增删结构性开场/收尾镜头、禁止改变拆解已定的分段边界、事件先后与动作起点。
+17. 段首承接 + 剧情状态连续（CRITICAL — 先读输入开头的【段位指令】，里面给出本段在整片中的位置与段首衔接秒数）：
+  ①非首段：本段 [Shot 1] 就是「承接上一段末帧画面的延续段」——与上段末帧同机位/同景别/同光线/同角色身体姿态与动作进行方向，只轻微延续动作（不要重新站位/重新起势），持续【段位指令】里给出的段首衔接秒数；这段在成片里会被**整段裁掉**，因此本段新内容从该秒数之后开始（第一次切镜 ≈ 在该秒数处，可换景别/机位/空间）。禁止把延续段写成“承接上段末帧/上段…继续”这类抽象词——必须写具体画面（谁在哪/什么姿态/什么动作进行到哪一步/光线环境如何）。若【段位指令】给出的衔接秒数为 0：本段 [Shot 1] 直接是本段新内容（大切镜自足）。
+  ②上段状态只作“剧情逻辑”参考——新内容必须基于上段结束时的剧情状态沿时间线推进（上段已发现石佛机关，本段就基于已发现继续），严禁状态回退、严禁重演上段已演事件（同一动作只演一次）。
+  ③非末段：本段最后一个 [Shot N] 用 1-2 句写清结束时的物理末态（谁/在哪/姿态/正进行的动作）作剧情交接；严禁新增“对视/一笑/定格/转身/情绪余韵”式封闭收尾镜头给中段画句号、严禁新增原 detailed_description 里不存在的收尾性镜头。
+  ④只有末段可真正收束、只有首段可完整开场；切走再切回某场景时保持该场景镜头语言一致。润色只把给定 detailed_description 写得更丰满，禁止增删结构性开场/收尾镜头、禁止改变拆解已定的分段边界、事件先后与动作起点。
 
 18. 输出前自检（CRITICAL — 写完逐条核对，不满足即改）：
-  ①本段正文语言 = 用户所选输出语言（中文[ZH]=中文正文，英文[EN]=英文正文；字段名/标记保持英文），仅 <d>/画面文字保留原语言；②<Subject N>/<Picture N>/<Audio N> 与输入 subject_definitions 完全一致、未改编号；③无「承接上段末帧/上段…继续」伪引用；④不新增输入没有的 <d> 台词、不新增输入没有的收尾性镜头；⑤时间戳落在本段 **时长** 内、[Shot 1] 无时间戳；⑥每个 [Shot N] 写明景别+运镜，且段内不同 [Shot N] 用**不同景别+不同运镜**混合，禁止整段只复用一种景别/一种运镜。
+  ①本段正文语言 = 用户所选输出语言（中文[ZH]=中文正文，英文[EN]=英文正文；字段名/标记保持英文），仅 <d>/画面文字保留原语言；②<Subject N>/<Picture N>/<Audio N> 与输入 subject_definitions 完全一致、未改编号；③非首段的 [Shot 1] 是段首延续段（时长 = 段位指令给的衔接秒数）、其后才是本段新内容，且未写“承接上段末帧”式抽象词；④不新增输入没有的 <d> 台词、不新增输入没有的收尾性镜头；⑤时间戳落在本段 **时长** 内、[Shot 1] 无时间戳、其余时间戳从衔接秒数起算；⑥每个 [Shot N] 写明景别+运镜，且段内不同 [Shot N] 用**不同景别+不同运镜**混合，禁止整段只复用一种景别/一种运镜；⑦每段开头 0.8 秒内无任何 <d> 台词（首句台词最早 ≥ 0.8s），且镜内台词时长与镜头时长匹配（按 4~5 字/秒 估算，放不下则拉长镜或拆句 <scenetrans>）。
 
 ## 故事风格（锚点1，逐字落实）
 {STORY_STYLE}
@@ -106,6 +108,7 @@ Action/combat pacing rules are provided by the "## 核心导演语法" section o
 2. Keep every reference label already present in the input (<Subject N>/<Picture N>/<Video N>/<Audio N>) unchanged; never add, remove, or renumber. In particular, <Picture N> MUST match the input subject_definitions exactly (if subject_definitions declares a prop as <Picture 6>, the body MUST write <Picture 6>, never <Picture 4>).
 3. Keep speaker tags (Sx) only where they already appear; never add (Sx) to a no-dialogue segment. NEVER add dialogue: if the input has no <d> dialogue/voiceover/monologue, the output must have none either — only polish action and visuals.
 4. 【Dialogue MUST be on its own line, never inline with action/narration】: put the speaker's action, expression, and (Sx) at the end of the preceding line ending with "says:"/"replies:" → on the NEXT line write `<d>[English] original.</d>` ALONE (dialogue occupies its own line) → put the listener's reaction or the following action on ANOTHER new line. Use a compound ID such as (S1,S2) when multiple speakers talk together. Keep <d> content in its original language with basic punctuation (, . ? !), removing emoji and decorative punctuation. For voiceover, write the exact phrase "says in an off-screen voiceover" with the <d> on its own line, then on the line right after state that the on-screen character's lips remain completely closed. Use <scenetrans> for cross-cut dialogue and <cutoff> for truncated lines.
+4b. 【Dialogue timing + head silence (CRITICAL)】: ① dialogue must fit the shot's duration — estimate at natural pace (Chinese ≈4-5 chars/sec, English ≈2-3 words/sec, including pauses); if it does not fit, extend that shot's timestamp (shift later cuts accordingly) or split the line across adjacent shots with <scenetrans>. ② the FIRST 0.8 seconds of EVERY segment must contain NO <d> dialogue of any kind (spoken/voiceover/monologue); the earliest dialogue timestamp must be ≥ 0.8s; if the segment starts with a discarded head hand-off section, dialogue may begin only after it ends.
 5. Preserve the original plot and action chain: do not change the story direction, characters, locations, or events, and do NOT add dialogue; only polish picture quality, action detail, camera work, and atmosphere. Your job is to EXPAND existing content, never invent new plot/dialogue/action/character/prop absent from the input.
 6. Cover all seven elements: ①composition & shot size ②subject appearance & position ③environment & lighting ④action & state change ⑤camera move (type+amplitude+speed) ⑥current sound ⑦exact moment referenced content appears/takes effect. Never write a plot synopsis or a dry "someone did something".
 7. Style opening: 1-2 sentences BEFORE [Shot 1] establishing the overall style, grounded in the "Story Style".
@@ -121,13 +124,14 @@ Action/combat pacing rules are provided by the "## 核心导演语法" section o
   2) Ban "the speech just ended" transitions (THIS round's focus — seeing any = failure): right after a <d> line, NEVER add filler like "the words had barely faded / as his words fell / no sooner had the words ended / after he said that / the instant he finished speaking" to pad the shot. After the dialogue ends, the next sentence MUST go straight to the listener's reaction, the speaker's next visible action, or the next shot's content — never insert "as the words fell, …" before continuing. If the shot does have a visible settlement (character closing eyes / light shifting / prop settling / action finishing), write the concrete physical end-state: who, at what position, keeps what pose/gaze/prop state (so the next shot can reset); write NO emotional conclusion, NO "the words just ended".
 16. Combat/action pacing — no "turn-based slow fighting" (CRITICAL, only when the current style is action/combat-oriented such as "热血战斗"; skip for other styles): ①multiple beats per shot: one [Shot N] must contain ≥3 consecutive valid attacks/defenses in a chain (e.g. slash → block → re-angle sweep → dodge → counter-thrust → knocked back → re-position). Never write turn-based "one move per shot then cut"; ②each exchange must complete a force-response loop: attack has a wind-up → clear line → clear contact point → the opponent defends/dodges/counters per their own condition → deformation under force → displacement → environmental reaction. Never write just "hit/blocked/swung" with no knocked-back displacement of the receiver (that is exactly why footage looks fake, slow and weightless); ③no waiting, no pause: chase immediately after a clash or being thrown back — never "hit then stop then hit"; stand-off/wind-up only ≤1s and must carry real tension; no long frozen staring or empty shots; ④three-beat finisher: close a decisive blow with "bait-defend → change line → land" — after the hit write a visible result (opponent knocked flying / slammed into environment / weapon knocked away / staggering to a knee). Never end a fight weakly with both unharmed; ⑤fast editing that follows the fight: fast cuts, tight shot sizes (close-up on the contact point / medium full move / whip-pan following displacement); no slow pans or long empty takes dragging the pace; slow motion only to magnify "reading the killing blow" and must snap back to full speed immediately.
 
-17. Big-cut self-sufficiency + story-state continuity (CRITICAL — first read the [Position] line at the top of the input; where this segment sits decides whether you may "open/close"):
-  1) If not the 1st segment: this segment's [Shot 1] is the NEXT shot right after the previous segment on the story timeline; establish its frame self-sufficiently (you may change shot size/camera/space). NEVER write cross-segment frame references like "continuing the previous segment's last frame / from the previous segment" or re-describe its footage. The previous state is a STORY-LOGIC reference only — advance along the timeline from the previous end state (already discovered the mechanism -> continue as already discovered); NEVER regress state, NEVER replay an event already shown (each action happens exactly once).
-  2) If not the last segment: close the final [Shot N] by stating the physical end-state in 1-2 sentences (who / where / pose / action in progress) as the story hand-off; NEVER add a closing tableau (lock eyes / smile / freeze / turn away / lingering mood) to dot a middle segment's end; NEVER add a wrap-up shot that did not exist in the original detailed_description.
-  3) Only the LAST segment may truly close the whole story; only the 1st may fully open it. When cutting back to a scene visited earlier, keep its camera language consistent. Polish only makes the given detailed_description richer — do NOT add/remove structural opening/closing shots, do NOT change the decomposition boundaries, event order, or action starting points.
+17. Head hand-off + story-state continuity (CRITICAL — first read the [Position] line at the top of the input; it gives this segment's place in the film and the head hand-off seconds):
+  1) If not the 1st segment: this segment's [Shot 1] IS the continuation of the previous segment's last frame — SAME camera position / shot size / lighting / character body pose and direction of motion, with the action only slightly carried forward (no re-staging, no re-winding up), lasting the hand-off seconds given in [Position]; this head section is DISCARDED entirely in the final cut, so this segment's NEW content starts after those seconds (the first cut happens at ≈ that mark, where you may change shot size/camera/space). Never write the hand-off shot with abstract wording like "continuing the previous segment's last frame / from the previous segment" — write the concrete picture (who / where / what pose / how far the action has progressed / lighting and environment). If [Position] gives 0 hand-off seconds: [Shot 1] is this segment's new content directly (plain big cut).
+  2) The previous state is a STORY-LOGIC reference only — the new content must advance along the timeline from the previous segment's end state (already discovered the mechanism -> continue as already discovered); NEVER regress state, NEVER replay an event already shown (each action happens exactly once).
+  3) If not the last segment: close the final [Shot N] by stating the physical end-state in 1-2 sentences (who / where / pose / action in progress) as the story hand-off; NEVER add a closing tableau (lock eyes / smile / freeze / turn away / lingering mood) to dot a middle segment's end; NEVER add a wrap-up shot that did not exist in the original detailed_description.
+  4) Only the LAST segment may truly close the whole story; only the 1st may fully open it. When cutting back to a scene visited earlier, keep its camera language consistent. Polish only makes the given detailed_description richer — do NOT add/remove structural opening/closing shots, do NOT change the decomposition boundaries, event order, or action starting points.
 
 18. Output self-check (CRITICAL — verify each after writing, fix if unmet):
-  1) this segment's body language = the user-selected output language (中文[ZH]=Chinese, 英文[EN]=English; field names/markers stay English), with only <d>/on-screen text keeping the original language; 2) <Subject N>/<Picture N>/<Audio N> match the input subject_definitions exactly, no renumbering; 3) no fake carry-over like 'continuing the previous segment's last frame / from the previous segment'; 4) do NOT add <d> dialogue absent from the input, do NOT add a wrap-up shot absent from the input; 5) timestamps fall within this segment's **Duration**, [Shot 1] has no timestamp; 6) each [Shot N] states its shot size + camera moves, and different [Shot N] within a segment use DIFFERENT shot sizes and DIFFERENT camera moves (mixed), never reusing one shot size or one camera move throughout a segment.
+  1) this segment's body language = the user-selected output language (中文[ZH]=Chinese, 英文[EN]=English; field names/markers stay English), with only <d>/on-screen text keeping the original language; 2) <Subject N>/<Picture N>/<Audio N> match the input subject_definitions exactly, no renumbering; 3) if not the first segment, [Shot 1] is the head hand-off shot (lasting the hand-off seconds from [Position]) followed by this segment's new content, and it is NOT written with abstract wording like 'continuing the previous segment's last frame'; 4) do NOT add <d> dialogue absent from the input, do NOT add a wrap-up shot absent from the input; 5) timestamps fall within this segment's **Duration**, [Shot 1] has no timestamp and the remaining timestamps start from the hand-off mark; 6) each [Shot N] states its shot size + camera moves, and different [Shot N] within a segment use DIFFERENT shot sizes and DIFFERENT camera moves (mixed), never reusing one shot size or one camera move throughout a segment; 7) the first 0.8s of the segment has NO <d> dialogue (earliest line ≥ 0.8s), and in-shot dialogue fits the shot's duration (≈4-5 chars/sec or 2-3 words/sec).
 
 ## Story Style (Anchor 1, follow literally)
 {STORY_STYLE}
@@ -168,36 +172,65 @@ def build_enhancer_prompt(lang, story_style, segment_duration, preference, custo
 
 
 
-def build_segment_position(lang, seg_index, seg_total):
-    """返回本段在整片中的「段位指令」（大切镜模型：段间画面自足、剧情状态连续），注入增强 user msg 开头。"""
+def build_segment_position(lang, seg_index, seg_total, seam_runway=0.0):
+    """返回本段在整片中的「段位指令」（段首承接上一段末帧 + 剧情状态连续），注入增强 user msg 开头。
+
+    seam_runway: 「无限时长」节点的段首衔接跑道（秒）。> 0 且非首段时，指令会明确要求 [Shot 1]
+    写成「承接上一段末帧的延续段」并给出秒数（该段成片会被整段裁掉），本段新内容从该秒数之后开始。
+    """
     idx = int(seg_index or 1)
     tot = int(seg_total or 1)
+    try:
+        runway = max(0.0, float(seam_runway or 0.0))
+    except Exception:
+        runway = 0.0
+    r_txt = f"{runway:.2f}".rstrip("0").rstrip(".")
+    # 段首衔接只对「非首段」+ 启用衔接时生效
+    head_on = (runway > 0.0 and idx > 1)
     if lang == "en":
         if tot <= 1:
             return "[Position] This is the ONLY segment of the whole story: you may give it both a full opening and a full closing."
+        r_sec = f"{r_txt} seconds"
         if idx == 1:
-            role = "the FIRST segment (full opening allowed; end by stating the physical end-state as the story hand-off for the next segment)"
+            role = ("the FIRST segment (full opening allowed, NO hand-off shot at the head; "
+                    "end by stating the physical end-state as the story hand-off for the next segment)")
         elif idx >= tot:
             role = "the LAST segment (the whole story may truly close here)"
         else:
-            role = "a MIDDLE segment - one big cut after the previous segment and before the next"
+            role = "a MIDDLE segment - directly after the previous segment and before the next"
+        head_txt = (f"HEAD HAND-OFF: [Shot 1] IS the continuation of the previous segment's last frame - SAME camera position / shot size / "
+                    f"lighting / character pose and direction of motion, action only slightly carried forward, lasting {r_sec}; "
+                    f"this head section is DISCARDED in the final cut, so this segment's NEW content starts after {r_sec} "
+                    f"(first cut at approximately {r_sec}). Write the hand-off shot as a CONCRETE picture (who / where / what pose / "
+                    f"how far the action has progressed / lighting and environment), never as the abstract phrase 'continuing the previous segment's last frame'. "
+                    if head_on else
+                    "HEAD: [Shot 1] is this segment's new content directly (no hand-off section). ")
         return (f"[Position] This is segment {idx} of {tot} - {role}. "
-                "Each segment is generated independently: NEVER write cross-segment frame references ('continuing the previous segment's last frame', re-describing its footage). "
-                "[Shot 1] is the next shot right after the previous segment on the story timeline - advance from its end story-state, changing shot size/camera/space freely. "
-                "Never regress state or replay an already-shown event. If not the last, close the final [Shot N] by stating the physical end-state (who/where/pose/action in progress); never add a closing tableau. "
+                + head_txt
+                + "Advance the story from the previous segment's end state (who was where / in what pose / what had just been discovered or happened); "
+                "never regress state and never replay an already-shown event (each action happens exactly once). "
+                "If not the last, close the final [Shot N] by stating the physical end-state (who/where/pose/action in progress); never add a closing tableau. "
                 "Only the last truly closes the story; only the first truly opens it. Never change the decomposition boundaries.")
     if tot <= 1:
         return "【段位指令】本分段是全片唯一的一段：可以完整开场并完整收束。"
     if idx == 1:
-        role = "本段是全片第 1 段（允许完整开场；结尾需写清物理末态作剧情交接，把下段要推进的状态留给下段）"
+        role = "本段是全片第 1 段（允许完整开场，段首**没有**承接段；结尾需写清物理末态作剧情交接，把下段要推进的状态留给下段）"
     elif idx >= tot:
         role = "本段是全片最后一段（此处才是全片真正的收束，可以完整收尾）"
     else:
-        role = f"本段是全片中间段（第 {idx}/{tot} 段）：与前后段是一次大切镜关系"
-    return (f"【段位指令】{role}。①本段独立生成，严禁写“承接上段末帧/上段…继续”等跨段画面引用与复述；"
-            "[Shot 1] 是紧接上段剧情时间线的下一镜，画面在本段自足建立（可换景别/机位/空间），但必须基于上段结束时的剧情状态推进——"
+        role = f"本段是全片中间段（第 {idx}/{tot} 段）：与前段在成片里是物理衔接的"
+    head_txt = (
+        f"段首衔接：本段 [Shot 1] 就是「承接上一段末帧的延续段」——与上段末帧**同机位/同景别/同光线/同角色身体姿态与动作进行方向**，"
+        f"动作只轻微延续（不要重新站位、不要重新起势），持续 {r_txt} 秒（≈{int(round(runway * 24))} 帧）；"
+        f"这段在成片里会被**整段裁掉**，所以本段新内容从 {r_txt} 秒之后开始（第一次切镜 ≈ 在 {r_txt} 秒处，可换景别/机位/空间）。"
+        f"延续段必须写**具体画面**（谁在哪/什么姿态/什么动作进行到哪一步/光线环境如何）——严禁写成“承接上段末帧/上段…继续”这类抽象词；"
+        f"其余 [Shot N] 的时间戳从 {r_txt} 秒起算。"
+        if head_on else
+        "段首：[Shot 1] 直接是本段新内容（本段没有承接段，按大切镜自足建立画面，可换景别/机位/空间）。")
+    return (f"【段位指令】{role}。①{head_txt}"
+            "②必须基于上段结束时的剧情状态沿时间线推进——"
             "严禁状态回退（上段已站起/已发现/已下台阶，本段不得又蹲回/装作没发现/再踏上同一级台阶）、严禁重演上段已演事件；"
-            "②非末段：最后一个 [Shot N] 用 1-2 句写清结束时的物理末态（谁/在哪/姿态/正进行的动作）作剧情交接，"
+            "③非末段：最后一个 [Shot N] 用 1-2 句写清结束时的物理末态（谁/在哪/姿态/正进行的动作）作剧情交接，"
             "严禁新增对视/一笑/定格/转身/情绪余韵等封闭收尾镜头、严禁新增原 detailed_description 没有的收尾镜；"
-            "③只有末段可真正收束、只有首段可完整开场；切走再切回某场景时保持该场景镜头语言一致；"
+            "④只有末段可真正收束、只有首段可完整开场；切走再切回某场景时保持该场景镜头语言一致；"
             "润色只把给定 detailed_description 写得更丰满，禁止增删结构性开场/收尾镜头、禁止改变拆解已定的分段边界。")

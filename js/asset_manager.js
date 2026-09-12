@@ -17,6 +17,8 @@ import { api } from "../../scripts/api.js";
 const NODE_TYPE = "JZL_MiniMaxAssetManager";
 const MINI_NODE_TYPE = "JZL_MiniMaxAssetManagerMini";
 const MAX_NODE_TYPE = "JZL_MiniMaxAssetManagerMax";
+// ♾️ 无限时长：与 Max 同一套面板/落盘语义，额外多一个「无限时长衔接」设置分区
+const INF_NODE_TYPE = "JZL_MiniMaxAssetManagerInfinite";
 const VIEWER_NODE_TYPE = "JZL_MiniMaxVideoViewer";
 
 // ── 纯文本模式（仅提示词输出 / 故事扩写模式）自动静音 ─────────────────
@@ -2599,6 +2601,11 @@ function defaultSettings() {
             sampler: "res_multistep", scheduler: "simple", steps: 4, cfg: 1.0,
             seed: 0, seed_mode: "randomize",
             decode_video: "XB-BOX - VAE解码（原版优化）", decode_cleanup: "卸载显存模型",
+            infinite: {
+                window: 22, audio_link: true, audio_no_trim: false, settle: 12,
+                trim_mode: "像素域裁切（推荐）", guide_source: "一采latent尾部（推荐）",
+                second_guide: "first",
+            },
             second: {
                 enabled: false,
                 upscaler_model: "minimax_h3_latent_upscaler_3d_fp32.pth",
@@ -2915,7 +2922,7 @@ function renderPreferenceSettingsPanel(c, s) {
     c.append(field("自定义镜头语言", textControl(p.custom || "", "选填。自由描述镜头要求…", v => { p.custom = v; })));
 }
 
-function renderPrefPanel(c, s, d) {
+function renderPrefPanel(c, s, d, node) {
     const p = s.sample_decode;
     const sec = p.second || (p.second = {});
     renderAutoSave(c, s);
@@ -2995,6 +3002,82 @@ function renderPrefPanel(c, s, d) {
     c.append(field("视频解码", el("div", "font-size:13px;color:var(--fg-color,#ddd);padding:6px 10px;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;", "XB-BOX - VAE解码（原版优化）")));
     c.append(field("解码前清理", selectControl(OPTIONS.decodeCleanup, p.decode_cleanup || OPTIONS.decodeCleanup[0], v => { p.decode_cleanup = v; })));
     c.append(field("音频解码", el("div", "font-size:13px;color:var(--fg-color,#ddd);padding:6px 10px;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;", "VAE解码（音频）")));
+
+    // ── ♾️ 无限时长衔接（仅「JZL - 🤖 MiniMax-H3无限时长」节点显示）──
+    // 后端读取 sample_decode.infinite = { window, audio_no_trim, settle, trim_mode, guide_source, second_guide }
+    const isInfNode = !!node && node.type === INF_NODE_TYPE;
+    if (isInfNode) {
+        const inf = p.infinite || (p.infinite = { window: 22, audio_link: true, audio_no_trim: false });
+        c.append(makeSectionTitle("无限时长衔接"));
+        // 窗口取值恒为 17m+5（5/22/39/56）：段长恒为 17k+5，两者相减必是 17 的倍数 → 相位自动对齐
+        const SEAM_WINDOWS = ["5", "22", "39", "56"];
+        const _nearest = (opts, v, dflt) => {
+            const n = parseInt(v, 10);
+            if (!isFinite(n)) return dflt;
+            return opts.reduce((a, b) => Math.abs(parseInt(b, 10) - n) < Math.abs(parseInt(a, 10) - n) ? b : a, dflt);
+        };
+        const _w = _nearest(SEAM_WINDOWS, inf.window, "22");
+        if (String(inf.window ?? "") !== _w) { inf.window = parseInt(_w, 10); }   // 非列表值就近归一（与后端 _seam_resolve_window 一致）
+        c.append(field("衔接窗口（帧）", selectControl(SEAM_WINDOWS, _w, v => {
+            inf.window = parseInt(v, 10) || 22;
+        })));
+        // 裁切方式：像素域（默认）= latent 完全不裁 + 解码后丢帧；latent 域 = 先裁 latent 再解码（少解码量），
+        // 但丢弃 token 数必须是 5 的倍数（= 丢弃帧数是 17 的倍数 → 过渡需为 12/29/46），不满足自动回退像素域
+        const TRIM_MODES = ["像素域裁切（推荐）", "latent域裁切（相位安全）", "不裁切（仅诊断）"];
+        const _tmNorm = (v) => {
+            const s = String(v || "");
+            if (s.indexOf("不裁") >= 0) return TRIM_MODES[2];
+            if (s.indexOf("latent") >= 0) return TRIM_MODES[1];   // 兼容旧值「latent域裁切（旧·会闪烁）」
+            return TRIM_MODES[0];
+        };
+        c.append(field("裁切方式", selectControl(TRIM_MODES, _tmNorm(inf.trim_mode),
+            v => { inf.trim_mode = v; })));
+        // 过渡丢弃帧数（settling burn-in）：钉住窗口之外再多丢的帧，吸掉「模仿引导→启动新动作」的卡顿（hold→pop）
+        // 只提供 12 / 29 / 46：这三个值使「窗口(17m+5) + 过渡」恒为 17 的倍数
+        //   ⇒ 生成帧数(17K+5) − 丢弃 = 落盘帧数(17k+5) 能精确等于设定时长（12 对全部窗口档都成立，默认）
+        const SETTLE_OPTS = ["12", "29", "46"];
+        // 旧值（0/5/8/17/22 等，含 null）就近归一 → 后端 _seam_snap_settle 用同一套规则再兜底
+        const _st = _nearest(SETTLE_OPTS, inf.settle, "12");
+        if (String(inf.settle ?? "") !== _st) { inf.settle = parseInt(_st, 10); }
+        c.append(field("过渡丢弃帧数（12/29/46）", selectControl(SETTLE_OPTS, _st, v => {
+            inf.settle = parseInt(v, 10) || 0;
+        })));
+        // 引导来源：一采 latent 尾部切片直传（默认）vs 官方 AddGuide 同款尾帧→VAE重编码（A/B 诊断）
+        const GUIDE_SOURCES = ["一采latent尾部（推荐）", "上段尾帧→VAE重编码（官方同款）"];
+        c.append(field("引导来源", selectControl(GUIDE_SOURCES,
+            GUIDE_SOURCES.includes(inf.guide_source) ? inf.guide_source : GUIDE_SOURCES[0],
+            v => { inf.guide_source = v; })));
+        // 二采引导来源（仅开启二采时生效）：first = 复用上段一采 latent（内部插值对齐二采画布，零额外内存）；
+        // second = 用上段**二采** latent 尾部重建（与二采画布同尺寸、同 refined 版本，更准；CPU 常驻一份尾部切片）
+        const SEC_GUIDES = ["上段一采latent（插值对齐二采画布）", "上段二采latent尾部（同画布真实尾部）"];
+        const _sg2Norm = (v) => { const s = String(v || ""); return (s === "second" || s.indexOf("二采") >= 0) ? SEC_GUIDES[1] : SEC_GUIDES[0]; };
+        c.append(field("二采引导来源", selectControl(SEC_GUIDES, _sg2Norm(inf.second_guide),
+            v => { inf.second_guide = (v === SEC_GUIDES[1]) ? "second" : "first"; })));
+        c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
+            "第 2 段起，把上一段【一采 latent】的尾部窗口钉进本段首帧（keyframe 行永不降噪、每步重注入）→ 画面/动作/色调跨段连续；每段仍用各自的新提示词 → 剧情持续推进。\n"
+            + "· 窗口只支持 17m+5（5 / 22 / 39 / 56），22 = 官方 Motion Context 基线；段长恒为 17k+5，两者相减必是 17 的倍数 → 相位自动对齐。\n"
+            + "· 【时长账】本节点每个数值都按「落盘时长」显示：**落盘时长 = 你设定的时长（× 段数）**。段 2+ 生成时会多出「窗口 + 过渡」帧的段首衔接跑道（默认 22+12 = 34 帧 ≈ 1.42 秒）——这段是承接上一段末帧的延续画面，成片里已经裁掉；LLM 会按此写剧本（第 2 段起 **时长** = 设定 + 跑道），所以设定时长不会被切内容。\n"
+            + "· 【过渡自动对齐】只有「窗口 + 过渡」是 17 的倍数时，生成帧数(17K+5) − 丢弃 = 落盘帧数(17k+5) 才能**精确**等于你设定的帧数（见上一条，下拉只提供 12 / 29 / 46）。\n"
+            + "· 【段首承接】段 2+ 的 [Shot 1] 就是「承接上一段末帧的延续段」（同机位/同景别/同光线/同姿态，持续跑道秒数）——这段会被裁掉，所以新内容从跑道之后开始（第一次切镜 ≈ 跑道秒数处）。这是为了避开「钉子压住段首 → 模型先模仿引导再启动新动作」的 hold→pop 卡顿。\n"
+            + "· 【限制】单段生成上限 15 秒：设定时长 + 跑道 超过 15 秒时（设定 > 13.6 秒左右）该段落盘会比设定略短约一个跑道长度。\n"
+            + "· 【裁切方式】默认「像素域裁切」：latent 一律不裁（解码器必须看到完整 5k+2 序列，否则「5 token = 17 帧」的分组相位错位 → 画面周期性重影/闪烁），解码后再丢段首衔接帧 → 落盘的 mp4 已经是裁好的（第 1 段不裁），拼接只是文件级首尾相接。\n"
+            + "· 「latent域裁切（相位安全）」：先裁 latent 再解码（解码量更少、保留帧不含被裁内容），但丢弃 token 数必须是 5 的倍数（= 丢弃帧数是 17 的倍数 ⇒ 过渡需为 12 / 29 / 46，默认 12 满足）；条件不满足时自动回退像素域裁切（保证不闪烁）。\n"
+            + "· 【过渡丢弃帧数】默认 12（官方 Director 经验值）：钉子会「压住」段首，模型先模仿/保持引导内容、之后才启动新动作，这段启动过渡留在成片里就是接缝处的「卡一下」（官方注释称 hold→pop）。丢弃量 = 窗口 + 过渡；卡顿感重就调大到 29，想让成片少裁几帧就保持 12。下拉只提供 **12 / 29 / 46**——只有它们能让「窗口 + 过渡」是 17 的倍数（生成帧数与落盘帧数都是 17 的倍数加 5），从而「落盘时长 = 你设定的时长」；其它值（含历史配置里的 0/5/8/17/22）会自动就近归一到这三个值。\n"
+            + "· 【音频】接缝音频按同一丢弃量裁波形（音画等长）；拼接保存时视频 -c copy 无损、音频由各段无损 WAV 拼成整条后只编码一次 AAC → 段边界无 AAC encoder delay 误差（约 20–30ms/接缝）。\n"
+            + "· 【引导来源】默认「一采 latent 尾部」：与下段目标同画布同 latent 空间，零 VAE 往返、零累积漂移；若画面异常可切「尾帧→VAE 重编码」对照（官方 AddGuide 同款）。\n"
+            + "· 【二采引导来源】（仅开启二采时生效）：默认「上段一采 latent」——复用同一份引导、内部插值对齐放大后的二采画布（零额外内存）；也可切「上段二采 latent 尾部」= 用上一段**二采（refined）**latent 的同画布真实尾部做引导，与最终成片尾部版本完全一致（更准），代价是 CPU 常驻一份尾部切片（只留配置窗口所需 token，通常几~几十 MB）。两种都只影响二采这一步，一采引导恒用上段一采 latent。\n"
+            + "· 1 段时无上段，自动跳过衔接（行为与「短剧导演台Max」完全一致）。\n"
+            + "· 二采开关不影响裁切/帧账：段间引导恒用上段一采 latent，二采结果只用于解码落盘（二采这一步用哪份引导由上面「二采引导来源」决定）。"));
+        c.append(field("音频跨段衔接", checkboxControl(!!inf.audio_link,
+            "把上一段音频 latent 的尾部也钉进本段首帧（对白/音乐/环境声能接上）",
+            v => { inf.audio_link = !!v; })));
+        // 「音频同步裁剪」【默认勾选】：存 `audio_no_trim=true` 才表示关闭（仅作对比实验）；
+        // 历史字段 `audio_trim=false` 视为误存（那时关掉会直接造成段尾画面冻结/音画错位）→ 一律按勾选处理
+        if (inf.audio_trim !== undefined) { delete inf.audio_trim; }
+        c.append(field("音频同步裁剪", checkboxControl(!inf.audio_no_trim,
+            "裁剪段首衔接帧时，同步裁掉对应音频长度（窗口+过渡 秒）→ 音画对齐【默认开启·建议保持】。取消勾选 = 本段音频不做时间轴裁剪（仅作对比实验）：音频会整体后移造成音画错位；落盘时仍会强制与画面等长，不会让段尾画面被冻结",
+            v => { if (v) { delete inf.audio_no_trim; } else { inf.audio_no_trim = true; } })));
+    }
 }
 
 // ── 💾 视频保存设置面板（读写 manager_settings.save，不占节点 schema widget） ──
@@ -3003,9 +3086,10 @@ function renderPrefPanel(c, s, d) {
 function renderSaveSettingsPanel(c, settings, node, d) {
     const save = settings.save || (settings.save = { mode: "分段保存", auto_save: false, auto_merge: false, auto_merge_delete: false });
     // Max 专用：恒定逐段即时落盘 + 最后读盘拼接（复用 save.mode，仅渲染/语义不同，无逐段落盘开关——Max 总是落盘）
-    const isMaxNode = !!node && node.type === MAX_NODE_TYPE;
+    // 无限时长节点沿用同一套落盘/拼接语义（逐段即时落盘 + 读盘 concat）
+    const isMaxNode = !!node && (node.type === MAX_NODE_TYPE || node.type === INF_NODE_TYPE);
     if (isMaxNode) {
-        c.append(makeSectionTitle("保存设置（Max）"));
+        c.append(makeSectionTitle(node.type === INF_NODE_TYPE ? "保存设置（无限时长）" : "保存设置（Max）"));
         const mkc = (label, checked, title, on) => field(label, checkboxControl(!!checked, title, on));
         mkc("分段保存（默认）", save.mode !== "拼接保存", "每段生成完立即落盘，输出本次各段 mp4", (v) => { if (v) save.mode = "分段保存"; });
         mkc("拼接保存", save.mode === "拼接保存", "全部段生成后读盘 concat 合并为一个完整视频", (v) => { if (v) save.mode = "拼接保存"; });
@@ -3423,7 +3507,7 @@ function buildModal(node, data, panelId) {
             break;
         }
         case "prompt": renderPromptPanel(panelBox, settings, d, node); break;
-        case "preference": renderPrefPanel(panelBox, settings, d); break;
+        case "preference": renderPrefPanel(panelBox, settings, d, node); break;
         case "preference_settings": renderPreferenceSettingsPanel(panelBox, settings); break;
         case "save_settings": renderSaveSettingsPanel(panelBox, settings, node, d); break;
         case "video_manager": renderVideoManagerPanel(panelBox, node, settings, d); break;
@@ -3576,7 +3660,8 @@ app.registerExtension({
             return;
         }
         const isMini = nodeData?.name === MINI_NODE_TYPE;
-        const isMax = nodeData?.name === MAX_NODE_TYPE;
+        // 无限时长节点与 Max 共用按钮布局 + 保存/采样解码面板
+        const isMax = nodeData?.name === MAX_NODE_TYPE || nodeData?.name === INF_NODE_TYPE;
         if (nodeData?.name !== NODE_TYPE && !isMini && !isMax) return;
         const orig = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -3984,7 +4069,50 @@ app.registerExtension({
                 const tfs = flo === fhi ? `${flo * count}` : `${flo * count}~${fhi * count}`;
                 const ts = dlo === dhi ? `${dlo * count}` : `${dlo * count}~${dhi * count}`;
                 const disp = (self.widgets || []).find((x) => x.name === "display_info");
-                if (disp) setWidgetValue(disp, `分辨率：${W}x${H}丨每段时长：${ds}s丨每段帧数：${fs}丨共计段数：${count}丨总帧数：${tfs}丨总时长：${ts}秒`);
+                if (!disp) return;
+                let out = `分辨率：${W}x${H}丨每段时长：${ds}s丨每段帧数：${fs}丨共计段数：${count}丨总帧数：${tfs}丨总时长：${ts}秒`;
+                // ♾️ 无限时长：段 2+ 的**生成时长 = 设定时长 + 段首衔接跑道**（跑道 = 窗口 + 过渡，成片裁掉）
+                //    ⇒ 落盘时长 = 设定时长（节点的每个数值都按「落盘」显示，不再扣减）。
+                if (self.type === INF_NODE_TYPE && count > 1) {
+                    try {
+                        let win = 22, settle = 12, tm = "";
+                        const ms = gv("manager_settings");
+                        if (ms) {
+                            const cfg = JSON.parse(ms);
+                            const inf = (cfg && cfg.sample_decode && cfg.sample_decode.infinite) || {};
+                            win = parseInt(inf.window, 10) || 22;
+                            settle = parseInt(inf.settle, 10) || 0;
+                            tm = String(inf.trim_mode || "");
+                        }
+                        const noTrim = tm.indexOf("不裁") >= 0;
+                        const lat = tm.indexOf("latent") >= 0;
+                        // 运行时会把「窗口 + 过渡」对齐到 17 的倍数（保证落盘时长精确 = 设定时长）→ 这里按同规则显示
+                        const snapSettle = (w, s) => {
+                            let d = w + Math.max(0, s);
+                            let sn = Math.round(d / 17) * 17;
+                            if (sn < w) sn = Math.ceil(w / 17) * 17;
+                            return Math.max(0, sn - w);
+                        };
+                        const settleEff = snapSettle(win, settle);
+                        const per = noTrim ? 0 : (win + settleEff);
+                        const latOK = lat && per > 0 && (per % 17 === 0);
+                        const runwaySec = (per / 24).toFixed(2);
+                        // 成片总长 = 设定时长 × 段数（跑道已裁掉）
+                        const t1 = flo * count, t2 = fhi * count;
+                        const s1 = (t1 / 24).toFixed(2), s2 = (t2 / 24).toFixed(2);
+                        const tt = t1 === t2 ? `${t1} 帧 ≈ ${s1} 秒` : `${t1}~${t2} 帧 ≈ ${s1}~${s2} 秒`;
+                        const cutDesc = noTrim
+                            ? "不裁切（诊断·成片开头含衔接重复帧）"
+                            : (lat
+                                ? `latent域裁切（相位安全${latOK ? "·已满足" : "·条件不足→自动回退像素域"}）`
+                                : `像素域裁切`) + `：窗口 ${win} + 过渡 ${settleEff}${settleEff !== settle ? `（配置 ${settle} 已对齐）` : ""} = 段首 ${per} 帧`;
+                        const genNote = per > 0
+                            ? `丨第 2 段起生成时长 = 设定 + ${runwaySec}s（段首承接上段末帧的跑道，成片已裁掉）`
+                            : "";
+                        out = `分辨率：${W}x${H}丨每段帧数：${fs}（落盘）丨段数：${count}丨${cutDesc}${genNote}丨成片总长：${tt}丨（每段可按剧本「**时长**」各自不同）`;
+                    } catch (_) { /* 解析失败则退回默认文案 */ }
+                }
+                setWidgetValue(disp, out);
             };
             const watchChange = (nm) => {
                 const w = (self.widgets || []).find((x) => x.name === nm);
@@ -4440,7 +4568,7 @@ function setupVideoViewerNode(self) {
     });
     viewBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     // Viewer 编辑剧本的资产预览窗数据源：从同图「短剧导演台」（Pro/Max/Mini）节点复制资产缓存（可参考/插入素材）
-    const _MANAGER_TYPES = new Set(["JZL_MiniMaxAssetManager", "JZL_MiniMaxAssetManagerMax", "JZL_MiniMaxAssetManagerMini"]);
+    const _MANAGER_TYPES = new Set(["JZL_MiniMaxAssetManager", "JZL_MiniMaxAssetManagerMax", "JZL_MiniMaxAssetManagerInfinite", "JZL_MiniMaxAssetManagerMini"]);
     const _loadViewerAssets = () => {
         try {
             const g = self.graph || (window.app && window.app.graph);
@@ -4500,7 +4628,7 @@ function setupVideoViewerNode(self) {
             const g = self.graph || (window.app && window.app.graph);
             if (!g || !g._nodes) return "";
             for (const n of g._nodes) {
-                if (n && n.type === MAX_NODE_TYPE) {
+                if (n && (n.type === MAX_NODE_TYPE || n.type === INF_NODE_TYPE)) {
                     const w = (n.widgets || []).find((x) => x.name === "story_name");
                     if (w) { const v = String(readWidgetValue(w) || "").trim(); if (v) return v; }
                 }

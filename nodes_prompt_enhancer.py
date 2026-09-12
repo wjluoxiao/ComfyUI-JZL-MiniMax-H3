@@ -189,7 +189,7 @@ class JZL_MiniMaxPromptEnhancer:
     # ── 单块润色 ──────────────────────────────────────────────
 
     @classmethod
-    def _build_user_msg(cls, lang, info, subject_defs, dispatch, original_dd, original_music, preference="", seg_index=1, seg_total=1):
+    def _build_user_msg(cls, lang, info, subject_defs, dispatch, original_dd, original_music, preference="", seg_index=1, seg_total=1, seam_runway=0.0):
         if lang == "en":
             labels = cls._SEGMENT_INFO_KEYS_EN
             head = "[Segment info]"
@@ -198,7 +198,7 @@ class JZL_MiniMaxPromptEnhancer:
             labels = cls._SEGMENT_INFO_KEYS
             head = "【本分段信息】"
             tail = "请输出重写后的 detailed_description 正文。"
-        pos_lines = build_segment_position(lang, seg_index, seg_total)
+        pos_lines = build_segment_position(lang, seg_index, seg_total, seam_runway=seam_runway)
         info_lines = "\n".join(f"{lab}: {info.get(k) or ''}" for lab, k in zip(labels, cls._SEGMENT_INFO_KEYS))
         pref_lines = ""
         if preference and str(preference).strip():
@@ -239,7 +239,12 @@ class JZL_MiniMaxPromptEnhancer:
         subject_defs = cls._extract_field(h3_body, "subject_definitions")
         dispatch = cls._extract_dispatch(block)
         info = cls._extract_segment_info(block)
-        user_msg = cls._build_user_msg(lang, info, subject_defs, dispatch, original_dd, original_music, preference, seg_index, seg_total)
+        _runway = 0.0
+        try:
+            _runway = max(0.0, float((bus or {}).get("seam_runway") or 0.0))
+        except Exception:
+            _runway = 0.0
+        user_msg = cls._build_user_msg(lang, info, subject_defs, dispatch, original_dd, original_music, preference, seg_index, seg_total, seam_runway=_runway)
 
         new_dd = cls._run_llm(bus, system_prompt, user_msg, False, seed)
         new_dd = (new_dd or "").strip()

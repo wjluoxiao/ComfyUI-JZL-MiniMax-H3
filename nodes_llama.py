@@ -879,13 +879,22 @@ class JZL_MiniMax_ScriptProcessor:
                 segment_count, segment_duration, prompt_lang, ref_image_intro, ref_video_intro, ref_audio_intro,
                 enable_scene, enable_props, enable_video, enable_audio,
                 seed, force_offload, save_states,
-                llm_backend="local", llama_model=None, parameters=None, api_config=None, preference=None, custom_rule_path=None, gen_dir=None):
-        from .presets.script import build_shot_prompt, SEGMENT_COUNT_OPTIONS, _resolve_segment_count, _parse_duration_spec
+                llm_backend="local", llama_model=None, parameters=None, api_config=None, preference=None, custom_rule_path=None, gen_dir=None,
+                seam_runway=0.0):
+        """seam_runway：「无限时长」节点传入的段首衔接跑道（秒），0 = 未启用衔接。
+        启用时第 2 段起的**生成时长 = 设定时长 + 跑道**（跑道承接上段末帧、成片裁掉 ⇒ 落盘 = 设定时长），
+        会写进「**时长**」字段要求与 user 消息（见 presets/script.py::_duration_spec_with_runway）。
+        """
+        from .presets.script import build_shot_prompt, SEGMENT_COUNT_OPTIONS, _resolve_segment_count, _parse_duration_spec, _duration_spec_with_runway
 
         if not story_input or not story_input.strip():
             return ("[错误] 请输入故事内容", {})
 
         lang = "zh" if "ZH" in prompt_lang else "en"
+        try:
+            seam_runway = max(0.0, float(seam_runway or 0.0))
+        except Exception:
+            seam_runway = 0.0
         custom_rules = ""
         if use_custom_rule:
             custom_rules = self._clean_custom_rules(self._load_custom_rules(custom_rule_path))
@@ -897,10 +906,19 @@ class JZL_MiniMax_ScriptProcessor:
             enable_video=enable_video, enable_audio=enable_audio,
             preference=(preference or "").strip(),
             custom_rules=custom_rules,
+            seam_runway=seam_runway,
         )
         segment_count = _resolve_segment_count(segment_count)
-        _dlo, _dhi, _ddesc = _parse_duration_spec(segment_duration)
-        _dur_clause = f"每段视频固定 {_dlo} 秒" if _dlo == _dhi else f"每段视频时长在 {_dlo}~{_dhi} 秒区间内，由你按剧情弧线给每段分配实际秒数（写进该段 **时长** 字段）"
+        _dlo_set, _dhi_set, _ddesc = _parse_duration_spec(segment_duration)      # 设定时长（= 落盘时长）
+        _dlo, _dhi, _ddesc = _duration_spec_with_runway(segment_duration, seam_runway)   # 生成时长
+        if seam_runway > 0:
+            _r = f"{seam_runway:.2f}".rstrip("0").rstrip(".")
+            _gen = f"{_dlo:.2f}".rstrip("0").rstrip(".") if _dlo == _dhi else f"{_dlo:.1f}~{_dhi:.1f}"
+            _dur_clause = (f"每段的生成时长（写进该段 **时长** 字段）为：第 1 段固定 {int(_dlo_set)} 秒；"
+                           f"第 2 段起 {_gen} 秒（= 落盘 {int(_dlo_set)} 秒 + 段首衔接 {_r} 秒；"
+                           f"段首 {_r} 秒是承接上一段末帧的延续段，成片会整段裁掉，新内容从 {_r} 秒之后开始）")
+        else:
+            _dur_clause = f"每段视频固定 {int(_dlo)} 秒" if _dlo == _dhi else f"每段视频时长在 {int(_dlo)}~{int(_dhi)} 秒区间内，由你按剧情弧线给每段分配实际秒数（写进该段 **时长** 字段）"
         user_msg = f"请生成恰好 {segment_count} 个分段，{_dur_clause}，输出 [SHOT_START]...[SHOT_END] 完整块（分段信息 + 六段提示词 + 调度指令）。"
 
         if "api" in str(llm_backend) and api_config:
@@ -1038,8 +1056,10 @@ class JZL_MiniMax_ScriptProcessor:
             "story_style": story_style,
             "mode": mode,
             "segment_count": segment_count,
-            "segment_duration": int(_dlo),
+            "segment_duration": int(_dlo_set),          # 设定时长（= 落盘时长）；生成时长见 segment_duration_gen
             "segment_duration_desc": _ddesc,
+            "segment_duration_gen": int(round(_dlo)),
+            "seam_runway": float(seam_runway or 0.0),
             "prompt_lang": prompt_lang,
             "lang": lang,
             "custom_rules": custom_rules,

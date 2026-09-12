@@ -259,6 +259,31 @@
       "0": { "name": "已处理剧本" }
     }
   },
+  "JZL_MiniMaxAssetManagerInfinite": {
+    "display_name": "JZL - 🤖 MiniMax-H3无限时长",
+    "inputs": {
+      "run_mode": { "name": "运行模式" },
+      "display_info": { "name": "生成详情" },
+      "aspect_ratio": { "name": "画幅比例" },
+      "megapixels": { "name": "百万像素（MP）" },
+      "duration": { "name": "每段视频时长" },
+      "scale_factor": { "name": "参考数值放大" },
+      "upscale_scale": { "name": "二采latent放大" },
+      "video_count": { "name": "生成视频数量（段数）" },
+      "story_style": { "name": "故事风格" },
+      "story_name": { "name": "故事名称" },
+      "external_prompt": { "name": "提示词·接线（可连上游文本）" },
+      "internal_prompt": { "name": "节点内提示词" },
+      "manager_settings": { "name": "节点配置" },
+      "model": { "name": "主模型" },
+      "clip": { "name": "CLIP" },
+      "vae": { "name": "视觉VAE" },
+      "audio_vae": { "name": "音频VAE" }
+    },
+    "outputs": {
+      "0": { "name": "已处理剧本" }
+    }
+  },
   "JZL_MiniMaxVideoViewer": {
     "display_name": "JZL - 🎬 生成视频查看器",
     "inputs": {

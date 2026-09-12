@@ -71,6 +71,55 @@ def _parse_duration_spec(duration):
     return (lo, hi, f"{int(lo)}~{int(hi)} 秒区间（每段由你按剧情弧线给实际秒数，写进该段 **时长** 字段）")
 
 
+MODEL_MAX_SEGMENT_SEC = 15.0   # 单段生成上限（秒）——超过它「设定时长 + 段首衔接」无法完整生成
+
+
+def _duration_spec_with_runway(duration, seam_runway=0.0):
+    """时长设置 + 段首衔接跑道 → **(生成时长 lo, 生成时长 hi, desc)**。
+
+    「无限时长」节点启用段间衔接时：段 2 起的生成时长 = 设定时长 + 跑道（跑道 = 段首承接上一段末帧的
+    延续画面，成片会整段裁掉）⇒ 落盘时长仍 = 用户设定的时长。
+    返回的 lo/hi 是**生成时长**（= 写进各段「**时长**」字段的那个值），desc 把两段式写法讲清楚。
+    跑道 ≤ 0（未启用衔接）时行为与 _parse_duration_spec 完全一致。
+    """
+    lo, hi, _base_desc = _parse_duration_spec(duration)
+    try:
+        runway = float(seam_runway or 0.0)
+    except Exception:
+        runway = 0.0
+    if runway <= 0.0:
+        return lo, hi, _base_desc
+
+    runway_txt = f"{runway:.2f}".rstrip("0").rstrip(".")
+    gen_lo, gen_hi = lo + runway, hi + runway
+    capped = gen_hi > MODEL_MAX_SEGMENT_SEC
+    if capped:                       # 单段上限：生成不能超过 15 秒 → 落盘会略短于设定
+        gen_hi = MODEL_MAX_SEGMENT_SEC
+        gen_lo = min(gen_lo, gen_hi)
+    gen_lo_txt = f"{gen_lo:.2f}".rstrip("0").rstrip(".")
+    gen_hi_txt = f"{gen_hi:.2f}".rstrip("0").rstrip(".")
+    if lo == hi:
+        seg1_txt = f"{int(lo)}"
+        segn_txt = gen_lo_txt
+        head = (f"第 1 段 {int(lo)} 秒（正常开场，无段首衔接）；第 2 段起 {segn_txt} 秒"
+                f"（= 落盘 {int(lo)} 秒 + 段首衔接 {runway_txt} 秒）")
+    else:
+        seg1_txt = f"{int(lo)}~{int(hi)}"
+        segn_txt = gen_lo_txt if gen_lo == gen_hi else f"{gen_lo_txt}~{gen_hi_txt}"
+        head = (f"第 1 段 {int(lo)}~{int(hi)} 秒（按剧情弧线分配，正常开场，无段首衔接）；"
+                f"第 2 段起 {segn_txt} 秒（= 落盘 {int(lo)}~{int(hi)} 秒 + 段首衔接 {runway_txt} 秒）")
+    tail = (f"。**段首衔接段**：第 2 段起，本段开头 {runway_txt} 秒必须承接上一段末帧画面"
+            f"（同机位/同景别/同光线/同角色姿态与动作进行方向，动作可轻微延续），这段在成片里会被**整段裁掉**；"
+            f"所以 ①第 2 段起的 [Shot 1] 就是这段延续画面，其后第一次切镜的时间戳约在 {runway_txt} 秒处，"
+            f"本段第一条新内容也从这里开始；②每段「**时长**」字段写**实际生成秒数**"
+            f"（第 1 段写 {seg1_txt}，第 2 段起写 {segn_txt}，允许 1 位小数）；"
+            f"③成片落盘时长 = 生成时长 − {runway_txt} 秒 ≈ 你设定的时长。")
+    if capped:
+        tail += (f" ⚠️ 注意：设定时长 + 衔接 {runway_txt} 秒已超出单段上限 {MODEL_MAX_SEGMENT_SEC:g} 秒，"
+                 f"本段按 {MODEL_MAX_SEGMENT_SEC:g} 秒生成，落盘会比设定略短约 {runway_txt} 秒。")
+    return gen_lo, gen_hi, head + tail
+
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -104,7 +153,7 @@ SCRIPT_SKELETON_V2 = '''# Role: 顶级短视频编剧 & MiniMax H3 分段提示�
 
 ## B. 必须遵守的限制框架（硬约束；逐条核对，违反即失败）
 【任务】{Mode_Instruction}
-【分段数】恰好生成 {Segment_Count} 个分段；每段是一段 {Segment_Duration} 的独立视频（实际秒数写进该段 **时长** 字段）。
+【分段数】恰好生成 {Segment_Count} 个分段；每段是一段独立视频片段（**每段的实际生成秒数见下方「时长设定」**，必须写进该段 **时长** 字段）。
 
 【镜头语言偏好（景别/运镜/切镜/转场/音乐/字数，逐条执行）】
 {Preference_Block}
@@ -117,17 +166,18 @@ SCRIPT_SKELETON_V2 = '''# Role: 顶级短视频编剧 & MiniMax H3 分段提示�
 第 2 步 · 规划：按 B 的统筹与偏好，给每段定实际秒数与 [Shot N] 数（按弧线分配，开场少/中段推进/高潮多/收束回落）。
 第 3 步 · 执行：逐段输出 [SHOT_START]...[SHOT_END]，每段含（一）分段信息 +（二）六段 Ref2VA + 调度指令（格式见 D）。执行时遵守：
 {Decompose_Rules}
-   - 段边界 = 大切镜：下段 [Shot 1] 紧接上段剧情时间线、画面自足（可换景别/机位/空间）；禁「承接上段末帧/上段…继续」伪引用；人物/物理状态跨段连续（禁回退/重演上段已演事件）；段尾（非末段）用 1-2 句写清物理末态作剧情交接。
+   - 段边界 = 大切镜 + **段首衔接**（见上方时长设定）：第 2 段起的 [Shot 1] 是「承接上一段末帧画面的延续段」，持续 {Seam_Runway}（同机位/同景别/同光线/同角色姿态与动作方向）——这段在成片里会被整段裁掉，所以本段新内容从 {Seam_Runway} 之后开始（第一次切镜时间戳约在 {Seam_Runway} 处，可换景别/机位/空间）；人物/物理状态跨段连续（禁回退/重演上段已演事件）；段尾（非末段）用 1-2 句写清物理末态作剧情交接。
 第 4 步 · 审查（写完全部后自检一遍，不满足即改）：
    - 六段字段齐全、字段间各空一行、无 markdown 代码块；
    - <Subject N>/<Picture N>/<Video N>/<Audio N> 与 subject_definitions 一致，且与 SCENE/VIDEO/AUDIO_INSTRUCTION.slots 编号严格同源（slots[0]=<Picture 1>…）；
    - 角色/场景/道具 三字段只用素材声明的元素；slots 只写「类型:槽位名」，严禁自造/缩写/用素材名当槽位名；
    - 台词原样在 <d>（保留原语言）；无脑补台词/内心独白/语气词；
+   - 每段开头 0.8 秒内无任何 <d> 台词（第一句台词最早时间 ≥ 0.8 秒）；镜内台词时长与镜头时长匹配（按 4~5 字/秒 估算，放不下则拉长该镜或拆句 <scenetrans>）；
    - 每个 [Shot N] 时间戳落在该段时长内、[Shot 1] 无时间戳；
    - 每个 [Shot N] 都写明该镜景别+运镜，且段内不同 [Shot N] 用**不同景别+不同运镜**混合（长视频 4-6 种递进、短视频 2-3 种，随剧情推进变换），严禁整段只复用一种景别或一种运镜；
    - 六段正文语言 = 用户所选输出语言（中文[ZH]=中文、英文[EN]=英文；字段名/标记保持英文），仅 <d>/画面文字保留原语言；
    - retention_analysis 程度标记正确、破折号后列举已定义特征（无「保留」二字）；
-   - 无「承接上段末帧」「上段…继续」伪引用；无状态回退/重演。
+   - 第 2 段起 [Shot 1] 是承接上段末帧的延续画面（时长 = 段首衔接秒数）、其后才有本段新内容；无状态回退/重演上段已演事件。
 
 ## D. 输出格式权威（六段 Ref2VA + 调度指令，严格遵循）
 {H3_Shot_Rules}'''
@@ -246,10 +296,13 @@ def build_shot_prompt(
     user_tags: str = "",
     preference: str = "",
     custom_rules: str = "",
+    seam_runway: float = 0.0,
 ) -> str:
     """剧本与镜头处理器 — 拼装一次成型的 System Prompt（融合拆解 + 六段 Ref2VA 规范）。
 
     lang: "zh" / "en"；segment_duration: 每段视频时长(秒)，约束时间戳范围。
+    seam_runway: 「无限时长」节点的段首衔接跑道（秒）。> 0 时段 2+ 的生成时长 = 设定时长 + 跑道，
+    段首跑道承接上一段末帧、成片裁掉 ⇒ 落盘时长 = 设定时长（详见 _duration_spec_with_runway）。
     """
     from ..sheding.mode_instructions import MODE_INSTRUCTIONS as _mi
     from ..sheding.story_styles import resolve_style as _resolve_style
@@ -259,7 +312,13 @@ def build_shot_prompt(
     mode_instruction = _mi.get(mode, list(_mi.values())[0] if _mi else "")
     style = _resolve_style(story_style)
     segment_count = _resolve_segment_count(segment_count_label)
-    duration_lo, duration_hi, duration_desc = _parse_duration_spec(segment_duration)
+    try:
+        seam_runway = max(0.0, float(seam_runway or 0.0))
+    except Exception:
+        seam_runway = 0.0
+    duration_lo, duration_hi, duration_desc = _duration_spec_with_runway(segment_duration, seam_runway)
+    seam_runway_txt = ((f"{seam_runway:.2f}".rstrip("0").rstrip(".") + " 秒"
+                        f"（≈{int(round(seam_runway * 24))} 帧）") if seam_runway > 0 else "0 秒")
 
     schedule_rules = _build_schedule_rules(lang, enable_scene, enable_props, enable_video, enable_audio)
 
@@ -267,6 +326,7 @@ def build_shot_prompt(
     rules = (H3_SHOT_RULES_ZH if lang == "zh" else H3_SHOT_RULES_EN)
     rules = rules.replace("{Segment_Count}", str(segment_count))
     rules = rules.replace("{Segment_Duration}", duration_desc)
+    rules = rules.replace("{Seam_Runway}", seam_runway_txt)
     rules = rules.replace("{Schedule_Rules}", schedule_rules)
     rules = rules.replace("{Style_Directing}", "- 本段导演语法：按『A. 故事风格』中该风格的「## 核心导演语法」逐条执行（此处不重复注入）。")
     rules = rules.replace("{Detail_Length}", _extract_detail_length(preference))
@@ -282,12 +342,31 @@ def build_shot_prompt(
         pref_block = "- 无额外镜头语言偏好：景别/运镜/切镜/转场/音乐/字数按剧情与「故事风格」自然发挥。"
 
     # 全局节奏统筹（§2.5）：时长区间 + 按弧线分摊时长与切镜预算（规则级导演规划）
-    if duration_lo == duration_hi:
+    if seam_runway > 0:
+        # 衔接启用：时长描述已由 _duration_spec_with_runway 写成「第 1 段 / 第 2 段起」两段式，直接用它
+        _dur_line = f"- 时长设定：{duration_desc}"
+    elif duration_lo == duration_hi:
         _dur_line = f"- 时长设定：全局固定，每段视频 **时长** 统一为 {int(duration_lo)} 秒。"
     else:
         _dur_line = (f"- 时长设定：每段视频时长在 {int(duration_lo)}~{int(duration_hi)} 秒区间内。"
                      f"正式拆解前，先按剧情弧线给每段分配一个实际秒数（开场与收束相对短、发展适中、高潮最长），"
                      f"并把该秒数写进每段元数据「**时长**」字段（取整秒，不得超区间）。")
+    if seam_runway > 0:
+        _seam_line = (
+            f"- 段首衔接（本片按「无限时长」分段生成，段与段之间有物理衔接）：第 2 段起的 [Shot 1] 必须是"
+            f"「承接上一段末帧画面的延续段」——同机位/同景别/同光线/同角色身体姿态与动作进行方向，动作只做轻微延续，"
+            f"持续 {seam_runway_txt}；这一段在成片里会被**整段裁掉**，因此本段新内容从 {seam_runway_txt} 之后开始"
+            f"（第一次切镜的时间戳约在 {seam_runway_txt} 处，可换景别/机位/空间）。第 1 段没有衔接段，按正常开场写。"
+            f"剧情/物理状态仍然跨段连续：上段结尾谁在什么位置、什么姿态、发现/触发了什么，段首延续段必须与之完全一致"
+            f"（禁止状态回退：上段已站起/已发现/已下台阶，延续段不得又蹲回/装没发现/再踏上同一级台阶），"
+            f"也禁止把上段已演过的事件重演一遍（同一动作只演一次）。段尾（非末段）用 1-2 句写清结束瞬间的物理末态作剧情交接。")
+    else:
+        _seam_line = (
+            "- 大切镜衔接：每段是独立生成的一段——段与段之间是一次大切镜/换场：段 N+1 的 [Shot 1] 是紧接上段剧情时间线的下一镜"
+            "（可换景别/机位/空间），画面自足，**禁止写“承接上段末帧/上段…继续”等伪画面引用**；"
+            "但剧情/人物物理状态必须跨段连续：上段结尾谁在什么位置、什么姿态、发现/触发了什么，下段必须基于该状态继续"
+            "（禁止状态回退：上段已站起/已发现/已下台阶，下段不得又蹲回/装没发现/再踏上同一级台阶），"
+            "禁止把上段已演过的事件重演一遍。段尾（非末段）用 1-2 句交代清楚结束瞬间的物理末态作剧情状态交接。")
     timing_plan = (
         "把整部短剧当成一部连续影片来做导演统筹：\n"
         + _dur_line + "\n"
@@ -296,11 +375,7 @@ def build_shot_prompt(
         "开场段少镜长镜（建立）、中段推进（单段 2~4 镜）、高潮段多镜快切、收束段回落；"
         "对白密集的段自动减镜加长（先保证每句台词+说话人神态+听者反应完整，再补动作/运镜/环境）。"
         "同一动作只切一次，禁止为凑镜数硬切或重复。\n"
-        "- 大切镜衔接：每段是独立生成的一段——段与段之间是一次大切镜/换场：段 N+1 的 [Shot 1] 是紧接上段剧情时间线的下一镜"
-        "（可换景别/机位/空间），画面自足，**禁止写“承接上段末帧/上段…继续”等伪画面引用**；"
-        "但剧情/人物物理状态必须跨段连续：上段结尾谁在什么位置、什么姿态、发现/触发了什么，下段必须基于该状态继续"
-        "（禁止状态回退：上段已站起/已发现/已下台阶，下段不得又蹲回/装没发现/再踏上同一级台阶），"
-        "禁止把上段已演过的事件重演一遍。段尾（非末段）用 1-2 句交代清楚结束瞬间的物理末态作剧情状态交接。"
+        + _seam_line
     ).format(segment_count=segment_count)
 
     return SCRIPT_SKELETON_V2.format(
@@ -308,11 +383,12 @@ def build_shot_prompt(
         Story_Style=style,
         Segment_Count=segment_count,
         Segment_Duration=duration_desc,
-        Decompose_Rules=_dr,
+        Decompose_Rules=_dr.replace("{Seam_Runway}", seam_runway_txt),
         Reference_Intro=reference_intro,
         H3_Shot_Rules=rules,
         Preference_Block=pref_block,
         Timing_Plan=timing_plan,
         User_Story=user_story,
         User_Tags=user_tags,
+        Seam_Runway=seam_runway_txt,
     )
