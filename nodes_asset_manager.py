@@ -1899,6 +1899,10 @@ def _run_second_sampling(model, positive, samples, sample_decode, second, upscal
         _up_kwargs["enable_temporal_chunking"] = _chunk
     if "force_unload" in _params:
         _up_kwargs["force_unload"] = True
+    if "keep_proportion" in _params:
+        _up_kwargs["keep_proportion"] = True
+    if "offload_after_upscale" in _params:
+        _up_kwargs["offload_after_upscale"] = True
     try:
         up = MinimaxH3LatentUpscaler3D.execute(**_up_kwargs)
     except Exception as _ue:
