@@ -871,6 +871,103 @@ async def jzl_fs_download(request):
     return web.FileResponse(abs_p, headers=headers)
 
 
+@PromptServer.instance.routes.post("/jzl/fs_zip")
+async def jzl_fs_zip(request):
+    """把勾选的多个文件/目录打包成一个 zip 下载（云机批量下载用）。
+
+    表单字段 paths = JSON 数组（相对 output/jzl 的路径）。文件按原文件名放入 zip，
+    同名自动加 (2)(3)…；目录递归打包并保留其相对路径。视频本身已是压缩格式，用
+    ZIP_STORED 不重复压缩（只做拷贝，速度取决于磁盘）。打包在临时文件里完成，
+    响应结束后立即删除，不占长期空间。
+    """
+    import asyncio
+    import json as _json
+    import tempfile
+    import time as _time
+    import zipfile
+
+    try:
+        post = await request.post()
+        raw = post.get("paths", "")
+        try:
+            wanted = _json.loads(raw) if isinstance(raw, str) else list(raw or [])
+        except Exception:
+            return web.json_response({"ok": False, "error": "paths 不是合法的 JSON 数组"}, status=400)
+        paths = [str(p) for p in (wanted or []) if str(p or "").strip()]
+        if not paths:
+            return web.json_response({"ok": False, "error": "没有选中任何文件"}, status=400)
+
+        root = _jzl_fs_root()
+        items = []
+        for rel in paths:
+            abs_p = _jzl_fs_resolve(rel)
+            if abs_p and abs_p != root and os.path.exists(abs_p):
+                items.append((os.path.relpath(abs_p, root).replace("\\", "/"), abs_p))
+        if not items:
+            return web.json_response({"ok": False, "error": "选中的文件都已不存在"}, status=404)
+
+        def _build(tmp_path):
+            used = set()
+
+            def _unique(name):
+                """同一批里同名文件自动加 (2)(3)…，避免互相覆盖。"""
+                if name not in used:
+                    used.add(name)
+                    return name
+                stem, ext = os.path.splitext(name)
+                n = 2
+                while f"{stem} ({n}){ext}" in used:
+                    n += 1
+                uniq = f"{stem} ({n}){ext}"
+                used.add(uniq)
+                return uniq
+
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+                for arc, abs_p in items:
+                    if os.path.isdir(abs_p):
+                        base = os.path.dirname(arc) or os.path.basename(abs_p.rstrip("/\\"))
+                        for dirpath, _dirnames, filenames in os.walk(abs_p):
+                            for fn in filenames:
+                                full = os.path.join(dirpath, fn)
+                                relf = os.path.relpath(full, abs_p).replace("\\", "/")
+                                zf.write(full, _unique(f"{base}/{relf}"))
+                        continue
+                    zf.write(abs_p, _unique(os.path.basename(arc)))
+            return os.path.getsize(tmp_path)
+
+        fd, tmp = tempfile.mkstemp(prefix="jzl_batch_", suffix=".zip")
+        os.close(fd)
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _build, tmp)   # 不阻塞事件循环（ComfyUI 界面不卡）
+            fname = f"jzl_batch_{_time.strftime('%Y%m%d_%H%M%S')}_{len(items)}files.zip"
+            resp = web.StreamResponse(status=200, headers={
+                "Content-Type": "application/zip",
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Content-Length": str(os.path.getsize(tmp)),
+                "Cache-Control": "no-store",
+            })
+            await resp.prepare(request)
+            try:
+                with open(tmp, "rb") as f:
+                    while True:
+                        chunk = f.read(1 << 20)
+                        if not chunk:
+                            break
+                        await resp.write(chunk)
+                await resp.write_eof()
+            except Exception:
+                pass
+            return resp
+        finally:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"打包失败：{exc}"}, status=500)
+
+
 @PromptServer.instance.routes.post("/jzl/fs_delete")
 async def jzl_fs_delete(request):
     try:
@@ -1238,3 +1335,107 @@ async def jzl_usage_qr(request):
     ctype = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
              "webp": "image/webp", "gif": "image/gif"}.get(ext, "application/octet-stream")
     return web.FileResponse(full, headers={"Content-Type": ctype})
+
+
+# ── Skill 管理（拆解 / 扩写 / 故事风格 的「强化层」设定词）────────────
+# 内置 skill 随插件发布在 sheding/skills/<kind>/；用户导入的存 ComfyUI user/jzl_skills/<kind>/
+# 详见 sheding/skills_loader.py 与 sheding/skills/README.md
+
+def _jzl_skills():
+    from .sheding import skills_loader
+    return skills_loader
+
+
+def _jzl_decode_text(raw):
+    """上传文本解码：UTF-8(BOM) → GBK → Latin-1 兜底（中文用户常见 GBK txt）。"""
+    for enc in ("utf-8-sig", "gbk", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return ""
+
+
+@PromptServer.instance.routes.get("/jzl/skills")
+async def jzl_skills_list(request):
+    """列出某类 skill；不传 kind 时返回类型表。"""
+    kind = (request.query.get("kind") or "").strip()
+    try:
+        sk = _jzl_skills()
+        if not kind:
+            return web.json_response({"ok": True,
+                                      "kinds": {k: sk.KIND_LABELS[k] for k in sk.KINDS}})
+        if kind not in sk.KINDS:
+            return web.json_response({"ok": False, "error": f"未知 skill 类型：{kind}"}, status=400)
+        return web.json_response({
+            "ok": True,
+            "kind": kind,
+            "label": sk.KIND_LABELS[kind],
+            "items": sk.list_skills(kind),
+            "dirs": {"builtin": sk.skills_dir(kind, user=False),
+                     "user": sk.skills_dir(kind, user=True)},
+        })
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+
+@PromptServer.instance.routes.get("/jzl/skills/read")
+async def jzl_skills_read(request):
+    """读取 skill 全文（用于面板内预览）。"""
+    kind = (request.query.get("kind") or "").strip()
+    skill_id = (request.query.get("id") or "").strip()
+    try:
+        sk = _jzl_skills()
+        if kind not in sk.KINDS:
+            return web.json_response({"ok": False, "error": f"未知 skill 类型：{kind}"}, status=400)
+        text = sk.read_skill(kind, skill_id)
+        if text is None:
+            return web.json_response({"ok": False, "error": "skill 不存在"}, status=404)
+        return web.json_response({"ok": True, "kind": kind, "id": skill_id, "text": text})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+
+@PromptServer.instance.routes.post("/jzl/skills/import")
+async def jzl_skills_import(request):
+    """浏览器上传 .txt/.md → 保存为用户 skill（同名自动加序号）。"""
+    try:
+        post = await request.post()
+        kind = (post.get("kind") or "").strip()
+        file = post.get("file")
+        sk = _jzl_skills()
+        if kind not in sk.KINDS:
+            return web.json_response({"ok": False, "error": f"未知 skill 类型：{kind}"}, status=400)
+        if not file or not getattr(file, "file", None):
+            return web.json_response({"ok": False, "error": "未收到文件"}, status=400)
+        filename = os.path.basename((file.filename or "").strip())
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in (".txt", ".md", ".markdown"):
+            return web.json_response({"ok": False, "error": "只支持 .txt / .md 文本文件"}, status=400)
+        raw = file.file.read(1_048_576)      # 上限 1MB
+        text = _jzl_decode_text(raw)
+        skill_id, err = sk.import_skill(kind, filename, text)
+        if err:
+            return web.json_response({"ok": False, "error": err}, status=400)
+        return web.json_response({"ok": True, "id": skill_id,
+                                  "items": sk.list_skills(kind)})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"导入失败：{exc}"}, status=500)
+
+
+@PromptServer.instance.routes.post("/jzl/skills/delete")
+async def jzl_skills_delete(request):
+    """删除用户 skill（内置 skill 不允许删除）。"""
+    try:
+        payload = await request.json()
+        kind = str(payload.get("kind") or "").strip()
+        skill_id = str(payload.get("id") or "").strip()
+        sk = _jzl_skills()
+        if kind not in sk.KINDS:
+            return web.json_response({"ok": False, "error": f"未知 skill 类型：{kind}"}, status=400)
+        err = sk.delete_skill(kind, skill_id)
+        if err:
+            return web.json_response({"ok": False, "error": err}, status=400)
+        return web.json_response({"ok": True, "items": sk.list_skills(kind)})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"删除失败：{exc}"}, status=500)

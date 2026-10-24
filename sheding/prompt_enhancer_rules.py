@@ -164,23 +164,37 @@ Action/combat pacing rules are provided by the "## 核心导演语法" section o
 {CUSTOM_RULES}'''
 
 
-def _extract_detail_length(preference_text):
-    """从偏好设定词里提取「详细描述字数」的数字范围（如 800-1200），默认 350-500。"""
-    if not preference_text:
-        return "350-500"
-    m = re.search(r'详细描述字数[:：][^\n]*\((\d+-\d+)\s*[字词]', preference_text)
+def _extract_detail_length(preference_text, segment_duration=None):
+    """从偏好设定词里提取「详细描述字数」的数字范围（如 800-1200），默认 350-500。
+
+    segment_duration 给定时按「每秒字数」缩放上限（基准：8 秒 ≈ 350-500 字，即 44/70 字每秒），
+    避免"5 秒段也要写满 500 字"把镜头数顶爆、内容排到时长之外。
+    """
+    lo, hi = 350, 500
+    text = preference_text or ""
+    m = re.search(r'详细描述字数[:：][^\n]*\((\d+)-(\d+)\s*[字词]', text)
+    if not m:
+        m = re.search(r'Detailed-description length:[^\n]*?(\d+)-(\d+)\s*words', text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'(\d+)-(\d+)\s*(?:字|words)', text)
     if m:
-        return m.group(1)
-    m = re.search(r'(\d+-\d+)\s*(?:字|words)', preference_text)
-    if m:
-        return m.group(1)
-    return "350-500"
+        lo, hi = int(m.group(1)), int(m.group(2))
+
+    try:
+        dur = float(segment_duration)
+    except (TypeError, ValueError):
+        return f"{lo}-{hi}"
+    cap_lo, cap_hi = max(100, int(round(dur * 44))), max(120, int(round(dur * 70)))
+    lo2, hi2 = min(lo, cap_lo), min(hi, cap_hi)
+    if hi2 <= lo2:
+        hi2 = lo2 + max(50, int(round(dur * 20)))
+    return f"{lo2}-{hi2}"
 
 
 def build_enhancer_prompt(lang, story_style, segment_duration, preference, custom_rules):
     """拼装增强节点的 System Prompt，四大锚点权重从高到低。"""
     skeleton = ENHANCER_SYSTEM_EN if lang == "en" else ENHANCER_SYSTEM_ZH
-    detail_length = _extract_detail_length(preference)
+    detail_length = _extract_detail_length(preference, segment_duration)
     skeleton = skeleton.replace("{SEGMENT_DURATION}", str(int(segment_duration or 8)))
     skeleton = skeleton.replace("{DETAIL_LENGTH}", detail_length)
     skeleton = skeleton.replace("{LANG_NAME}", "English" if lang == "en" else "简体中文")

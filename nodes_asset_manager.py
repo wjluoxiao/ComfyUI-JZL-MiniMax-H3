@@ -328,6 +328,22 @@ MANAGER_DEFAULTS = {
         },
     },
     "assets": {"images": [], "videos": [], "audios": []},
+    # ── Skill 设定（强化层可替换；强制格式层不受影响）──
+    # mode_source        : 故事拆解模式 / 仅提示词输出 用内置还是自定义拆解 skill
+    # expand_source_mode : 故事扩写模式 用内置还是自定义扩写 skill
+    #                      （与 enhance.expand_source = 素材/自由 不是同一个东西，故加 _mode 后缀区分）
+    # style_source       : 故事风格用内置 8 风格还是自定义风格 skill
+    # passthrough_mode   : strict=严格对齐（必须符合现有格式）/ free=自由模式（不校验格式）
+    # *_skill 存 skill id：`builtin:<名称>` / `user:<名称>`
+    "skills": {
+        "mode_source": "builtin",
+        "mode_skill": "",
+        "expand_source_mode": "builtin",
+        "expand_skill": "",
+        "style_source": "builtin",
+        "style_skill": "",
+        "passthrough_mode": "strict",
+    },
     # 「生成设定 → 语义修正」：语义桥（内部调用内置副本 vendor_semantic_bridge）
     "semantic_bridge": {
         "enabled": False,
@@ -498,6 +514,12 @@ def _merge_manager_settings(data):
     if "decode_video" in raw_sd and not raw_sd.get("decode_cleanup"):
         merged["sample_decode"]["decode_cleanup"] = (
             "不做清理" if (raw_sd.get("decode_video") or "") == "VAE解码" else "卸载显存模型")
+    # 「不拆解」已从面板移除：该需求由「🪄 穿透生成模式」承担（拆解模式喂已拆解提示词会直接报错）。
+    # 旧工作流/手改 JSON 里若还留着 story_decompose=false，统一修正为 true，避免走进「1 段退化」路径。
+    _enh = merged.get("enhance") or {}
+    if _enh.get("story_decompose") is False:
+        _enh["story_decompose"] = True
+        print("[JZL-配置] ℹ️ 「故事拆解」已不再支持关闭（请改用穿透生成模式）→ 已自动开启")
     return merged
 
 
@@ -3601,8 +3623,8 @@ def _run_banner(tag, run_mode, seg_label, story_style, story_name, enhance, extr
         print(f"[JZL-{tag}] 落盘编码器：{_ffmpeg_short_desc()}")
 
 
-def _build_preference(enhance):
-    """偏好设置（镜头语言）+ 自定义提示词 → preference 字符串。"""
+def _build_preference(enhance, lang="zh"):
+    """偏好设置（镜头语言）+ 自定义提示词 → preference 字符串（lang="en" 输出英文版）。"""
     pref_cfg = enhance.get("preference") or {}
     parts = []
     try:
@@ -3617,6 +3639,7 @@ def _build_preference(enhance):
             pref_cfg.get("detail_length", "标准 (350-500字)"),
             pref_cfg.get("custom", ""),
             视角机位=pref_cfg.get("angle_view", "根据剧情"),
+            lang=lang,
         )[0])
     except Exception as _e:
         print(f"[JZL-偏好] 构建偏好失败：{_e}")
@@ -3750,6 +3773,104 @@ def _enhance_bus(enhance):
     }
 
 
+# ── Skill 解析（强化层可替换；强制格式层不受影响）───────────────
+def _skill_cfg(manager):
+    """取出规范化后的 skills 配置（缺键用默认值兜底）。"""
+    cfg = (manager or {}).get("skills") or {}
+    # 兼容：旧配置里扩写 skill 来源存在 skills.expand_source（已改名 expand_source_mode）
+    _expand_src = cfg.get("expand_source_mode")
+    if _expand_src in (None, ""):
+        _expand_src = cfg.get("expand_source")
+    return {
+        "mode_source": "user" if str(cfg.get("mode_source") or "builtin").lower() == "user" else "builtin",
+        "mode_skill": str(cfg.get("mode_skill") or "").strip(),
+        "expand_source_mode": "user" if str(_expand_src or "builtin").lower() == "user" else "builtin",
+        "expand_skill": str(cfg.get("expand_skill") or "").strip(),
+        "style_source": "user" if str(cfg.get("style_source") or "builtin").lower() == "user" else "builtin",
+        "style_skill": str(cfg.get("style_skill") or "").strip(),
+        "passthrough_mode": "free" if str(cfg.get("passthrough_mode") or "strict").lower() == "free" else "strict",
+    }
+
+
+def _skill_text(kind, skill_id, tag="管理器", lang=None):
+    """读取指定 skill 全文；失败返回空串并打印提示。
+
+    lang 非空时按语言取段：双语文件取对应语言，单语文件（纯中文/纯英文）原样使用。
+    """
+    try:
+        from .sheding.skills_loader import read_skill
+        text = read_skill(kind, skill_id, lang=lang) if skill_id else None
+    except Exception as exc:
+        print(f"[JZL-{tag}] ⚠️ 读取 skill 失败（{skill_id}）：{exc} → 已回退内置设定")
+        return ""
+    if not text:
+        print(f"[JZL-{tag}] ⚠️ 自定义 skill「{skill_id}」不存在或为空 → 已回退内置设定")
+        return ""
+    return text
+
+
+def _resolve_mode_skill(manager, tag="管理器", lang="zh"):
+    """拆解/仅提示词 的 (task, rules)；返回 ("","") 表示用内置 skill。"""
+    cfg = _skill_cfg(manager)
+    if cfg["mode_source"] != "user" or not cfg["mode_skill"]:
+        return ("", "")
+    text = _skill_text("mode", cfg["mode_skill"], tag, lang=lang)
+    if not text:
+        return ("", "")
+    try:
+        from .sheding.skills_loader import parse_mode_skill
+        task, rules = parse_mode_skill(text)
+    except Exception:
+        task, rules = "", text
+    if not task:
+        task = ("按「C. 执行与审查流程 → 执行时遵守」中的自定义 skill 设定完成本次任务："
+                "把 A 的用户故事按情节拆解，并写成 MiniMax H3 可用的分段提示词（格式见 D）。")
+    print(f"[JZL-{tag}] 🎯 使用自定义拆解 skill：{cfg['mode_skill']}")
+    return (task, rules)
+
+
+def _resolve_expand_skill(manager, tag="管理器", lang="zh"):
+    """扩写模式的自定义 skill 全文；空串表示用内置。"""
+    cfg = _skill_cfg(manager)
+    if cfg["expand_source_mode"] != "user" or not cfg["expand_skill"]:
+        return ""
+    text = _skill_text("expand", cfg["expand_skill"], tag, lang=lang)
+    if text:
+        print(f"[JZL-{tag}] 🎯 使用自定义扩写 skill：{cfg['expand_skill']}")
+    return text
+
+
+def _resolve_style_text(manager, story_style, tag="管理器", lang="zh"):
+    """故事风格全文：自定义风格 skill 优先，否则走内置 8 风格的名称解析（含英文译文）。"""
+    cfg = _skill_cfg(manager)
+    if cfg["style_source"] == "user" and cfg["style_skill"]:
+        text = _skill_text("style", cfg["style_skill"], tag, lang=lang)
+        if text:
+            print(f"[JZL-{tag}] 🎯 使用自定义故事风格：{cfg['style_skill']}")
+            return text
+    try:
+        from .sheding.story_styles import resolve_style as _rs
+        return _rs(story_style, lang)
+    except Exception:
+        return story_style or ""
+
+
+def _passthrough_free(manager):
+    """穿透生成模式是否「自由模式」（不校验提示词格式）。"""
+    return _skill_cfg(manager)["passthrough_mode"] == "free"
+
+
+def _check_passthrough(script, video_count, manager, auto_count=False, tag="管理器"):
+    """穿透生成模式校验入口：严格对齐走原逻辑；自由模式跳过校验。"""
+    if not _passthrough_free(manager):
+        return _check_decomposed_script(script, video_count, auto_count=auto_count, tag=tag)
+    shots = _shot_blocks(script)
+    n = max(1, min(SEGMENT_COUNT_MAX, len(shots))) if shots else 1
+    print(f"[JZL-{tag}] 🪄 自由模式：跳过提示词格式校验 → "
+          f"{('按提示词实际 %d 段生成' % n) if shots else '未识别到 [SHOT_START]，整段提示词按 1 段生成'}")
+    return (None, n)
+
+
 def _run_story_expander(story, manager, story_style, story_name, prompt_lang, seed, expand_words=500,
                         expand_source="素材", ref_image_intro="", ref_video_intro="", ref_audio_intro="",
                         gen_dir=None):
@@ -3760,10 +3881,6 @@ def _run_story_expander(story, manager, story_style, story_name, prompt_lang, se
     返回 (expanded_text, err)。扩写正文存 gen_dir/故事扩写/（无 gen_dir 时自动新建批次）。
     """
     from .sheding.story_expand_rules import build_expand_prompt
-    try:
-        from .sheding.story_styles import resolve_style as _resolve_style
-    except ImportError:
-        _resolve_style = lambda s: s or "热血战斗"
 
     enhance = manager.get("enhance") or {}
     lang = "zh" if "ZH" in str(prompt_lang or "") else "en"
@@ -3771,11 +3888,12 @@ def _run_story_expander(story, manager, story_style, story_name, prompt_lang, se
     expand_source = str(expand_source or "素材")
 
     style_name = (story_style or "热血战斗").strip()
-    style_text = _resolve_style(style_name)
+    style_text = _resolve_style_text(manager, style_name, tag="扩写", lang=lang)
     # 素材模式：拼三段素材描述（图片=角色/场景/道具，视频/音频仅作参考说明，扩写正文主要用图片素材的角色场景道具）
     material_intro = "\n".join(x for x in (ref_image_intro, ref_video_intro, ref_audio_intro) if x and x.strip())
     system_prompt = build_expand_prompt(lang, style_text, expand_words,
-                                        expand_source=expand_source, material_intro=material_intro)
+                                        expand_source=expand_source, material_intro=material_intro,
+                                        skill_text=_resolve_expand_skill(manager, tag="扩写", lang=lang))
 
     # 与拆解/增强共享 seed/生成后控制；强制卸载统一由外部 _llm_finish 处理
     output = _llm_chat(enhance, system_prompt, (story or "").strip(), seed)
@@ -3815,6 +3933,8 @@ def _run_script_processor(story, manager, video_count, story_style, story_name, 
     from .nodes_llama import JZL_MiniMax_ScriptProcessor
 
     enhance = manager.get("enhance") or {}
+    _lang = "zh" if "ZH" in str(prompt_lang or "") else "en"
+    _skill_task, _skill_rules = _resolve_mode_skill(manager, lang=_lang)
     is_api = "api" in str(enhance.get("llm_backend", ""))
     custom_config, parameters = _llm_local_config(enhance)
     _vc_auto = bool(manager.get("_jzl_auto_count"))
@@ -3840,7 +3960,7 @@ def _run_script_processor(story, manager, video_count, story_style, story_name, 
         mode=mode,
         story_name=(story_name or "").strip(),
         story_input=(story or "").strip(),
-        story_style=story_style or "热血战斗",
+        story_style=_resolve_style_text(manager, story_style, lang=_lang) or "热血战斗",
         use_custom_rule=bool(custom_rule_text),
         segment_count=seg_label,
         segment_duration=duration,
@@ -3857,10 +3977,12 @@ def _run_script_processor(story, manager, video_count, story_style, story_name, 
         llama_model=custom_config if not is_api else None,
         parameters=parameters if not is_api else None,
         api_config=json.dumps(enhance.get("api") or {}, ensure_ascii=False) if is_api else None,
-        preference=_build_preference(enhance),
+        preference=_build_preference(enhance, _lang),
         custom_rule_path=custom_rule_text or None,
         gen_dir=gen_dir,
         seam_runway=seam_runway,
+        skill_task=_skill_task,
+        skill_rules=_skill_rules,
         # 增强开启时这次加载会一直服务到增强结束 → 日志按「增强提示词」命名（与增强共用同一个本地模型）
         llm_purpose=("增强提示词" if enhance_enabled else "拆解剧本"),
     )
@@ -3879,10 +4001,6 @@ def _run_prompt_enhancer(segmented_text, manager, duration, story_style, prompt_
     增强成功后把结果保存到 gen_dir/已增强剧本/（无 gen_dir 时自动新建批次）。
     """
     from .nodes_prompt_enhancer import JZL_MiniMaxPromptEnhancer
-    try:
-        from .sheding.story_styles import resolve_style as _resolve_style
-    except ImportError:
-        _resolve_style = lambda s: s or "热血战斗"
 
     enhance = manager.get("enhance") or {}
     lang = "zh" if "ZH" in str(prompt_lang or "") else "en"
@@ -3891,7 +4009,7 @@ def _run_prompt_enhancer(segmented_text, manager, duration, story_style, prompt_
 
     # 注入完整故事风格文本（视觉风格/色调光线/摄影语言/核心导演语法），增强器按风格逐条落实
     style_name = (story_style or "热血战斗").strip()
-    style_text = _resolve_style(style_name)
+    style_text = _resolve_style_text(manager, style_name, tag="增强", lang=lang)
 
     bus = _enhance_bus(enhance)
     bus.update({
@@ -3899,7 +4017,7 @@ def _run_prompt_enhancer(segmented_text, manager, duration, story_style, prompt_
         "story_style": style_text,
         "segment_duration": duration,
         "seam_runway": float(seam_runway or 0.0),
-        "preference": _build_preference(enhance),
+        "preference": _build_preference(enhance, lang),
         "custom_rules": (enhance.get("system_prompt") or "").strip(),
     })
     try:
@@ -4378,8 +4496,8 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
 
         # 穿透生成模式：必须使用「拆解模式」拆解好的提示词；格式不对直接终止；段数自动对齐提示词实际分段数
         if passthrough:
-            _pt_err, _pt_n = _check_decomposed_script(prompt_input, video_count,
-                                                      auto_count=bool(manager.get("_jzl_auto_count")), tag="管理器")
+            _pt_err, _pt_n = _check_passthrough(prompt_input, video_count, manager,
+                                                     auto_count=bool(manager.get("_jzl_auto_count")), tag="管理器")
             if _pt_err:
                 print(f"[JZL-管理器] ❌ {_pt_err}（已终止）")
                 return io.NodeOutput([None], [None], prompt_input or "",
@@ -4889,8 +5007,8 @@ class JZL_MiniMaxAssetManagerMax(io.ComfyNode):
 
         # 穿透生成模式：必须使用「拆解模式」拆解好的提示词；格式不对直接终止；段数自动对齐提示词实际分段数
         if passthrough:
-            _pt_err, _pt_n = _check_decomposed_script(prompt_input, video_count,
-                                                      auto_count=bool(manager.get("_jzl_auto_count")), tag="Max")
+            _pt_err, _pt_n = _check_passthrough(prompt_input, video_count, manager,
+                                                     auto_count=bool(manager.get("_jzl_auto_count")), tag="Max")
             if _pt_err:
                 print(f"[JZL-Max] ❌ {_pt_err}（已终止）")
                 return io.NodeOutput(prompt_input or "", block_execution=f"❌ {_pt_err}",
@@ -5398,8 +5516,8 @@ class JZL_MiniMaxAssetManagerInfinite(io.ComfyNode):
 
         # 穿透生成模式：必须使用「拆解模式」拆解好的提示词；格式不对直接终止；段数自动对齐提示词实际分段数
         if passthrough:
-            _pt_err, _pt_n = _check_decomposed_script(prompt_input, video_count,
-                                                      auto_count=bool(manager.get("_jzl_auto_count")), tag="无限时长")
+            _pt_err, _pt_n = _check_passthrough(prompt_input, video_count, manager,
+                                                     auto_count=bool(manager.get("_jzl_auto_count")), tag="无限时长")
             if _pt_err:
                 print(f"[JZL-无限时长] ❌ {_pt_err}（已终止）")
                 return io.NodeOutput(prompt_input or "", block_execution=f"❌ {_pt_err}",
@@ -5980,8 +6098,8 @@ class JZL_MiniMaxAssetManagerShortDrama(io.ComfyNode):
 
         # 穿透生成模式：必须使用「拆解模式」拆解好的提示词；格式不对直接终止；段数自动对齐提示词实际分段数
         if passthrough:
-            _pt_err, _pt_n = _check_decomposed_script(prompt_input, video_count,
-                                                      auto_count=bool(manager.get("_jzl_auto_count")), tag="短剧导演台")
+            _pt_err, _pt_n = _check_passthrough(prompt_input, video_count, manager,
+                                                     auto_count=bool(manager.get("_jzl_auto_count")), tag="短剧导演台")
             if _pt_err:
                 print(f"[JZL-短剧导演台] ❌ {_pt_err}（已终止）")
                 return io.NodeOutput(prompt_input or "", block_execution=f"❌ {_pt_err}",
@@ -6428,8 +6546,8 @@ class JZL_MiniMaxAssetManagerMini(io.ComfyNode):
 
         # 穿透生成模式：必须使用「拆解模式」拆解好的提示词；格式不对直接终止；段数自动对齐提示词实际分段数
         if passthrough:
-            _pt_err, _pt_n = _check_decomposed_script(prompt_input, video_count,
-                                                      auto_count=bool(manager.get("_jzl_auto_count")), tag="Mini")
+            _pt_err, _pt_n = _check_passthrough(prompt_input, video_count, manager,
+                                                     auto_count=bool(manager.get("_jzl_auto_count")), tag="Mini")
             if _pt_err:
                 print(f"[JZL-Mini] ❌ {_pt_err}（已终止）")
                 return io.NodeOutput(model, vae, audio_vae, upscale_scale, [None], [None], prompt_input or "",

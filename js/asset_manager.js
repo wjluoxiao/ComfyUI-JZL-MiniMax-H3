@@ -1659,6 +1659,20 @@ function migrateLegacyDefaults(s) {
     }
     // ② 角色音色回归音频分类：把旧配置里挂在「图片 · 角色」上的 voice_path 迁成「音频 · 角色音色」条目
     if (migrateLegacyVoice(s)) changed = true;
+    // ③ skills.expand_source → expand_source_mode
+    //    fillDefaults 已先把新键补成默认值，所以这里只要旧键还在，就以旧值为准（旧键=用户此前选过的值）
+    const sk = s.skills;
+    if (sk && typeof sk === "object" && sk.expand_source !== undefined) {
+        sk.expand_source_mode = sk.expand_source;
+        delete sk.expand_source;
+        changed = true;
+    }
+    // ④ 「不拆解」已从 UI 移除（该职责属于穿透模式），旧配置统一修正为 story_decompose=true
+    const en = s.enhance;
+    if (en && typeof en === "object" && en.story_decompose === false) {
+        en.story_decompose = true;
+        changed = true;
+    }
     return changed;
 }
 
@@ -1893,6 +1907,13 @@ function jzlUIApply(el) {
     const _orig = parseFloat(el.dataset.jzlUiMaxH);
     const _cap = Math.round((window.innerHeight * 0.92) / z);
     el.style.maxHeight = (Number.isFinite(_orig) ? Math.min(_orig, _cap) : _cap) + "px";
+    // 固定高度同理：vh 形式的 height 会随 zoom 一起放大，按 92/z vh 重新封顶（保持固定高度不跳动）
+    if (el.dataset.jzlUiOrigH == null) el.dataset.jzlUiOrigH = el.style.height || "";
+    const _oh = String(el.dataset.jzlUiOrigH).trim();
+    const _vh = /^([\d.]+)vh$/i.exec(_oh);
+    if (_vh) {
+        el.style.height = Math.min(parseFloat(_vh[1]), 92 / z).toFixed(2) + "vh";
+    }
 }
 // 窗口尺寸变化时重算已打开弹窗的高度上限（保证视觉高度始终不超过视口）
 window.addEventListener("resize", () => {
@@ -3213,6 +3234,16 @@ function defaultSettings() {
             common: { clip: "", video_vae: "", audio_vae: "" },
         },
         assets: { images: [], videos: [], audios: [] },
+        // Skill 设定（强化层可替换；强制格式层不受影响）
+        // mode/expand/style 的 *_source: builtin | user；*_skill 存 `builtin:<名>` / `user:<名>`
+        // passthrough_mode: strict（严格对齐）| free（自由模式）
+        skills: {
+            mode_source: "builtin", mode_skill: "",
+            // expand_source_mode = 扩写 skill 来源（内置/自定义）；与 enhance.expand_source（素材/自由）无关
+            expand_source_mode: "builtin", expand_skill: "",
+            style_source: "builtin", style_skill: "",
+            passthrough_mode: "strict",
+        },
         // 「生成设定 → 语义修正」：语义桥（内部调用内置副本，不依赖用户另装该节点包）
         semantic_bridge: { enabled: false, adapter: "", alpha: 0.10, magnitude_match: "per_token" },
         enhance: {
@@ -3455,10 +3486,28 @@ function renderPromptPanel(c, s, d, node) {
     c.append(makeSectionTitle("输出语言"));
     c.append(field("输出语言", selectControl(["中文 [ZH]", "英文 [EN]"], p.prompt_lang || "中文 [ZH]", v => { p.prompt_lang = v; })));
 
-    // ── 开关 ──
-    c.append(makeSectionTitle("开关"));
-    c.append(field("故事拆解", checkboxControl(p.story_decompose !== false, "把故事通过 LLM 拆解为分段提示词", v => { p.story_decompose = v; })));
-    c.append(field("开启增强", checkboxControl(p.enabled === true, "拆解后对每个分段的详细描述再做润色", v => { p.enabled = v; })));
+    // ── 提示词增强（拆解后是否再润色 detailed_description）──
+    // 「不拆解」已移除：它只适用于「已拆解提示词」，而那正是穿透模式的职责（拆解模式还会直接报错）。
+    // 因此这里只剩一个复选框，控制 enhance.enabled；story_decompose 恒为 true（迁移时自动修正）。
+    c.append(makeSectionTitle("提示词增强"));
+    const _rmNow = jzlNormalizeRunMode(
+        readWidgetValue((node?.widgets || []).find((w) => w.name === "run_mode")) || "");
+    const _enhApplies = (_rmNow === "故事拆解模式" || _rmNow === "仅提示词输出");
+    if (_enhApplies) {
+        const enhCard = jzlPanelCard();
+        enhCard.append(field("拆解后增强", checkboxControl(p.enabled === true,
+            "拆解后再用 LLM 润色每个分段的 detailed_description（故事风格在这一步权重最高；耗时约翻倍）",
+            v => { p.enabled = !!v; if (v) p.story_decompose = true; })));
+        enhCard.append(el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 8px;",
+            "关闭 = 仅拆解后直接生成（默认，最快）。\n"
+            + "开启 = 拆解 → 增强 → 生成；故事风格只能在这一步真正决定成片质感。"));
+        c.append(enhCard);
+    } else {
+        c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 8px;white-space:pre-line;",
+            _rmNow === "故事扩写模式"
+                ? "当前为「故事扩写模式」：只把故事扩写成正文，不做拆解与增强，本项不适用。"
+                : "当前为「穿透生成模式」：跳过全部 LLM 步骤，本项不适用。"));
+    }
 
     // ── 故事扩写设置（📚 故事扩写模式专用）──
     c.append(makeSectionTitle("故事扩写设置"));
@@ -3747,7 +3796,8 @@ const RUN_MODE_TIPS = {
 
 // 故事风格注释（每条字数保持一致，便于扫读；与运行模式注释同一形式展示）
 const STORY_STYLE_TIPS = {
-    "禁用风格": "不使用预设风格设定参数",
+    // 「禁用风格」只是不做风格侧重，拆解与增强仍会正常执行（不要误当成增强开关）
+    "禁用风格": "不做风格侧重（纯按剧情与镜头偏好），仍会正常拆解与增强",
     "热血战斗": "适合竞技/武侠/修仙/末世",
     "悬疑惊悚": "适合推理/恐怖/犯罪/悬疑",
     "温馨日常": "适合生活/亲情/治愈系",
@@ -3757,16 +3807,270 @@ const STORY_STYLE_TIPS = {
     "歌神舞台": "适合音乐/舞台/歌舞表演",
 };
 
+// ── Skill 选择（强化层：拆解 / 扩写 / 故事风格）─────────────────────
+// 内置 skill 随插件发布；自定义 skill 存 ComfyUI user/jzl_skills/<kind>/（不随插件升级丢失）
+// 分层：skill 只改「怎么强化」，改不了输出格式与调度指令（强制层永远最后生效）。
+const JZL_SKILL_KEYS = {
+    mode: ["mode_source", "mode_skill"],
+    expand: ["expand_source_mode", "expand_skill"],
+    style: ["style_source", "style_skill"],
+};
+const JZL_SKILL_LABEL = { mode: "拆解 skill", expand: "扩写 skill", style: "故事风格 skill" };
+const JZL_SKILL_CACHE = { mode: null, expand: null, style: null };
+
+async function jzlFetchSkills(kind) {
+    try {
+        const r = await api.fetchApi(`/jzl/skills?kind=${encodeURIComponent(kind)}`);
+        const j = await r.json();
+        if (j && j.ok) {
+            JZL_SKILL_CACHE[kind] = j.items || [];
+            return { ok: true, items: JZL_SKILL_CACHE[kind], dirs: j.dirs || {} };
+        }
+        return { ok: false, items: [], error: (j && j.error) || "读取失败" };
+    } catch (e) {
+        return { ok: false, items: [], error: String((e && e.message) || e) };
+    }
+}
+
+async function jzlImportSkill(kind, file) {
+    const fd = new FormData();
+    fd.append("kind", kind);
+    fd.append("file", file, file.name || "skill.txt");
+    const r = await api.fetchApi("/jzl/skills/import", { method: "POST", body: fd });
+    return await r.json();
+}
+
+async function jzlReadSkill(kind, id) {
+    const r = await api.fetchApi(`/jzl/skills/read?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`);
+    return await r.json();
+}
+
+function _jzlSmallBtn(text, title) {
+    const b = el("button", "flex:0 0 auto;padding:6px 10px;border-radius:5px;border:1px solid #555;"
+        + "background:#2a2a2a;color:#ddd;font-size:12px;cursor:pointer;white-space:nowrap;", text);
+    b.type = "button";
+    if (title) b.title = title;
+    b.addEventListener("mousedown", (e) => e.stopPropagation());
+    return b;
+}
+
+// ── 运行参数面板的视觉分组：让「分类 → 子选项」一眼可分 ──
+// 分类 = 卡片（浅底+描边）；子选项 = 卡片内带橙色左条的缩进区。
+function jzlPanelCard() {
+    return el("div", "background:rgba(255,255,255,.025);border:1px solid #3a3a3a;border-radius:8px;"
+        + "padding:12px 12px 4px;margin:0 0 14px;");
+}
+
+/** 可选 chip（带边框的方框勾选，选中橙色高亮）。返回元素，元素上挂 __set(on) 用于外部同步。 */
+function jzlChoiceChip(label, checked, onChange, title) {
+    const chip = el("label", "display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:6px;"
+        + "border:2px solid " + (checked ? BOX_SEL.border : BOX_IDLE.border) + ";"
+        + "background:" + (checked ? BOX_SEL.bg : BOX_IDLE.bg) + ";color:" + (checked ? BOX_SEL.fg : BOX_IDLE.fg) + ";"
+        + "font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;user-select:none;");
+    if (title) chip.title = title;
+    const cb = el("input", "width:16px;height:16px;accent-color:#f59e0b;cursor:pointer;margin:0;");
+    cb.type = "checkbox";
+    cb.checked = !!checked;
+    cb.addEventListener("change", () => onChange(cb.checked));
+    chip.append(cb, el("span", "", label));
+    chip.__set = (on) => {
+        cb.checked = !!on;
+        _boxPaint(chip, !!on);
+    };
+    return chip;
+}
+
+/** 子选项区：橙色左条 + 淡色底 + 小标题，与上层「分类」形成清晰层级。 */
+function jzlSubPanel(labelText, hintText) {
+    const box = el("div", "margin:10px 0 12px;padding:8px 12px 2px;border-left:3px solid #f59e0b;"
+        + "background:rgba(245,158,11,.06);border-radius:0 6px 6px 0;");
+    if (labelText) {
+        box.append(el("div", "font-size:12px;font-weight:600;color:#f0b64a;margin-bottom:6px;letter-spacing:.02em;", labelText));
+    }
+    if (hintText) {
+        box.append(el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin-bottom:8px;white-space:pre-line;", hintText));
+    }
+    return box;
+}
+
+/**
+ * 强化层 skill 选择器：内置 / 自定义 + 选择 skill + 导入 + 预览框。
+ *
+ * bare=true 时只渲染「选择 skill / 导入 / 预览」三件套（调用方已自带 内置/自定义 开关，
+ * 例如「故事风格」），避免出现套娃的内置/自定义勾选。
+ */
+function skillSelector(kind, s, mark, opts) {
+    const bare = !!(opts && opts.bare);
+    const sk = s.skills || (s.skills = {});
+    const [srcKey, idKey] = JZL_SKILL_KEYS[kind];
+    const label = JZL_SKILL_LABEL[kind] || "skill";
+    const wrap = bare ? el("div", "margin:0 0 4px;") : jzlSubPanel(`本模式的强化设置（${label}）`);
+    const userMode = () => bare || String(sk[srcKey] || "builtin") === "user";
+
+    const row = el("div", "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;");
+    const customBox = el("div", "");
+
+    let sel, hint, preview, previewBtn;
+    let chipBuiltin = null, chipCustom = null;
+    const sync = () => {
+        const isUser = String(sk[srcKey] || "builtin") === "user";
+        if (chipBuiltin) chipBuiltin.__set(!isUser);
+        if (chipCustom) chipCustom.__set(isUser);
+        customBox.style.display = userMode() ? "" : "none";
+    };
+
+    if (!bare) {
+        chipBuiltin = jzlChoiceChip(`内置 ${label}`, !userMode(), (on) => {
+            if (!on) { sync(); return; }            // 单选语义：不允许全不选
+            sk[srcKey] = "builtin";
+            sync(); mark();
+        }, "使用随插件发布的内置设定词（严格保留现有行为）");
+        chipCustom = jzlChoiceChip("自定义 skill", userMode(), (on) => {
+            if (!on) { sync(); return; }
+            sk[srcKey] = "user";
+            sync(); mark();
+            loadList();
+        }, "使用你自己导入的 skill（下拉选择 / 导入 / 预览）");
+        row.append(chipBuiltin, chipCustom);
+    }
+
+    // 选择 skill（下拉）→ 导入 → 预览框
+    sel = selectControl([], "", (v) => { sk[idKey] = v; mark(); syncPreview(); });
+    const importBtn = _jzlSmallBtn("📥 导入", "上传本地 .txt / .md 作为自定义 skill");
+    const btnRow = el("div", "display:flex;align-items:center;gap:8px;margin:0 0 6px;");
+    previewBtn = _jzlSmallBtn("👁 预览", "查看所选 skill 的完整内容（只读）");
+    btnRow.append(importBtn, previewBtn);
+    hint = el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 6px;white-space:pre-line;");
+    preview = el("pre", "display:none;margin:0 0 8px;padding:8px 10px;max-height:220px;overflow:auto;"
+        + "background:var(--comfy-input-bg,#1d1d1d);border:1px solid var(--border-color,#444);border-radius:4px;"
+        + "font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;");
+    customBox.append(field("选择 skill", sel), btnRow, hint, preview);
+    wrap.append(row, customBox);
+
+    const syncPreview = () => {
+        const has = !!sk[idKey];
+        previewBtn.disabled = !has;
+        previewBtn.style.opacity = has ? "" : "0.5";
+    };
+
+    const loadList = async (focusId) => {
+        const res = await jzlFetchSkills(kind);
+        const users = (res.items || []).filter((it) => it.source === "user");
+        sel.innerHTML = "";
+        if (!users.length) {
+            const op = el("option", "", "（还没有自定义 skill，点「📥 导入」添加）");
+            op.value = "";
+            sel.append(op);
+            sel.disabled = true;
+            hint.textContent = res.ok
+                ? `存放位置：${(res.dirs && res.dirs.user) || "ComfyUI/user/jzl_skills/"}`
+                : `读取 skill 列表失败：${res.error || "未知错误"}`;
+            sk[idKey] = "";
+            syncPreview();
+            return;
+        }
+        sel.disabled = false;
+        for (const it of users) {
+            const op = el("option", "", it.description ? `${it.name} — ${it.description}` : it.name);
+            op.value = it.id;
+            op.title = it.path || "";
+            sel.append(op);
+        }
+        const wanted = focusId || sk[idKey];
+        if (wanted && users.some((it) => it.id === wanted)) {
+            sk[idKey] = wanted;
+        } else if (userMode() || focusId) {
+            sk[idKey] = users[0].id;      // 选中项已失效 → 落到第一个可用 skill
+        }
+        sel.value = sk[idKey] || users[0].id;
+        hint.textContent = `存放位置：${(res.dirs && res.dirs.user) || "ComfyUI/user/jzl_skills/"}\n`
+            + "skill 只影响「怎么强化」，不会改变输出格式与调度指令。";
+        syncPreview();
+    };
+
+    importBtn.addEventListener("click", () => {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.accept = ".txt,.md,.markdown,text/plain,text/markdown";
+        inp.style.display = "none";
+        inp.addEventListener("change", async () => {
+            const file = (inp.files || [])[0];
+            try { document.body.removeChild(inp); } catch (_) {}
+            if (!file) return;
+            hint.textContent = `正在导入「${file.name}」…`;
+            const res = await jzlImportSkill(kind, file);
+            if (!res || !res.ok) {
+                hint.textContent = `导入失败：${(res && res.error) || "未知错误"}`;
+                return;
+            }
+            JZL_SKILL_CACHE[kind] = res.items || [];
+            sk[srcKey] = "user";
+            sk[idKey] = res.id || "";
+            sync();
+            await loadList(res.id);
+            mark();
+            hint.textContent = `已导入「${res.id.replace(/^user:/, "")}」（已自动选中）`;
+        });
+        document.body.append(inp);
+        inp.click();
+    });
+
+    previewBtn.addEventListener("click", async () => {
+        if (preview.style.display !== "none") { preview.style.display = "none"; return; }
+        const id = sk[idKey];
+        if (!id) return;
+        preview.textContent = "读取中…";
+        preview.style.display = "block";
+        const res = await jzlReadSkill(kind, id);
+        preview.textContent = (res && res.ok) ? res.text : `读取失败：${(res && res.error) || "未知错误"}`;
+    });
+
+    sync();
+    syncPreview();
+    loadList();      // 始终预取列表：用户随时切到「自定义」都能立刻看到下拉内容
+    return wrap;
+}
+
+/** 穿透生成模式：严格对齐 / 自由模式。 */
+function passthroughSelector(s, mark) {
+    const sk = s.skills || (s.skills = {});
+    const wrap = jzlSubPanel("本模式的校验方式");
+    const row = el("div", "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;");
+    const isFree = () => String(sk.passthrough_mode || "strict") === "free";
+    let chipStrict, chipFree;
+    const sync = () => {
+        const free = isFree();
+        chipStrict.__set(!free);
+        chipFree.__set(free);
+    };
+    chipStrict = jzlChoiceChip("严格对齐", !isFree(), (on) => {
+        if (!on) { sync(); return; }
+        sk.passthrough_mode = "strict"; sync(); mark();
+    }, "提示词必须符合现有格式要求（[SHOT_START] + ===H3_PROMPT===），否则报错终止");
+    chipFree = jzlChoiceChip("自由模式", isFree(), (on) => {
+        if (!on) { sync(); return; }
+        sk.passthrough_mode = "free"; sync(); mark();
+    }, "无任何约束：跳过格式校验，有分段块就按段数生成，没有就整段按 1 段生成");
+    row.append(chipStrict, chipFree);
+    wrap.append(row, el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 8px;white-space:pre-line;",
+        "严格对齐：必须含 [SHOT_START]…[SHOT_END] 与 ===H3_PROMPT===，否则报错终止。\n"
+        + "自由模式：跳过格式校验；有分段块就按段数生成，没有就整段按 1 段生成。"));
+    sync();
+    return wrap;
+}
+
 function renderGenSettingsPanel(c, s, node, d) {
     const { cur, set, comboOptions } = panelWidgetIO(node);
     renderAutoSave(c, s);
+    const sk = s.skills || (s.skills = {});
+    const mark = () => c.dispatchEvent(new Event("change", { bubbles: true }));   // 触发面板自动保存
 
     // ── 分类顺序：故事名称 → 运行模式 → 故事风格 → 语义修正 ──
     c.append(makeSectionTitle("故事名称"));
     c.append(field("故事名称", textControl(String(cur("story_name", "")),
         "用于保存命名 / output/jzl/{故事名} / 生成视频管理", v => set("story_name", v))));
 
-    // 运行模式：左边模式名称、右边勾选 + 注释（与「大语言模型配置 → 开关」同款），单选、不允许全不选
+    // ── 运行模式：一排 chip（单选）→ 选中项下方才展开该模式的强化设置 ──
     c.append(makeSectionTitle("运行模式"));
     const modes = comboOptions("run_mode", Object.keys(RUN_MODE_TIPS));
     const curMode = String(cur("run_mode", ""));
@@ -3774,31 +4078,89 @@ function renderGenSettingsPanel(c, s, node, d) {
     const tipFor = (m) => RUN_MODE_TIPS[m]
         || RUN_MODE_TIPS[Object.keys(RUN_MODE_TIPS).find((k) => sameMode(k, m))]
         || "（无说明）";
-    const modeBoxes = [];
+
+    const modeCard = jzlPanelCard();
+    const modeRow = el("div", "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;");
+    const modeChips = [];
+    const modeHint = el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 2px;");
+    const subBox = el("div", "");
+    let subKind = null;
+    const syncModeChips = () => {
+        const now = cur("run_mode", "");
+        for (const [v, chip] of modeChips) chip.__set(sameMode(v, now));
+    };
+    const renderSub = () => {
+        const nm = jzlNormalizeRunMode(cur("run_mode", ""));
+        modeHint.textContent = tipFor(modes.find((m) => sameMode(m, cur("run_mode", ""))) || nm);
+        const kind = (nm === "故事拆解模式" || nm === "仅提示词输出") ? "mode"
+            : (nm === "故事扩写模式") ? "expand"
+                : (nm === "穿透生成模式") ? "pass" : "";
+        if (kind !== subKind) {
+            subKind = kind;
+            subBox.innerHTML = "";
+            if (kind === "mode") subBox.append(skillSelector("mode", s, mark));
+            else if (kind === "expand") subBox.append(skillSelector("expand", s, mark));
+            else if (kind === "pass") subBox.append(passthroughSelector(s, mark));
+        }
+    };
     for (const m of modes) {
-        const cb = checkboxControl(sameMode(curMode, m), tipFor(m), (on) => {
-            const i = cb.querySelector("input");
-            if (!on) { if (i) i.checked = true; return; }   // 单选语义：至少保留一项
-            for (const [v2, b2] of modeBoxes) {
-                const i2 = b2.querySelector("input");
-                if (i2) i2.checked = sameMode(v2, m);
-            }
+        const chip = jzlChoiceChip(m, sameMode(curMode, m), (on) => {
+            if (!on) { syncModeChips(); return; }   // 单选语义：至少保留一项
             // 优先写回下拉里真实存在的选项字符串（表情/变体符不一致时也能命中）
             const actual = modes.find((o) => sameMode(o, m)) || m;
             set("run_mode", actual);
-        });
-        modeBoxes.push([m, cb]);
-        c.append(field(m, cb));
+            syncModeChips();
+            renderSub();
+        }, tipFor(m));
+        modeChips.push([m, chip]);
+        modeRow.append(chip);
     }
+    modeCard.append(modeRow, modeHint, subBox);
+    c.append(modeCard);
+    renderSub();
 
+    // ── 故事风格：内置 8 风格 / 自定义 skill（chip 切换，内容区缩进）──
     c.append(makeSectionTitle("故事风格"));
-    // 名称 + 注释（勾选框在前）；未收录的风格只显示名称
+    const styleCard = jzlPanelCard();
+    const styleRow = el("div", "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;");
+    const builtinStyleBox = el("div", "");
+    const customStyleBox = el("div", "");
+    const styleUser = () => String(sk.style_source || "builtin") === "user";
+    let chipStyleB, chipStyleC;
+    const syncStyle = () => {
+        const u = styleUser();
+        chipStyleB.__set(!u);
+        chipStyleC.__set(u);
+        builtinStyleBox.style.display = u ? "none" : "";
+        customStyleBox.style.display = u ? "" : "none";
+    };
+    chipStyleB = jzlChoiceChip("内置风格", !styleUser(), (on) => {
+        if (!on) { syncStyle(); return; }
+        sk.style_source = "builtin"; syncStyle(); mark();
+    }, "使用内置的 8 种故事风格");
+    chipStyleC = jzlChoiceChip("自定义 skill", styleUser(), (on) => {
+        if (!on) { syncStyle(); return; }
+        sk.style_source = "user"; syncStyle(); mark();
+    }, "使用导入的故事风格 skill（下拉 / 导入 / 预览）");
+    styleRow.append(chipStyleB, chipStyleC);
+    // 生效范围注释（故事风格的实际作用点）
+    const styleNote = el("div", "font-size:12px;color:#c9a86a;line-height:1.7;margin:0 0 8px;white-space:pre-line;",
+        "⚠️ 仅在开启「提示词增强」时才真正决定成片质感（增强把故事风格作为最高权重锚点，逐句落到画面）；"
+        + "拆解阶段只作导演视角参考，故事扩写阶段作为扩写基调。");
+    const styleContent = el("div", "padding-left:10px;border-left:2px solid #3a3a3a;");
+    // 内置风格：名称 + 注释（勾选框在前）；未收录的风格只显示名称
     const styleOpts = comboOptions("story_style", []).map((v) => {
         const name = String(v);
         const tip = STORY_STYLE_TIPS[name];
         return { value: name, label: tip ? `${name}：${tip}` : name };
     });
-    c.append(checkboxGroup(styleOpts, String(cur("story_style", "")), v => set("story_style", v)));
+    builtinStyleBox.append(checkboxGroup(styleOpts, String(cur("story_style", "")), v => set("story_style", v)));
+    // 自定义风格：只渲染「选择 skill / 导入 / 预览」，不再嵌套第二层内置/自定义
+    customStyleBox.append(skillSelector("style", s, mark, { bare: true }));
+    styleContent.append(builtinStyleBox, customStyleBox);
+    styleCard.append(styleRow, styleNote, styleContent);
+    c.append(styleCard);
+    syncStyle();
 
     // ── 语义修正（语义桥）：勾选决定开启；内部调用内置副本，不依赖用户另装该节点包 ──
     const sb = s.semantic_bridge || (s.semantic_bridge = { enabled: false, adapter: "", alpha: 0.10, magnitude_match: "per_token" });
@@ -4636,7 +4998,9 @@ function buildModal(node, data, panelId) {
     const title = (PANELS[panelId] && PANELS[panelId].label) || "🎬 JZL - 🤖 MiniMax-H3短剧导演台Pro";
 
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:9999;display:flex;align-items:center;justify-content:center;overflow:auto;");
-    const dialog = el("section", "background:#1c1c1e;border:1px solid #333;border-radius:8px;width:820px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);flex:0 0 auto;");
+    // 固定为最大高度：切换面板时窗口尺寸不跳动；内容不足时底部留空（panelBox 仍是 flex:1）
+    const dialog = el("section", "background:#1c1c1e;border:1px solid #333;border-radius:8px;width:820px;"
+        + "height:90vh;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);flex:0 0 auto;");
     dialog.className = "jzl-modal";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
@@ -4648,8 +5012,8 @@ function buildModal(node, data, panelId) {
     header.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin-top:5px;", "根据本地环境配置参数，保存后重新执行节点生效。"));
     dialog.append(header);
 
-    // 单面板内容
-    const panelBox = el("div", "padding:16px 20px;overflow-y:auto;flex:1;min-height:280px;");
+    // 单面板内容：flex:1 + min-height:0 → 始终占满 dialog 剩余高度，面板之间切换不改变窗口大小
+    const panelBox = el("div", "padding:16px 20px;overflow-y:auto;overflow-x:hidden;flex:1 1 auto;min-height:0;");
     switch (panelId) {
         case "assets": {
             const buildAssets = () => {

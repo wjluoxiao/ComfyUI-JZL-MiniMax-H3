@@ -12,7 +12,7 @@ retention_analysis / overall_soundscape / non_diegetic_music / 调度指令）�
 import re
 
 from .llama_backend import LLAMA_CPP_STORAGE
-from .nodes_llama import JZL_MiniMax_ScriptProcessor
+from .nodes_llama import JZL_MiniMax_ScriptProcessor, _repair_segment_timestamps
 from .sheding.prompt_enhancer_rules import build_enhancer_prompt, build_segment_position
 
 
@@ -332,6 +332,9 @@ class JZL_MiniMaxPromptEnhancer:
         parts = [prefix] if prefix else []
         parts += [f"[SHOT_START]\n{b}\n[SHOT_END]" for b in enhanced_blocks]
         result = "\n\n".join(parts)
+
+        # ⏱️ 兜底：增强后若时间戳超出该段「时长」，按比例压回时长内（否则成片会丢内容）
+        result, _ = _repair_segment_timestamps(result, tag="增强")
 
         if failed:
             result += f"\n\n[⚠️ 提示词增强] {failed} 个分段润色失败，已保留原 detailed_description。"

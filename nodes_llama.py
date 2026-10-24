@@ -120,6 +120,76 @@ def _write_api_settings(data):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  时长兜底：把越界的 [Shot N] 时间戳压回本段「时长」内
+# ═══════════════════════════════════════════════════════════════
+
+_TS_RE = re.compile(r"\[Shot\s*(\d+)\]\s*At\s+(\d{1,3}):(\d{2})\.(\d{1,3})")
+_SEG_DUR_RE = re.compile(r"\*\*(?:时长|Duration)\*\*\s*[:：]\s*(\d+(?:\.\d+)?)")
+
+
+def _fmt_ts(seconds):
+    seconds = max(0.0, float(seconds))
+    m = int(seconds // 60)
+    s = seconds - m * 60
+    return f"{m:02d}:{s:06.3f}"
+
+
+def _repair_segment_timestamps(text, tag="剧本"):
+    """把每个分段内超出该段「**时长**」的 [Shot N] 时间戳按比例压回时长内。
+
+    LLM 偶尔无视时长（例如 5 秒的分段写到 At 00:18.500）——原样交给采样会丢掉后半段内容。
+    这里按比例缩放时间戳（保留相对节奏），并打印警告提示可以重跑或加长时长。
+    返回 (新文本, 修复段数)。
+    """
+    if not text or "[SHOT_START]" not in text:
+        return text, 0
+
+    blocks = re.findall(r"\[SHOT_START\].*?\[SHOT_END\]", text, re.DOTALL)
+    fixed = 0
+    for block in blocks:
+        m = _SEG_DUR_RE.search(block)
+        if not m:
+            continue
+        try:
+            dur = float(m.group(1))
+        except Exception:
+            continue
+        if dur <= 0:
+            continue
+        ts = _TS_RE.findall(block)
+        if len(ts) < 1:
+            continue
+        secs = [int(h) * 60 + int(s) + float("0." + ms.ljust(3, "0")) for _, h, s, ms in ts]
+        max_sec = max(secs)
+        if max_sec < dur - 0.05:
+            continue
+        # 最后一个镜头也要留在时长内 → 目标末帧时间戳 = 时长的 85%（余下留给末镜）
+        target = max(0.3, dur * 0.85)
+        scale = target / max_sec
+        new_secs, prev = [], -1.0
+        for v in secs:
+            nv = round(v * scale, 3)
+            if nv <= prev:
+                nv = round(prev + 0.1, 3)
+            if nv >= dur:
+                nv = round(max(0.1, dur - 0.05), 3)
+            new_secs.append(nv)
+            prev = nv
+        it = iter(new_secs)
+
+        def _repl(mm):
+            return f"[Shot {mm.group(1)}] At {_fmt_ts(next(it, 0.0))}"
+
+        new_block = _TS_RE.sub(_repl, block)
+        text = text.replace(block, new_block)
+        fixed += 1
+        print(f"[JZL-{tag}] ⚠️ 本段时长 {dur:g} 秒但时间戳写到 {max_sec:g} 秒"
+              f"（{len(secs)} 个时间戳）→ 已按比例压缩到 {dur:g} 秒内；建议减少镜头或加长时长后重跑")
+    return text, fixed
+
+
+
+# ═══════════════════════════════════════════════════════════════
 #  节点 1: Llama 模型加载器 Pro
 # ═══════════════════════════════════════════════════════════════
 
@@ -369,7 +439,48 @@ class JZL_MiniMaxH3Preference:
     CATEGORY = "JZL/MiniMax"
 
     def build(self, 景别偏好, 运镜偏好, 切镜节奏, 转场偏好, 音乐风格, 创作要求, 详细描述字数, 自定义镜头语言,
-              视角机位="根据剧情"):
+              视角机位="根据剧情", lang="zh"):
+        is_en = str(lang or "").lower().startswith("en")
+        if is_en:
+            from .sheding.preference_hints_en import (
+                SHOT_SIZE_HINTS_EN, CAMERA_HINTS_EN, ANGLE_HINTS_EN, CUT_HINTS_EN,
+                TRANSITION_HINTS_EN, CREATIVE_HINTS_EN, DETAIL_LENGTH_HINTS_EN,
+            )
+            lines = ["## Camera-language preference (every segment in this batch MUST follow it)"]
+            lines.append(f"- Shot size: {SHOT_SIZE_HINTS_EN.get(景别偏好, 景别偏好)}")
+            _angle = (视角机位 or "根据剧情").strip() or "根据剧情"
+            lines.append(f"- Camera angle: {ANGLE_HINTS_EN.get(_angle, _angle)}")
+            if _angle not in ("根据剧情", "随机组合"):
+                lines.append("- Angle priority: when the angle conflicts with camera move / shot size, the angle wins "
+                             "(e.g. with a Dutch angle do not also write a Roll spin; with a POV do not also write "
+                             "orbit or tracking)")
+            lines.append(f"- Camera move: {CAMERA_HINTS_EN.get(运镜偏好, 运镜偏好)}")
+            lines.append(f"- Cut rhythm: {CUT_HINTS_EN.get(切镜节奏, 切镜节奏)}")
+            if 转场偏好 == "随机":
+                lines.append("- Transition: choose freely among hard cut / cross-dissolve / fade / wipe according to "
+                             "the story and the story style")
+            else:
+                lines.append(f"- Transition: {TRANSITION_HINTS_EN.get(转场偏好, 转场偏好)}")
+            if "不指定" in 音乐风格:
+                pass
+            elif "禁止音乐" in 音乐风格:
+                lines.append("- Background music: NONE — non_diegetic_music MUST output exactly \"N/A\"; never write "
+                             "any score, melody or rhythm")
+            else:
+                en_name = 音乐风格.split(" / ")[-1]
+                hint = JZL_MiniMaxPreset._MUSIC_HINTS.get(音乐风格, "")
+                lines.append(f"- Background music style: {en_name} — {hint}")
+            if 创作要求 == "无特别要求":
+                lines.append("- Creative requirement: let the story style guide you")
+            else:
+                lines.append(f"- Creative requirement: {CREATIVE_HINTS_EN.get(创作要求, 创作要求)}")
+            n = DETAIL_LENGTH_HINTS_EN.get(详细描述字数) or "350-500"
+            lines.append(f"- Detailed-description length: {n} words")
+            custom = (自定义镜头语言 or "").strip()
+            if custom:
+                lines.append(f"- Custom: {custom}")
+            return ("\n".join(lines),)
+
         lines = ["## 镜头语言偏好（本批分段必须严格遵守）"]
 
         lines.append(f"- 景别：{self._SHOT_SIZE_HINTS.get(景别偏好, 景别偏好)}")
@@ -938,10 +1049,11 @@ class JZL_MiniMax_ScriptProcessor:
                 enable_scene, enable_props, enable_video, enable_audio,
                 seed, force_offload, save_states,
                 llm_backend="local", llama_model=None, parameters=None, api_config=None, preference=None, custom_rule_path=None, gen_dir=None,
-                seam_runway=0.0, llm_purpose="拆解剧本"):
+                seam_runway=0.0, llm_purpose="拆解剧本", skill_task="", skill_rules=""):
         """seam_runway：「无限时长」节点传入的段首衔接跑道（秒），0 = 未启用衔接。
         启用时第 2 段起的**生成时长 = 设定时长 + 跑道**（跑道承接上段末帧、成片裁掉 ⇒ 落盘 = 设定时长），
         会写进「**时长**」字段要求与 user 消息（见 presets/script.py::_duration_spec_with_runway）。
+        skill_task / skill_rules：强化层设定词（内置或自定义 skill）；为空时使用内置 skill。
         """
         from .presets.script import build_shot_prompt, SEGMENT_COUNT_OPTIONS, _resolve_segment_count, _parse_duration_spec, _duration_spec_with_runway
 
@@ -965,24 +1077,47 @@ class JZL_MiniMax_ScriptProcessor:
             preference=(preference or "").strip(),
             custom_rules=custom_rules,
             seam_runway=seam_runway,
+            skill_task=skill_task,
+            skill_rules=skill_rules,
         )
         segment_count = _resolve_segment_count(segment_count)
         _auto_count = segment_count is None      # 「剧情决定」：段数由 LLM 按剧情时间线长度自动决定
         _dlo_set, _dhi_set, _ddesc = _parse_duration_spec(segment_duration)      # 设定时长（= 落盘时长）
         _dlo, _dhi, _ddesc = _duration_spec_with_runway(segment_duration, seam_runway)   # 生成时长
-        if seam_runway > 0:
-            _r = f"{seam_runway:.2f}".rstrip("0").rstrip(".")
-            _gen = f"{_dlo:.2f}".rstrip("0").rstrip(".") if _dlo == _dhi else f"{_dlo:.1f}~{_dhi:.1f}"
-            _fld = "**Duration**" if lang == "en" else "**时长**"
-            _dur_clause = (f"每段的生成时长（写进该段 {_fld} 字段）为：第 1 段固定 {int(_dlo_set)} 秒；"
-                           f"第 2 段起 {_gen} 秒（= 落盘 {int(_dlo_set)} 秒 + 段首衔接 {_r} 秒；"
-                           f"段首 {_r} 秒是承接上一段末帧的延续段，成片会整段裁掉，新内容从 {_r} 秒之后开始）")
+        if lang == "en":
+            if seam_runway > 0:
+                _r = f"{seam_runway:.2f}".rstrip("0").rstrip(".")
+                _gen = f"{_dlo:.2f}".rstrip("0").rstrip(".") if _dlo == _dhi else f"{_dlo:.1f}-{_dhi:.1f}"
+                _dur_clause = (f"the per-segment generation duration (write it into that segment's **Duration** field) is: "
+                               f"segment 1 is fixed at {int(_dlo_set)} s; from segment 2 onwards {_gen} s "
+                               f"(= {int(_dlo_set)} s delivered + {_r} s of seam hand-off at the segment head; "
+                               f"the first {_r} s is a continuation run that carries over the previous segment's last frame "
+                               f"and is trimmed off entirely in the final cut, so new content starts after {_r} s)")
+            else:
+                _dur_clause = (f"each segment is exactly {int(_dlo)} s" if _dlo == _dhi else
+                               f"each segment lasts between {int(_dlo)} and {int(_dhi)} seconds and you decide the actual "
+                               f"seconds for each segment along the story arc (write it into that segment's **Duration** field)")
+            _seg_clause = ("decide the number of segments automatically from the length of the story's timeline "
+                           "(segments = total story duration divided by the per-segment duration; use each segment to the full "
+                           "when possible, i.e. take the upper bound of the range; at least 1 and at most 56 segments; when the "
+                           "story is very short prefer a single long single-take segment and never chop it into many short ones)"
+                           if _auto_count else f"generate exactly {segment_count} segments")
+            user_msg = f"{_seg_clause}; {_dur_clause}; output the complete [SHOT_START]...[SHOT_END] blocks " \
+                       f"(segment info + the six-part prompt + schedule instructions)."
         else:
-            _dur_clause = f"每段视频固定 {int(_dlo)} 秒" if _dlo == _dhi else f"每段视频时长在 {int(_dlo)}~{int(_dhi)} 秒区间内，由你按剧情弧线给每段分配实际秒数（写进该段 {'**Duration**' if lang == 'en' else '**时长**'} 字段）"
-        _seg_clause = ("请按剧情发展的时间线长度自动决定分段数（段数 = 剧情总时长 ÷ 每段时长，"
-                       "优先用足每段时长（区间取上限），最少 1 段、最多 56 段；剧情很短时宁可用 1 段长镜，"
-                       "绝不切成很多短段）" if _auto_count else f"请生成恰好 {segment_count} 个分段")
-        user_msg = f"{_seg_clause}，{_dur_clause}，输出 [SHOT_START]...[SHOT_END] 完整块（分段信息 + 六段提示词 + 调度指令）。"
+            if seam_runway > 0:
+                _r = f"{seam_runway:.2f}".rstrip("0").rstrip(".")
+                _gen = f"{_dlo:.2f}".rstrip("0").rstrip(".") if _dlo == _dhi else f"{_dlo:.1f}~{_dhi:.1f}"
+                _fld = "**时长**"
+                _dur_clause = (f"每段的生成时长（写进该段 {_fld} 字段）为：第 1 段固定 {int(_dlo_set)} 秒；"
+                               f"第 2 段起 {_gen} 秒（= 落盘 {int(_dlo_set)} 秒 + 段首衔接 {_r} 秒；"
+                               f"段首 {_r} 秒是承接上一段末帧的延续段，成片会整段裁掉，新内容从 {_r} 秒之后开始）")
+            else:
+                _dur_clause = f"每段视频固定 {int(_dlo)} 秒" if _dlo == _dhi else f"每段视频时长在 {int(_dlo)}~{int(_dhi)} 秒区间内，由你按剧情弧线给每段分配实际秒数（写进该段 **时长** 字段）"
+            _seg_clause = ("请按剧情发展的时间线长度自动决定分段数（段数 = 剧情总时长 ÷ 每段时长，"
+                           "优先用足每段时长（区间取上限），最少 1 段、最多 56 段；剧情很短时宁可用 1 段长镜，"
+                           "绝不切成很多短段）" if _auto_count else f"请生成恰好 {segment_count} 个分段")
+            user_msg = f"{_seg_clause}，{_dur_clause}，输出 [SHOT_START]...[SHOT_END] 完整块（分段信息 + 六段提示词 + 调度指令）。"
 
         if "api" in str(llm_backend) and api_config:
             result = self._call_api(api_config, system_prompt, user_msg)
@@ -1006,6 +1141,9 @@ class JZL_MiniMax_ScriptProcessor:
                     LLAMA_CPP_STORAGE.clean_state()
         else:
             return ("[错误] 请连接 llama_model，或切换到在线API 并从「JZL - 🌐 LLM-API 设置」节点连线 api_config", {})
+
+        # ⏱️ 兜底：LLM 偶尔把内容排到段「时长」之外（例：5 秒段写到 18 秒）→ 按比例压回时长内并警告
+        result, _ts_fixed = _repair_segment_timestamps(result)
 
         # 解析 N 段 → 四段（H3提示词 / 场景 / 视频 / 音频），保存 TXT
         shots = re.findall(r'\[SHOT_START\](.*?)\[SHOT_END\]', result or "", re.DOTALL)

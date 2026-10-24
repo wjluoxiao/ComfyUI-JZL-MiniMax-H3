@@ -1,10 +1,22 @@
 # MiniMax H3 故事扩写模式设定（只扩写故事正文，不拆解）
 # ======================================================================
-# 直接修改此文件，重启 ComfyUI 或重新加载工作流即可生效。
-# 作为 System Prompt 注入给 LLM，专职把用户输入的故事按「故事风格」扩写为更丰满的故事正文。
-# 占位符: {STORY_STYLE} 故事风格(全文), {EXPAND_WORDS} 扩写字数, {LANG_NAME} 语言,
-#          {MATERIAL_SECTION} 素材约束段（按素材扩写时注入）。
-# ======================================================================
+# 内置「强化层」设定词已迁移为文件：
+#     sheding/skills/expand/10-标准扩写.md
+#   该文件用 <!-- JZL:LANG:ZH --> / <!-- JZL:LANG:EN --> 分语言存放扩写规则；
+#   用户可在节点面板导入自定义扩写 skill 覆盖它。
+#
+# 本文件负责：① 加载内置规则；② 把「素材约束 + 故事风格」拼到规则后面。
+# 素材约束与故事风格属于强化层之外的事实约束/风格层，任何 skill 都不会覆盖它们。
+
+import re as _re
+import sys as _sys
+
+try:
+    from .skills_loader import EXPAND, list_skills, read_skill
+except Exception:  # pragma: no cover
+    EXPAND, list_skills, read_skill = "expand", None, None
+
+_LANG_MARK = _re.compile(r"<!--\s*JZL\s*:\s*LANG\s*:\s*(ZH|EN)\s*-->", _re.IGNORECASE)
 
 _MATERIAL_ZH = '''## 参考素材约束（CRITICAL — 本模式必须按素材扩写，违反即失败）
 下方是你可用的全部素材（角色/场景/道具，来自「参考素材管理」勾选项）。扩写时**只能使用下方素材里出现的角色、场景、道具**：
@@ -34,60 +46,68 @@ The materials below are ALL you may use (characters / scenes / props from the en
 ## Available materials
 {MATERIAL_INTRO}'''
 
+_STYLE_HEAD_ZH = "## 故事风格（按此扩写的基调/题材/氛围）"
+_STYLE_HEAD_EN = "## Story Style (the tone/genre/atmosphere to expand toward)"
 
-EXPAND_SYSTEM_ZH = '''# Role: 短视频故事扩写师（专职一件事：把用户故事扩写成更丰满的正文）
-
-你是一个经验丰富的短视频编剧。你的唯一任务：把用户提供的故事/灵感，按下方「故事风格」扩写成一段连贯、丰满、可直接用于后续拆解分镜的**故事正文**。
-
-## 铁律（违反即失败）
-1. **忠于用户原意**：不改故事走向、不改变人物/地点/事件/结局、不新增与原文冲突的设定；用户已有的台词/对话一字不改、必须保留。
-2. **扩写 ≠ 复述**：在完整保留用户所有对话与剧情的基础上，主动补充——场景描写、角色神态与心理、动作细节、环境氛围、情节过渡、冲突的递进与展开，让故事明显变丰满、可读、有画面感。
-3. **字数要求**：扩写后的故事正文控制在 {EXPAND_WORDS} 字左右（中文按字数计）。禁止为了凑字数空泛堆砌、禁止写流水账（"他起床、刷牙、出门"）；每个故事要有戏剧张力。
-4. **正文风格**：扩写用叙事散文（像小说按情节自然展开），禁止大纲/列表/要点/小标题；禁止输出 [SHOT_START]/分段/镜头/提示词内容——**你只输出故事正文本身**。
-5. **语言**：正文一律用 {LANG_NAME} 写作；对话原文保留、不翻译。
-6. **只输出正文**：不要任何标题/前言/解释/代码块/寒暄，直接输出扩写后的故事正文。
-
-{MATERIAL_SECTION}
-## 故事风格（按此扩写的基调/题材/氛围）
-{STORY_STYLE}'''
-
-EXPAND_SYSTEM_EN = '''# Role: Short-drama story expander (single job: expand the user's story into a fuller narrative)
-
-You are an experienced short-drama screenwriter. Your ONLY job: expand the user's story/idea, following the "Story Style" below, into a coherent, fuller, and richer **story narrative** that can later be decomposed into shots.
-
-## Hard rules (violation = failure)
-1. Stay faithful to the user's intent: do not change the story direction, characters, places, events, or ending; do not add anything that conflicts with the original. Keep every line of the user's existing dialogue verbatim.
-2. Expanding is NOT repeating: while keeping ALL of the user's dialogue and plot, actively add scene description, characters' expressions/psychology, action details, atmosphere, plot transitions, and escalating conflict so the story becomes visibly richer, readable, and visual.
-3. Word count: keep the expanded story around {EXPAND_WORDS} words (English words if EN). Do not pad with empty fluff or write a bland log ("he woke up, brushed his teeth, went out"); every story must carry dramatic tension.
-4. Format: write flowing narrative prose (like a novel unfolding by plot), NOT an outline/list/bullets/subheadings. Do NOT output [SHOT_START] / shots / prompt content — you output ONLY the story narrative itself.
-5. Language: write the narrative in {LANG_NAME}; keep dialogue in its original language, never translate it.
-6. Output only the narrative body: no title/preface/explanation/code fence/small talk — output the expanded story directly.
-
-{MATERIAL_SECTION}
-## Story Style (the tone/genre/atmosphere to expand toward)
-{STORY_STYLE}'''
+_FALLBACK_ZH = (
+    "# Role: 短视频故事扩写师（专职一件事：把用户故事扩写成更丰满的正文）\n"
+    "忠于用户原意、保留全部台词、扩写不复述、只输出故事正文。"
+)
+_FALLBACK_EN = (
+    "# Role: Short-drama story expander (single job: expand the user's story into a fuller narrative)\n"
+    "Stay faithful, keep all dialogue, expand rather than repeat, output only the narrative."
+)
 
 
-def build_expand_prompt(lang, story_style, expand_words, expand_source="素材", material_intro=""):
+def _split_lang(text):
+    """按 <!-- JZL:LANG:XX --> 切分为 {ZH: ..., EN: ...}；无标记返回 {}。"""
+    if not text or not _LANG_MARK.search(text):
+        return {}
+    parts = _LANG_MARK.split(text)
+    out = {}
+    for i in range(1, len(parts) - 1, 2):
+        out[parts[i].upper()] = parts[i + 1].strip()
+    return out
+
+
+def load_builtin_expand_rules(lang="zh"):
+    """内置扩写规则（按语言取值；自定义 md 没有分语言时整份返回）。"""
+    if read_skill is None:
+        return _FALLBACK_EN if lang == "en" else _FALLBACK_ZH
+    try:
+        items = [it for it in list_skills(EXPAND, include_user=False) if it["source"] == "builtin"]
+        if not items:
+            return _FALLBACK_EN if lang == "en" else _FALLBACK_ZH
+        text = read_skill(EXPAND, items[0]["id"]) or ""
+        langs = _split_lang(text)
+        if langs:
+            key = "EN" if lang == "en" else "ZH"
+            return langs.get(key) or langs.get("ZH") or text.strip()
+        return text.strip()
+    except Exception as exc:
+        _sys.stderr.write(f"[JZL-skill] ⚠️ 读取内置扩写 skill 失败：{exc}（使用兜底文本）\n")
+        return _FALLBACK_EN if lang == "en" else _FALLBACK_ZH
+
+
+def build_expand_prompt(lang, story_style, expand_words, expand_source="素材", material_intro="", skill_text=None):
     """拼装故事扩写节点的 System Prompt。
 
+    skill_text: 自定义扩写 skill 全文（None/空 → 用内置规则）。
     expand_source: "素材"=按参考素材扩写（注入素材清单 + 禁杜撰铁律）；"自由"=自由发挥（无素材约束）。
     material_intro: 参考素材管理勾选项的素材描述（角色/场景/道具…），"素材"模式必须传入。
     """
-    skeleton = EXPAND_SYSTEM_EN if lang == "en" else EXPAND_SYSTEM_ZH
-    skeleton = skeleton.replace("{EXPAND_WORDS}", str(int(expand_words or 500)))
-    skeleton = skeleton.replace("{LANG_NAME}", "English" if lang == "en" else "简体中文")
+    body = (skill_text or "").strip() or load_builtin_expand_rules(lang)
+    body = body.replace("{EXPAND_WORDS}", str(int(expand_words or 500)))
+    body = body.replace("{LANG_NAME}", "English" if lang == "en" else "简体中文")
 
-    if str(expand_source or "素材") == "自由":
-        # 自由发挥：不加素材约束段
-        skeleton = skeleton.replace("{MATERIAL_SECTION}", "")
-    else:
-        # 按素材扩写：注入素材清单 + 禁杜撰约束；无素材时给明确提示
+    parts = [body]
+    if str(expand_source or "素材") != "自由":
         material = (material_intro or "").strip()
         if not material:
-            material = "（当前「参考素材管理」没有勾选任何素材——没有可用的角色/场景/道具，请先勾选素材；若坚持扩写则不得编造任何人物/场景名，仅描写用户输入故事已有的元素。）"
-        mat_tpl = _MATERIAL_ZH if lang == "zh" else _MATERIAL_EN
-        skeleton = skeleton.replace("{MATERIAL_SECTION}", mat_tpl.replace("{MATERIAL_INTRO}", material))
-
-    skeleton = skeleton.replace("{STORY_STYLE}", (story_style or "").strip() or "- 无风格设定")
-    return skeleton
+            material = ("（当前「参考素材管理」没有勾选任何素材——没有可用的角色/场景/道具，请先勾选素材；"
+                        "若坚持扩写则不得编造任何人物/场景名，仅描写用户输入故事已有的元素。）")
+        mat_tpl = _MATERIAL_EN if lang == "en" else _MATERIAL_ZH
+        parts.append(mat_tpl.replace("{MATERIAL_INTRO}", material))
+    parts.append(("## Story Style (the tone/genre/atmosphere to expand toward)" if lang == "en" else "## 故事风格（按此扩写的基调/题材/氛围）")
+                 + "\n" + ((story_style or "").strip() or ("- 无风格设定" if lang != "en" else "- no style set")))
+    return "\n\n".join(parts)
