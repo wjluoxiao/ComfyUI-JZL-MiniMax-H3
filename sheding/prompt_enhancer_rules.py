@@ -82,6 +82,24 @@ detailed_description 必须完整覆盖本段「**时长**」从头到尾的全�
 ## 故事风格（锚点1，逐字落实）
 {STORY_STYLE}
 
+## 视觉锚点表（锚点1b，CRITICAL — 只读，严禁改写）
+下面是全片的跨段视觉锚点表（由拆解阶段建表）。**这些元素没有参考图，靠这份规格在所有分段之间保持一致**：
+- 你重写的正文里，凡该元素在本段画面出现，就必须出现**与表中规格短语逐字相同**的描述（严禁同义改写：「球形」不能写成「圆顶状」）。
+- 表里没有的元素，严禁凭空写它跨段存在；表里有但它本段不出现的，严禁写它仍在画面里。
+- **严禁修改表内规格**（形状/颜色/材质/尺寸/纹路一个词都不许动）；如果你认为规格本身有问题，照抄并在正文末尾另起一行写 `[锚点疑议] 原因`，由人决定。
+{VISUAL_ANCHORS}
+
+## 状态账本（锚点1c，CRITICAL — 只读，逐段按账执行）
+下面是每个元素在全片各段的状态演进链。**你只重写当前这一段，但必须让本段状态与账本里"本段"那一格完全一致**：
+- 本段出现过的**道具**：写清位置（在谁手里/在哪块地面/离谁多远）+ 朝向角度 + 完好度；与账本一致，且要与上一段末态**可推导**（上一格→本格之间必须有可见动作完成这个变化）。
+- 本段出现过的**角色**：姿态 + 位置 + 服装破损（部位/程度）+ 伤口与血迹（位置/是否流血/是否干涸）；**上一段造成的破损与伤不能在本段消失**。
+- 本段出现过的**特效**：出现（触发源+形态）→ 持续（位置/强度变化）→ 结束（消散方式/残留）；账本写"仍在"的，本段必须仍写它在画面里。
+- 本段**场景**：破坏痕迹（坑/裂缝/断垄/倒伏/碎屑/烟尘）必须保持，且**只增不减**（除非账本明确写了修复）。
+- **四类无因变化禁令**：无因消失、无因复位（伤好/衣补/坑平/血无）、无因换位换手、无因形变——全部禁止。
+- 账本每一格是**边界条件**，不是要你复述的台词：状态要落到具体可见画面里（"刀还插在垄间、刀柄朝右上、刀身沾泥"），不许写成"状态同前段"。
+- **严禁修改账本内容**；认为有问题就照做并在正文末尾另起一行写 `[账本疑议] 原因`。
+{STATE_LEDGER}
+
 ## 偏好设置（锚点4，逐条执行）
 {PREFERENCE}
 
@@ -157,6 +175,24 @@ Action/combat pacing rules are provided by the "## 核心导演语法" section o
 ## Story Style (Anchor 1, follow literally)
 {STORY_STYLE}
 
+## Visual Anchor Table (Anchor 1b, CRITICAL — read-only, never reword)
+Cross-segment visual anchors for the whole film (built at the decomposition stage). **These elements have no reference image and stay consistent across all segments only through this spec**:
+- Whenever such an element appears in this segment's frames, your rewritten body MUST contain a description **word-for-word identical** to its spec phrase (reworded synonyms are banned: "spherical" must not become "dome-shaped").
+- Never claim an element that is not in the table persists across segments; never claim a table element is on screen when this segment does not show it.
+- **Never modify the spec in the table** (shape/colour/material/size/pattern — not a single word). If you believe a spec is wrong, copy it anyway and append a new line at the very end of the body: `[ANCHOR CONCERN] reason`, for a human to decide.
+{VISUAL_ANCHORS}
+
+## State Ledger (Anchor 1c, CRITICAL — read-only, execute per segment)
+The state-evolution chain of every element across the film. **You rewrite only this one segment, but its states must match the ledger's "this segment" cell exactly**:
+- Every **prop** in this segment: position (whose hand / which patch of ground / how far from whom) + orientation + integrity; consistent with the ledger, and derivable from the previous cell (the change must be completed by a visible action between the two cells).
+- Every **character** in this segment: posture + position + clothing damage (which part / how much) + wounds and blood (where / still bleeding / dried); **damage and injuries caused in the previous segment must NOT disappear here**.
+- Every **VFX** in this segment: appearance (trigger source + form) → duration (position/intensity change) → end (how it dissipates / residue); when the ledger says "still up", this segment must still show it on screen.
+- **Scene** in this segment: damage traces (crater / rift / broken beds / flattened plants / debris / smoke) must persist and **only accumulate** (unless the ledger explicitly says repaired).
+- **Bans on the four causeless changes**: causeless vanishing, causeless reset (healed wound / repaired clothes / filled crater / vanished blood), causeless relocation or hand-swap, causeless deformation — all banned.
+- Each ledger cell is a **boundary condition**, not a line to copy: land the state in concrete visible detail ("the sword still stands planted between the beds, hilt angled up-right, blade muddy"), never "same state as before".
+- **Never modify the ledger**; if you believe it is wrong, follow it and append a new line at the very end: `[LEDGER CONCERN] reason`.
+{STATE_LEDGER}
+
 ## Preference (Anchor 4, follow every rule)
 {PREFERENCE}
 
@@ -191,14 +227,22 @@ def _extract_detail_length(preference_text, segment_duration=None):
     return f"{lo2}-{hi2}"
 
 
-def build_enhancer_prompt(lang, story_style, segment_duration, preference, custom_rules):
-    """拼装增强节点的 System Prompt，四大锚点权重从高到低。"""
+def build_enhancer_prompt(lang, story_style, segment_duration, preference, custom_rules, anchors="", ledger=""):
+    """拼装增强节点的 System Prompt，四大锚点权重从高到低。
+
+    anchors：「视觉锚点表」原文（跨段非素材元素的固定规格）。只读——增强阶段必须逐字沿用，
+    否则同一元素在不同分段会被改写成不同样子（护盾 球形→六边形→圆柱形就是这么来的）。
+    ledger：「状态账本」原文（每个元素逐段的状态演进链）。只读——增强阶段必须按账本执行，
+    否则道具会无因消失、伤口会无因痊愈、地形会无因复原。
+    """
     skeleton = ENHANCER_SYSTEM_EN if lang == "en" else ENHANCER_SYSTEM_ZH
     detail_length = _extract_detail_length(preference, segment_duration)
     skeleton = skeleton.replace("{SEGMENT_DURATION}", str(int(segment_duration or 8)))
     skeleton = skeleton.replace("{DETAIL_LENGTH}", detail_length)
     skeleton = skeleton.replace("{LANG_NAME}", "English" if lang == "en" else "简体中文")
     skeleton = skeleton.replace("{STORY_STYLE}", (story_style or "").strip() or "- 无风格设定")
+    skeleton = skeleton.replace("{VISUAL_ANCHORS}", (anchors or "").strip() or "- （本片无跨段非素材元素）")
+    skeleton = skeleton.replace("{STATE_LEDGER}", (ledger or "").strip() or "- （本片无状态账本）")
     skeleton = skeleton.replace("{PREFERENCE}", (preference or "").strip() or "- 无偏好设定")
     skeleton = skeleton.replace("{CUSTOM_RULES}", (custom_rules or "").strip() or "- 无自定义规则")
     return skeleton

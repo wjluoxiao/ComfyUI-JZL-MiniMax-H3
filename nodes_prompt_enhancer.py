@@ -19,8 +19,8 @@ from .sheding.prompt_enhancer_rules import build_enhancer_prompt, build_segment_
 class JZL_MiniMaxPromptEnhancer:
     """提示词增强 — 只润色 detailed_description，其余原样保留。"""
 
-    _SEGMENT_INFO_KEYS = ["标题", "时长", "景别", "运镜", "角色", "场景", "道具", "动作描述", "氛围光影"]
-    _SEGMENT_INFO_KEYS_EN = ["Title", "Duration", "Shot Size", "Camera Movement", "Characters", "Scene", "Props", "Action Description", "Mood & Lighting"]
+    _SEGMENT_INFO_KEYS = ["标题", "时长", "景别", "运镜", "角色", "场景", "道具", "动作描述", "氛围光影", "状态交接"]
+    _SEGMENT_INFO_KEYS_EN = ["Title", "Duration", "Shot Size", "Camera Movement", "Characters", "Scene", "Props", "Action Description", "Mood & Lighting", "State Handoff"]
     _CN_NUMS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
                 "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
                 "二十一", "二十二", "二十三", "二十四"]
@@ -79,7 +79,7 @@ class JZL_MiniMaxPromptEnhancer:
 
     @classmethod
     def _extract_segment_info(cls, block):
-        """提取分段信息九行，中英两套字段名都支持（**标题**/**Title**、**时长**/**Duration**…），
+        """提取分段信息各行，中英两套字段名都支持（**标题**/**Title**、**时长**/**Duration**…），
         返回 dict（键固定为中文键，便于按输出语言回填）。"""
         info = {}
         for zh, en in zip(cls._SEGMENT_INFO_KEYS, cls._SEGMENT_INFO_KEYS_EN):
@@ -265,6 +265,13 @@ class JZL_MiniMaxPromptEnhancer:
             new_music = music_m.group(1).strip()
             new_dd = new_dd[:music_m.start()].rstrip()
 
+        # 剥离「锚点疑议 / 账本疑议」：增强器被要求照抄锚点与账本，若认为有问题只能另起一行标注；
+        # 这行不是画面内容，不能留在 detailed_description 里（会把提示词污染成元对话）。
+        _concern_m = re.search(r'(?m)^\[(?:\u951a\u70b9\u7591\u8bae|\u8d26\u672c\u7591\u8bae|ANCHOR CONCERN|LEDGER CONCERN)\]\s*(.+)$', new_dd)
+        if _concern_m:
+            print(f"[JZL-增强] ⚠️ 增强器对视觉锚点/状态账本有疑议：{_concern_m.group(1).strip()}")
+            new_dd = new_dd[:_concern_m.start()].rstrip()
+
         # 保证 detailed_description 与前后字段之间各空一行（原用单换行会吞掉字段间空行）
         new_h3_body = h3_body[:content_start].rstrip() + "\n\n" + new_dd + "\n\n" + h3_body[content_end:]
         # 若模型按偏好补写了音乐 → 替换 non_diegetic_music 字段
@@ -295,7 +302,16 @@ class JZL_MiniMaxPromptEnhancer:
         preference = bus.get("preference", "")
         custom_rules = bus.get("custom_rules", "")
 
-        system_prompt = build_enhancer_prompt(lang, story_style, segment_duration, preference, custom_rules)
+        # 视觉锚点表 + 状态账本：从剧本前缀里取（拆解阶段建的表）→ 注入增强提示词，只读沿用
+        anchors, ledger = "", ""
+        try:
+            from .nodes_llama import _extract_prefix_blocks
+            anchors, ledger = _extract_prefix_blocks(script_text)
+        except Exception:
+            anchors, ledger = "", ""
+
+        system_prompt = build_enhancer_prompt(lang, story_style, segment_duration, preference,
+                                               custom_rules, anchors=anchors, ledger=ledger)
 
         # 打印模式日志（API / 本地），与剧本处理器保持一致
         use_api = bus.get("use_api")

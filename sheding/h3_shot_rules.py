@@ -11,9 +11,66 @@ H3_SHOT_RULES_ZH = '''
 - 仅 <d> 内台词/歌词/旁白按用户原语言（如 <d>[中文] 原文。</d>）、画面可见文字（横幅/招牌/字幕等）用英文双引号包裹原文字。
 - 下方示例仅示意结构与写法；实际正文语言按「用户所选输出语言」。
 ## 4. 输出格式（CRITICAL — 严格遵循，违反即失败）
+输出顺序固定为三段：【视觉锚点表】→ 逐个 [SHOT_START]...[SHOT_END] 分段块。
 每个分段严格包裹在 [SHOT_START]...[SHOT_END] 之间。块内依次包含：
-（一）分段信息：**标题/**时长/**景别/**运镜/**角色/**场景/**道具/**动作描述/**氛围光影
+（一）分段信息：**标题/**时长/**景别/**运镜/**角色/**场景/**道具/**动作描述/**氛围光影/**状态交接
 （二）提示词与调度指令：四个固定标记段
+
+### 4.0 视觉锚点表（CRITICAL — 必须在第一个 [SHOT_START] 之前输出，全片只输出一次）
+视频模型**一次只看到一段提示词**，看不到其它分段。凡是**没有参考图**、却会跨段反复出现的元素——法术/VFX、能量屏障、临时道具、伤口与污损、天气与光位、被破坏的地形——如果每段各写各的，模型就会自由发挥，成片必然"每段都不一样"（同一个护盾第一段是球形、第三段变六边形、第五段变圆柱形）。
+因此：**开拍前先给每个这类元素定死一份规格，写进「视觉锚点表」；之后凡它出现的分段，都必须逐字复述同一份规格。**
+
+格式（单行一条，用「· 」开头，不换行堆叠）：
+
+```
+[视觉锚点表]
+· <元素名>｜<规格短语>｜首现：第N段｜必须逐字沿用
+```
+- **元素名**：给这个元素起一个短名（如「金色屏障」「天空裂缝」「撞击大坑」「冷紫天光」），后续正文一律用这个短名指代。
+- **规格短语**：一次写死，写到「**可被画出来**」的粒度——**形状 + 颜色 + 材质/发光方式 + 尺寸比例 + 表面纹路**。例：`金色半透明球形能量罩，直径约两人高，表面流转六边形细密纹路，暖金光自内向外渐弱`。禁止只写"金色屏障"这种没形状的词。
+- **首现**：该元素第一次出现在第几段（写段号）。
+- **必须逐字沿用**：这条尾巴固定照抄，不许改词。
+- 表里**只放无参考图的元素**。有参考图的角色/场景/道具不要写进这张表（它们靠参考图与 <Subject N> 保持身份）。
+- 表内元素数量：只列**真正跨段复现**的（同一段内一次性用完的临时元素不用列），通常 3~8 条；没有这类元素时仍要输出表，写一行 `· （本片无跨段非素材元素）`。
+
+**锚点复述铁律（CRITICAL，本节与上方"三段复述一致"分工不同，都要遵守）**：
+- **有参考图的角色/场景/道具** → 只在本块**首次出现**的那一镜展开特征清单，后续 [Shot N] 只用 `<Subject N>` + 动作/位置，**禁止重复特征清单**（见 D 段"三段复述一致性律"）。
+- **无参考图的跨段元素**（视觉锚点表里的每一条）→ 只要它在**本段画面里出现**，本段正文里就 MUST 出现一次**与表内规格短语逐字相同**的描述（可放在首次出现的那个 [Shot N] 里），**严禁同义改写**（「球形」不能写成「圆顶状」、六边形纹路不能写成「细密纹路」）。它不出现在本段时，禁止凭空写它仍存在。
+- 规格短语照抄**不计入** {Detail_Length} 字下限——它是硬性锚点，不算"正文篇幅"。
+
+### 4.0b 状态账本（CRITICAL — 紧接在「视觉锚点表」之后输出，全片只输出一次）
+锚点表定的是"**它长什么样**"，状态账本定的是"**它每一段处在什么状态**"。视频模型一次只看得到一段，**不会记得上一段道具在谁手里、屏障还在不在、坑有没有被填平**——所以必须先把整片的"状态演进链"一次列清，再逐段按链上状态执行。
+
+格式（每行一条，`· 元素｜第N段：状态｜第M段：状态｜…`）：
+
+```
+[状态账本]
+· 玩具刀｜第1段：右手横握、刀尖朝下｜第2段：竖直插入垄间泥土、没入半截｜第3段：冲天击中天穹后坠落垄边草丛｜第5段：被土拨鼠丢在地上、刀身沾泥｜第6~7段：仍在地上、位置不变
+· 小兔子｜第1段：站立环视、衣裤干净完好｜第2段：下蹲插刀、裤膝沾泥｜第4段：站在坑外三米处仰头｜第6段：低头道歉、耳尖下垂｜第7段：仍在坑外原地
+· 金色屏障｜第5段：成形（球形，规格见锚点表）｜第6段：仍在、余光映在兔子绒毛上｜第7段：自顶部碎裂、化作光点散尽
+· 撞击大坑｜第4段：砸出、直径约三米、边缘翻起泥块｜第5~7段：仍在、坑内积碎土、边缘泥块未回填
+```
+
+四类元素各有**必写项**（缺任一项即不合格）：
+
+| 元素类别 | 状态账本里必须交代的字段 |
+|---|---|
+| **道具** | 位置（在谁手里/在哪块地面/离谁多远）+ 朝向角度（刀尖朝哪、剑柄朝向）+ 完好度（完好/沾泥/卷刃/断裂/脱手）+ 归属（谁持有） |
+| **角色** | 站/蹲/坐/倒的姿态 + 粗略位置 + **服装破损**（哪个部位、破了多大、露出什么）+ **伤口与血迹**（位置、是否流血、血是否干涸、有没有沾到别处） |
+| **特效/VFX** | **出现**（触发源 + 形态规格）→ **持续**（本段内位置/强度/大小变化）→ **结束**（消散方式、残留物）；**未结束时必须写"仍在"** |
+| **场景** | 破坏累积（坑/裂缝/断垄/倒伏菜苗/碎屑/烟尘）+ 只增不减（除非本段明确演了修复）；地形改变后，后续镜头一律按新地形写 |
+
+- 账本里的状态一旦写定，后续分段的正文与 `**状态交接**` 字段必须**与之一致**；需要改变时必须在本段演出来（被打飞、被丢下、被修复、烧毁…），**禁止无因变化**。
+- 只在片中出现过一次、之后再不出现的元素（一次性小物），账本里写清它的"消失方式"（被丢远/烧毁/留在原地出画），禁止让它凭空不见。
+
+**状态连续性铁律（CRITICAL — 与账本配套，缺一即"前后无法呼应"）**：
+- ① **每段 [Shot 1] 必须先落"继承态"**：至少 1 句，用方位词交代上段末态的可见状态——道具在谁手里/朝哪/离谁多远、角色姿态与伤势、特效是否仍在、地形痕迹（坑/碎屑/烟尘）是否还在原处。
+- ② **每段段末必须落"末态"**：用 1~2 句把本段结束瞬间的状态钉死（谁在哪、道具在哪朝哪、伤到哪一步、特效什么状态、地形什么状态），供下一段继承。
+- ③ **四类"无因变化"全面禁令**（出现任一即不合格）：
+  - **无因消失**：上段在手里的道具下段没了、上段还在的屏障下段消失、上段在场的人下段不见——必须演出来（丢/碎/散/走）。
+  - **无因复位**：伤好了、衣服补好了、坑被填平了、血迹消失了、道具从地上回到手里、角色从倒地变回站立。
+  - **无因换位/换手**：道具从左手变右手、从地上变身上、从 A 手里变 B 手里、位置从画面左侧变右侧（除本段明确演了移动）。
+  - **无因形变**：形状/尺寸/配色/纹路改变（护盾球形→六边形、刀刃变长、特效换色）——必须逐字沿用锚点表规格，除非本段演了它的形态变化（如碎裂、融化、升级）。
 
 ### 4.1 分段信息格式
 - 分段标题命名（CRITICAL）：每个分段块的第一行写 `### Video_XXX`（Video 编号从 001 三位补零递增：Video_001、Video_002...），这是分段标题，与 detailed_description 内的切镜标签 [Shot N] 完全无关，严禁写成 `### Shot_XXX`。
@@ -26,7 +83,13 @@ H3_SHOT_RULES_ZH = '''
 **道具**: [本段关键道具名，顿号分隔；无写"无"。只写「参考素材说明」里声明的道具，严禁自造未声明的道具]
 **动作描述**: [1-3句，覆盖本段核心动作与结果，细节写进 detailed_description，勿重复]
 **氛围光影**: [15-30字，光源方向/类型/色调/气氛]
+**状态交接**: [逐元素写「上段末态 → 本段末态」，用「；」分隔。必须覆盖本段出现过的**道具**（位置+朝向+完好度）、**角色**（姿态+服装破损+伤口血迹）、**特效**（仍在/消散/成形）、**场景**（破坏痕迹是否还在）。格式：`玩具刀：插在垄间(上段)→被灵气托起旋转(本段)；小兔子：站在坑外(上段)→低头道歉(本段)；大坑：仍在、边缘泥块未回填`。第 1 段只有「本段末态」，前半写「—」]
 - ⚠️ 元素声明铁律（CRITICAL）：**角色/**场景/**道具** 三个字段只能写「参考素材说明」里声明的元素；剧情需要但未声明的元素（临时行囊、路人、环境小物等）只写进 detailed_description 正文，严禁写进这三个字段、严禁写进调度指令 slots。
+- ⚠️ **资产调度完备性铁律（CRITICAL，漏一个角色 = 该角色长相全靠模型臆造）**：**凡在本段画面里能被看见的已声明元素，必须全部列进对应字段与 slots**——不要求它是本段主角。判定标准：满足以下任意一条即必须入列——① 本段正文写到了它（含 `<Subject N>` 之外的直接称呼，如「坑外站着的兔子」「远处兔子木屋」）；② 本段任何角色看着它/指向它/对着它说话；③ 它出现在画面背景、前景或画外音的明确指代对象里；④ 它是本段动作的作用对象（被握、被打、被丢、被破坏）。
+  - 正例（本段主角是土拨鼠，但小兔子站在坑外被看见）：`**角色**: 土拨鼠、小兔子` + `{"slots":["场景:场景A","角色:角色B","角色:角色A","道具:道具B"]}`。
+  - 反例（严禁）：正文写着「视线穿过屏障落到坑外站着的兔子身上」，但 `**角色**` 只有土拨鼠、slots 里没有小兔子 —— 这样小兔子会被模型画成任意模样，跨段必然不一致。
+  - 优先级（图片 ≤9 上限内放不下时）：本段主角 > 与本段动作直接交互的对象 > 被注视/在场的次要角色 > 背景环境物；被砍掉的必须**同时从正文里去掉**（正文不写、slots 也不列，两边必须一致）。
+  - 本段完全不出现（正文没写到、画面没拍到）的已声明元素，**严禁**为了"保险"塞进 slots——多余的参考图会抢占参考额度并让模型误用。
 
 ### 4.2 H3 提示词（六段 Ref2VA 格式，字段名保持英文原样，禁止翻译）
 ===H3_PROMPT===
@@ -50,14 +113,16 @@ non_diegetic_music: {...}
   - ④ **风格锚定**：当某张参考图承担本段整体风格时，必须把「风格 + 该图环境」合并成一条 Subject：`<Subject 2> is <环境描述> and <风格名/质感> in <Picture N>, characterized by <风格要素清单（星空/烟雾/叶丛/色调/着色方式…）>`；正文与 retention 里用该标签引用它来维持风格一致（正例：`The background of <Subject 2> features …`、`The curling cyan smoke of <Subject 2> swirls violently…`）。
   - ⑤ **<Picture N> 本体行（必须有）**：每张参考图要有一条说明它在本段扮演什么角色——普通参考图写 `<Picture N> is the reference for <Subject K> …`；构图参考写 `<Picture N> is the composition reference …`。**本工作流固定 ref2va，严禁写 `is the first frame of [Shot 1]` / `is the last frame of [Shot M]` 这类首帧/尾帧锚定句**。
   - ⑥ **<Subject N> vs <Picture N> 用法区分（CRITICAL）**：`<Subject N>` 用于「描述主体/环境/风格的**内容与特征**」（描述画面时用）；`<Picture N>` 用于「指**某一帧/某张图本身**」（首帧/尾帧/构图来源）。禁止用 <Picture N> 代替 <Subject N> 描述内容（「<Picture 1> 的浅蓝色皮肤」✗ → 「<Subject 1> 的浅蓝色皮肤」✓），也禁止用 <Subject N> 指参考图本身（「从 <Subject 1> 开始」✗ → 「从 <Picture 1> 开始」✓）。
-- 三段复述一致性律（CRITICAL）：同一主体/风格/环境必须按「**定义 → 应用 → 校验**」三段闭环书写，三处的颜色/材质/数量**严禁互相矛盾**：① 定义段（subject_definitions）= 完整特征清单；② 应用段（detailed_description）= <Subject N> 首次出现时**复述该清单**（句式可简写，但特征词必须一致，如「浅蓝皮肤、缀金铆钉面罩、补丁和服、巨大行囊、双刀」）；③ 校验段（retention_analysis）= 再次列举同样特征做保留校验。内容/retention 里**严禁出现 subject_definitions 未定义的新外貌/新道具/新配色**。
+- 三段复述一致性律（CRITICAL，同时注意「只复述一次」的禁令）：同一主体/风格/环境必须按「**定义 → 应用 → 校验**」三段闭环书写，三处的颜色/材质/数量**严禁互相矛盾**：① 定义段（subject_definitions）= 完整特征清单；② 应用段（detailed_description）= <Subject N> **在本块内首次出现的那一镜**复述该清单（句式可简写，但特征词必须一致，如「浅蓝皮肤、缀金铆钉面罩、补丁和服、巨大行囊、双刀」）；③ 校验段（retention_analysis）= 再次列举同样特征做保留校验。内容/retention 里**严禁出现 subject_definitions 未定义的新外貌/新道具/新配色**。
+- ⚠️ **「首次出现」只算一次（CRITICAL，违反即浪费篇幅）**：一个 [SHOT_START] 块内，同一个 <Subject N> 的「首次出现」= **它在本块正文里第一次被写到的那个 [Shot N]**，仅此一次。**同一块的后续 [Shot N] 只写 `<Subject N>` 标签 + 该镜的动作/位置/状态，严禁再重复特征清单**（官方规范原文：Continue using the same label in later shots without redefining what the label represents）。反例（严禁）：「[Shot 2] …<Subject 2> 毛绒质感人形兔子、直立拟人体态、长耳朵、软绒毛质感、身穿淡蓝色牛仔连衣裤、脖子围着米色围脖，右手握住 <Subject 3> 宽厚圆弧刀身、圆钝刀尖、棕纹缠绕刀柄、红金配色装饰的玩具钝化造型」——第 2 镜只需写「<Subject 2> 右手握住 <Subject 3>，屈膝下蹲」。同理，**同一块内同一主体的特征清单出现 ≥2 次即为不合格**（三重例外：视觉锚点表里的无参考图元素按锚点铁律每段复述一次，不受此限）。
+
 - <Video N>：参考视频（运镜/动作/剪辑参考），编号 = VIDEO_INSTRUCTION.slots 下标 + 1。
 - <Audio N>：独立音频（说话人音色/音效），编号 = AUDIO_INSTRUCTION.slots 下标 + 1 = 说话顺序（第一个开口的人 = <Audio 1> = (S1)）。⚠️ 视频参考自带的同步音轨也占用 <Audio N> 编号且排在独立音频之前——若本分段有视频音轨，独立音频的 <Audio N> = 音轨数量 + 说话顺序；无视频音轨时独立音频从 <Audio 1> 开始。
 - 音频铁律：只有本分段有人实际说话（detailed_description 里有 <d> 对话）时才定义 <Audio N> 并写音频调度。无对话分段：不写 <Audio N>、AUDIO_INSTRUCTION.slots 不含音频、动作描写不用 (Sx)。
 - 参考元素总数铁律：每段图片 ≤9、视频 ≤3、音频 ≤3，总数 ≤12，超出部分不声明。
 
 #### summary（摘要）
-1-3 句，**结构固定为三拍**：① 起点（本段从哪一帧 / 上段末态开始，引用 <Picture N>）；② 触发事件（什么打破了初始状态）；③ 主体行动与可见结果（<Subject N> 做了什么、可见地造成什么）。
+1-3 句，**结构固定为三拍**：① 起点（本段从哪一帧 / 上段末态开始，引用 <Picture N>；**第 2 段起必须点名继承的可见锚点**：上段遗留的地标方位 / 光位时段 / 关键道具位置 / 未消散的特效或地形痕迹，例「从 <Subject 2> 在坑外站定、大坑仍冒尘、冷紫天光自上方下泄的末态起势」）；② 触发事件（什么打破了初始状态）；③ 主体行动与可见结果（<Subject N> 做了什么、可见地造成什么）。
 - 开头方括号任务类型前缀（用 " + " 组合），词表：`reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`。**禁止使用 `keyframe completion`**——本工作流固定 ref2va，没有首帧/尾帧锚定路径。
 
 #### retention_analysis（保留分析）
@@ -69,6 +134,12 @@ non_diegetic_music: {...}
 
 #### detailed_description（详细描述，主体——视频质量的核心，务必详写）
 - 定位（CRITICAL）：本分段时长以分段信息「**时长**」字段为准（全局时长设定：{Segment_Duration}），detailed_description 必须完整描述这段视频从头到尾的全部内容（用多个 [Shot N] 切镜串起来），不是一个动作或一个画面的简单描述。
+- 🔗 **段间画面继承铁律（CRITICAL — 这是「七个碎片」的唯一解药）**：本段不是一部新片，是**上一段成片的下一截**。每一段（第 2 段起）的 [Shot 1] 必须：
+  - ① **禁止重新建立场景**：不得再写一遍"全景展现整个/整齐的菜畦田垄向远处延伸/环境全貌"式的**重开场**（那是第 1 段的活）。[Shot 1] 必须是**承接上段末态的动作或视线延续镜**——接着上段最后一刻的人物姿态、朝向、手中道具位置、被注视方向往下演。
+  - ② **继承固定地标（Fixed Landmarks）+ 光位（Lighting Baseline）**：上段建立的地标（木栅栏在画面右侧、水井在左三分、大坑在画面中央偏下…）、主光方向与色调时段（冷紫天光自上方下泄 / 暖金侧逆光 / 正午硬顶光…）必须在本段**用同样的方位词**复述或延续；若本段确实要换机位/换时段，必须**明写这是一次显式切换**（如"硬切换至反打机位，木栅栏换到画面左侧"），禁止悄悄改变。
+  - ③ **继承可破坏的地形与痕迹**：上段砸出的大坑、翻起的泥块、碎屑、烟尘、脚印、血迹、被压伏的菜苗、道具落地位置——本段仍在同一时空内，**必须保持这些痕迹的存在与位置**（除非本段明确演了它被清理/掩埋）。禁止下一段地面自动恢复平整。
+  - ④ **继承在场人物的位置与状态（Exited Character Status）**：上段在场但本段不再是主角的角色，必须交代其当前所在（在画外左侧/站在坑外/已被甩到身后），不得悄悄消失；本段要让他入画，就在 [Shot 1] 里从他的既有位置接进来。
+  - ⑤ 以上"继承"要**写进正文**（用 1 句带方位与光位的话落到 [Shot 1] 上），不是靠 summary 交代。
 - 风格声明与落实（CRITICAL）：在 [Shot 1] 之前用**一句**（最多两句，禁止把风格六要素堆成一段）体裁/质地声明总领本段风格，句式固定为「本段为 <媒介/渲染> 的 <风格名/质地> 风格」（例：本段为平面着色、色彩浓烈的 2D 漫画插画风格）。⚠️ **风格不能只在开头声明一次**——镜头内每个环境名词、特效名词、道具名词**都必须带本风格的定语**（如「风格化青色烟雾」「四角星点夜空」「平面着色的叶丛」「风格化拖尾能量弧」），让风格逐句渗透；禁止只声明不落实（开头一句风格、正文却全是通用描写）。禁止写「实拍/电影感/唯美/明亮通透」这类与风格无关的通用词；每个分段块的风格必须与「## 1. 故事风格」一致，禁止每个分段自由发挥不同风格。
 - 镜内分拍律（CRITICAL，所有风格通用）：一个 [Shot N] 内含多个节拍时，**用空行把每个节拍分成独立段落**书写，每拍写一个「触发 → 动作 → 结果」闭环（正例：拍1 建立首帧/场景 → 空行 → 拍2 事件触发 + 主体反应 + 起势 → 空行 → 拍3 命中/结果 + 环境反应 + 镜头跟随 → 空行 → 拍4 段末物理末态）。切镜少甚至一镜到底时必须靠分拍推进叙事，禁止把整镜写成没有呼吸的一整段流水账。
 - 句间因果律（CRITICAL）：正文里每一句新动作都必须能回答「因为上一句发生了什么」——事件 → 主体即时反应 → 新状态的连锁；禁止出现与上一句无因果关系的并列句（读起来像动作清单）。
@@ -263,7 +334,7 @@ non_diegetic_music: N/A
 5. 禁止翻译 <d> 标签内的对话，原文语言保留。
 6. 禁止臆造 <Subject N>/<Picture N>/<Video N>/<Audio N> 标签；没有参考素材就不写。
 7. 调度指令必须是单行 JSON，slots 数组顺序必须与提示词中的 <Picture N>/<Video N>/<Audio N> 编号严格一致，禁止多行、禁止注释、禁止错位。
-8. 分段块 [SHOT_START]...[SHOT_END] 之外，禁止输出统计表或额外说明；生成模式下允许（且必须）在第一个分段块之前输出「【故事】」故事正文，拆解模式不输出故事正文。
+8. 分段块 [SHOT_START]...[SHOT_END] 之外，只允许输出三样东西：① 第一个分段块之前的 `[视觉锚点表]`（必须输出，格式见 §4.0）；② 紧随其后的 `[状态账本]`（必须输出，格式见 §4.0b）；③ 生成模式下的「【故事】」故事正文（拆解模式不输出故事正文）。除这三样外禁止输出统计表或任何额外说明。
 9. 禁止使用模糊代称（男性/女性/某人），必须用角色名或描述性标签。
 10. 禁止"同上""延续""依然是"等跨镜引用词。
 11. retention_analysis 破折号后必须直接列举 subject_definitions 里已定义的具体特征（顿号分隔、句号结尾），严禁写「保留」二字、禁止机械写"按 <Picture N> 原样保留"、禁止自编未定义的外貌/道具细节。
@@ -277,7 +348,13 @@ non_diegetic_music: N/A
 19. 镜内多拍必须**空行分拍**（每拍「触发→动作→结果」闭环），且每句新动作必须由上一句因果引发；禁止整镜写成一段无呼吸的流水账。
 20. 主体每次明显动作必须带**至少 1 处附属物副运动**（行囊/铺盖/衣摆/毛领/发丝/手中道具/烟雾/尘土），写清摆动方向与幅度；静止镜头也保留 1 处微副运动。
 21. **可见事实密度**：每个 [Shot N] 平均每秒 ≥ 2 个可被相机拍到的事实（肢体质心/接触点/受理形变/位移/道具变化/表情/环境反应/副运动/镜头运动/同步声音）；禁止用形容词与心理描写顶替可见事实。
-22. **三段复述一致**：subject_definitions（定义）→ detailed_description（首次出现复述）→ retention_analysis（再列举）三处特征词（颜色/材质/数量）必须一致；正文/retention 严禁出现未定义的新外貌/新道具/新配色。
+22. **三段复述一致**：subject_definitions（定义）→ detailed_description（**本块内首次出现的那一镜**复述一次）→ retention_analysis（再列举）三处特征词（颜色/材质/数量）必须一致；正文/retention 严禁出现未定义的新外貌/新道具/新配色。
+22b. **只复述一次**：同一 [SHOT_START] 块内同一 <Subject N> 的特征清单只允许出现 1 次（就是它首次出现的那一镜）；后续 [Shot N] 只写 `<Subject N>` + 动作/位置/状态。出现 ≥2 次即不合格（官方规范：Continue using the same label without redefining）。
+22c. **视觉锚点**：`[视觉锚点表]` 里的每个元素，只要在本段画面出现，就必须逐字复述表内规格短语一次（严禁同义改写）；表里没有的元素不得凭空写它跨段存在。
+22d. **资产调度完备**：凡本段画面里能被看见的已声明角色/道具（含被注视、在场、背景指代、被操作的对象）必须全部列进 **角色/**道具** 字段与 SCENE_INSTRUCTION.slots；不出现的严禁多塞。正文与 slots 必须一一对应。
+22e. **段间画面继承**：第 2 段起 [Shot 1] 严禁重新建立场景（不得再写环境全貌式重开场），必须承接上段末态的动作/视线，并继承固定地标方位、光位时段、地形痕迹（大坑/碎屑/烟尘/脚印）与在场人物的既有位置。
+22f. **状态账本**：`[状态账本]` 已在第一个 [SHOT_START] 之前输出；每段的 `**状态交接**` 字段逐元素写了「上段末态→本段末态」，且与账本一致。
+22g. **状态连续性**：[Shot 1] 落过继承态、段末落过末态；**无因消失/复位/换位/形变四类禁令全部遵守**（道具位置朝向、角色服装破损与伤口血迹、特效出现-持续-结束、场景破坏累积，事事有交代）。
 23. 固定 ref2va：**严禁**写 `<Picture N> is the first frame of [Shot 1]` / `is the last frame of`、严禁在 summary 写 `keyframe completion`、严禁在 retention 写 `([Shot 1] first frame)`——本工作流没有首帧/尾帧锚定路径，参考图一律按普通参考写。
 24. **段首静默**：每段开头 **1 秒**内严禁出现任何 <d> 台词（含对白/画外音/内心独白），第一句台词最早时间必须 ≥ 1 秒。'''
 
@@ -289,9 +366,66 @@ H3_SHOT_RULES_EN = '''
 - Keep ONLY the following in the original language: 1) <d> dialogue/lyrics (per user, e.g. <d>[中文] 原文。</d>); 2) on-screen text wrapped in English double quotes.
 - The examples below only show structure; the actual body language follows the selected output language.
 ## 4. Output Format (CRITICAL — follow exactly, violation = failure)
+Output order is fixed: [VISUAL ANCHOR TABLE] → then every [SHOT_START]...[SHOT_END] segment block.
 Each segment is strictly wrapped in [SHOT_START]...[SHOT_END]. Inside each block, in order:
-(1) Shot info: **Title/**Duration/**Shot Size/**Camera Movement/**Characters/**Scene/**Props/**Action Description/**Mood & Lighting
+(1) Shot info: **Title/**Duration/**Shot Size/**Camera Movement/**Characters/**Scene/**Props/**Action Description/**Mood & Lighting/**State Handoff
 (2) Prompt + scheduling instructions: four fixed marker sections
+
+### 4.0 Visual Anchor Table (CRITICAL — MUST be output before the FIRST [SHOT_START]; exactly once for the whole film)
+The video model **sees only one segment's prompt at a time** and cannot see the other segments. Any element that has **no reference image** yet recurs across segments — spells/VFX, energy barriers, temporary props, wounds and grime, weather and light phase, damaged terrain — will be re-invented every segment if each one describes it freely, so the finished film looks like "a different film every segment" (the same shield is a sphere in segment 1, a hexagon in segment 3, a cylinder in segment 5).
+Therefore: **before shooting, lock one spec for each such element in the "Visual Anchor Table"; afterwards, every segment where it appears MUST restate that exact spec verbatim.**
+
+Format (one entry per line, starting with "· ", never stacked on one line):
+
+```
+[VISUAL ANCHOR TABLE]
+· <element name>｜<spec phrase>｜first appears: segment N｜copy verbatim
+```
+- **Element name**: a short name (e.g. "golden barrier", "sky rift", "impact crater", "cold-violet skylight"); the body text always refers to it by this name.
+- **Spec phrase**: fixed once, detailed enough to be **drawn** — **shape + colour + material/glow + size proportion + surface pattern**. Example: `golden translucent spherical energy dome, ~two body-heights across, six-sided fine pattern flowing across its surface, warm gold fading outward`. Never write a shapeless name like "golden barrier" alone.
+- **First appears**: which segment number it first shows up in.
+- **Copy verbatim**: copy this tail exactly; never reword it.
+- The table holds **only elements without reference images**. Characters / scenes / props with reference images do NOT go in this table (they keep identity via the reference image and `<Subject N>`).
+- Only list elements that **really recur across segments** (one-off temporary elements inside a single segment do not need an entry) — usually 3-8 entries; when there are none, still output the table with one line `· (no cross-segment non-asset elements in this film)`.
+
+**Anchor restatement iron rules (CRITICAL — this and the "three-place consistency" rule both apply, with different scopes)**:
+- **Characters / scenes / props with reference images** → expand the feature list only in the shot where they **first appear in this block**; later [Shot N] use only `<Subject N>` + action/position and **must not repeat the feature list** (see "Three-place consistency" in section D).
+- **Cross-segment elements without reference images** (every entry in the Visual Anchor Table) → whenever one appears **in this segment's frames**, the body MUST contain one description **word-for-word identical** to its spec phrase (put it in the shot where it first appears), and **reworded synonyms are banned** ("spherical" must not become "dome-shaped"; "six-sided pattern" must not become "fine pattern"). When it does not appear in this segment, never claim it is still there.
+- Copying the spec phrase does **not count** toward the {Detail_Length} word minimum — it is a hard anchor, not body length.
+
+### 4.0b State Ledger (CRITICAL — output right after the Visual Anchor Table; exactly once for the whole film)
+The anchor table fixes **what it looks like**; the state ledger fixes **what state it is in during each segment**. The video model sees only one segment and **cannot remember whose hand the prop was in, whether the barrier still exists, or whether the crater was filled** — so lay out the film's whole **state-evolution chain** first, then execute segment by segment along that chain.
+
+Format (one entry per line, `· element｜segment N: state｜segment M: state｜…`):
+
+```
+[STATE LEDGER]
+· toy sword｜seg 1: held horizontally in the right hand, tip pointing down｜seg 2: driven vertically into the soil, half buried｜seg 3: shot skyward, hit the sky, fell into the grass by the bed｜seg 5: dropped on the ground by the groundhog, blade muddy｜seg 6-7: still on the ground, position unchanged
+· rabbit｜seg 1: standing, clothes clean and intact｜seg 2: crouching to plant the sword, knees muddy｜seg 4: standing three metres outside the crater, head tilted up｜seg 6: head lowered in apology, ear tips drooping｜seg 7: still outside the crater, same spot
+· golden barrier｜seg 5: formed (spherical, spec in the anchor table)｜seg 6: still up, its afterglow on the rabbit's fur｜seg 7: shattered from the top, dissolved into scattered light points
+· impact crater｜seg 4: smashed open, ~3 m across, clods upturned at the rim｜seg 5-7: still there, silt accumulated inside, rim clods not backfilled
+```
+
+Mandatory fields per category (missing any one = failure):
+
+| Category | Fields the state ledger MUST cover |
+|---|---|
+| **Prop** | Position (whose hand / which patch of ground / how far from whom) + orientation (which way the tip points, which way the hilt faces) + integrity (intact / muddy / edge rolled / broken / dropped) + ownership (who holds it) |
+| **Character** | Posture (standing / crouching / sitting / fallen) + rough position + **clothing damage** (which part, how large, what shows through) + **wounds and blood** (where, still bleeding, dried, smeared elsewhere) |
+| **VFX** | **Appearance** (trigger source + form spec) → **duration** (position/intensity/size change inside this segment) → **end** (how it dissipates, what residue remains); while it has not ended you MUST write "still present" |
+| **Scene** | Accumulated damage (crater / rift / broken beds / flattened seedlings / debris / smoke) + it only ever accumulates (unless this segment explicitly repairs it); once the terrain changes, every later shot follows the new terrain |
+
+- Once a state is set in the ledger, later segments' body text and the `**State Handoff**` field must **agree with it**; any change must be performed on screen (knocked away, dropped, repaired, burned) — **no causeless change**.
+- For one-off elements that appear once and never again, state how it leaves (thrown far / burned / left behind as the camera exits) — never let it vanish into thin air.
+
+**State-continuity iron rules (CRITICAL — paired with the ledger; missing either one breaks the film's coherence)**:
+- ① **Every segment's [Shot 1] must first land the inherited state**: at least one sentence, with directional wording, covering the previous end state — whose hand the prop is in / which way it points / how far from whom, the character's posture and injuries, whether the VFX is still up, whether the terrain traces (crater / debris / smoke) are still in place.
+- ② **Every segment's ending must land the end state**: 1-2 sentences pinning down the instant the segment ends (who is where, where the prop is and which way it points, how far the wound has progressed, what state the VFX is in, what state the terrain is in) for the next segment to inherit.
+- ③ **Blanket ban on four kinds of causeless change** (any one = failure):
+  - **Causeless vanishing**: the prop in hand disappears, the barrier that was up is gone, a character who was on screen is missing — it must be performed (thrown / shattered / dissipated / walked out).
+  - **Causeless reset**: wounds heal, clothes repair themselves, the crater is filled in, blood disappears, the prop returns from the ground to a hand, a fallen character is standing again.
+  - **Causeless relocation / hand-swap**: prop moves from left hand to right, ground to body, A's hand to B's hand, frame-left to frame-right (unless this segment explicitly performs the movement).
+  - **Causeless deformation**: shape / size / colour / pattern changes (barrier sphere → hexagon, blade grows longer, VFX changes colour) — the anchor-table spec must be copied verbatim unless this segment performs the transformation (shattering, melting, upgrading).
 
 ### 4.1 Shot Info Format
 - Segment-title naming (CRITICAL): the first line of every segment block is `### Video_XXX` (Video numbers zero-padded to three digits, incrementing: Video_001, Video_002...). This is the segment title and is completely unrelated to the cut label [Shot N] inside detailed_description — never write `### Shot_XXX`.
@@ -304,7 +438,13 @@ Each segment is strictly wrapped in [SHOT_START]...[SHOT_END]. Inside each block
 **Props**: [comma-separated key props; "none" if none. ONLY props declared in the material intro; never invent undeclared props]
 **Action Description**: [1-3 sentences covering this segment's core action and result; put details in detailed_description, do NOT duplicate]
 **Mood & Lighting**: [15-30 words, light source/tone/atmosphere]
+**State Handoff**: [per element write "previous end state -> this segment's end state", separated by ";". MUST cover every **prop** that appears (position + orientation + integrity), every **character** (posture + clothing damage + wounds/blood), every **VFX** (still up / dissipated / formed), every **scene** change (are the damage traces still there). Format: `toy sword: planted in the bed (prev) -> lifted and spinning by qi (this seg); rabbit: standing outside the crater (prev) -> head lowered in apology (this seg); crater: still there, rim clods not backfilled`. For segment 1 write only this segment's end state with "—" in front]
 - ⚠️ Declared-elements rule (CRITICAL): the **Characters/**Scene/**Props** fields may ONLY list elements declared in the material intro; undeclared elements the plot needs (makeshift bags, passersby, environment props) go ONLY into the detailed_description body — never into these three fields, never into dispatch slots.
+- ⚠️ **Asset-dispatch completeness rule (CRITICAL — one missing character = that character's look is invented by the model)**: **every declared element that can be seen in this segment's frames MUST be listed in the matching field AND in slots** — it does not have to be the segment's protagonist. Test: any one of these makes it mandatory — ① the body mentions it (including references outside `<Subject N>`, e.g. "the rabbit standing outside the crater", "the rabbit's cabin in the distance"); ② any character looks at / points at / speaks to it; ③ it is in the background, foreground, or the clear referent of an off-screen line; ④ it is the object of this segment's action (held, hit, thrown, destroyed).
+  - Good example (the protagonist is the groundhog, but the rabbit is seen standing outside the crater): `**Characters**: groundhog, rabbit` + `{"slots":["场景:场景A","角色:角色B","角色:角色A","道具:道具B"]}`.
+  - Bad example (banned): the body says "his gaze passes through the barrier to the rabbit standing outside the crater" while `**Characters**` lists only the groundhog and slots omit the rabbit — the rabbit then gets an arbitrary look and drifts across segments.
+  - Priority (when the ≤9 image limit is exceeded): segment protagonist > object of direct interaction > watched/present secondary character > background scenery; anything dropped must **also be removed from the body** (body and slots must always agree).
+  - A declared element that truly does not appear (not written in the body, not in frame) **must NOT** be added "just in case" — surplus references eat the reference budget and mislead the model.
 
 ### 4.2 H3 Prompt (six-section Ref2VA format, field names stay in English verbatim)
 ===H3_PROMPT===
@@ -329,13 +469,14 @@ The user's material intro declares each item as "slotName = materialName (descri
   - (4) STYLE ANCHORING: when a reference image carries this segment's overall style, merge "the style + that image's environment" into one Subject: `<Subject 2> is <environment description> and <style name/texture> in <Picture N>, characterized by <style elements (sky/smoke/foliage/color grading/shading...)>`; reference that label in the body and retention to keep the style consistent.
   - (5) <Picture N> ROLE LINE (mandatory): every reference image needs one line stating the role it plays here — plain reference: `... is the reference for <Subject K> ...`; composition reference: `... is the composition reference ...`. This workflow is FIXED to ref2va: NEVER write `is the first frame of [Shot 1]` / `is the last frame of [Shot M]` style anchors.
   - (6) <Subject N> vs <Picture N> USAGE (CRITICAL): `<Subject N>` describes the CONTENT/features of a subject/environment/style (use it when describing the picture); `<Picture N>` refers to the frame/image ITSELF (first frame / last frame / composition source). Never use <Picture N> for content ("<Picture 1>'s light blue skin" is WRONG -> "<Subject 1>'s light blue skin"), and never use <Subject N> for the image itself ("starting from <Subject 1>" is WRONG -> "starting from <Picture 1>").
-- Three-pass restatement consistency (CRITICAL): the same subject/style/environment MUST form a define -> apply -> verify loop with identical color/material/count: (1) define (subject_definitions) = full feature list; (2) apply (detailed_description) = RESTATE that list when <Subject N> first appears (sentence form may be shortened, but feature words must match, e.g. "light blue skin, studded mask, patched gi, massive pack, twin katana"); (3) verify (retention_analysis) = list the same features again. NEVER introduce new looks/props/colors in the body or retention that subject_definitions did not define.
+- Three-pass restatement consistency (CRITICAL — mind the "restate only once" ban as well): the same subject/style/environment MUST form a define -> apply -> verify loop with identical color/material/count: (1) define (subject_definitions) = full feature list; (2) apply (detailed_description) = RESTATE that list **in the one shot where <Subject N> first appears inside this block** (sentence form may be shortened, but feature words must match, e.g. "light blue skin, studded mask, patched gi, massive pack, twin katana"); (3) verify (retention_analysis) = list the same features again. NEVER introduce new looks/props/colors in the body or retention that subject_definitions did not define.
+- ⚠️ **"First appearance" happens only once (CRITICAL — violating this wastes length)**: inside one [SHOT_START] block, the "first appearance" of a <Subject N> is **the one [Shot N] where it is first written in the body** — that is the only occurrence. **Every later [Shot N] in the same block writes only `<Subject N>` + that shot's action/position/state and must NOT repeat the feature list** (official wording: Continue using the same label in later shots without redefining what the label represents). Bad example (banned): "[Shot 2] ... <Subject 2> plush humanoid rabbit, upright bipedal build, long ears, soft plush texture, wearing a light-blue denim overall, beige scarf around the neck, right hand holding <Subject 3> wide rounded blade, blunt tip, brown cord-wrapped handle, red-gold decoration, toy-blunted form" — shot 2 only needs "<Subject 2> holds <Subject 3> in the right hand, sinking into a crouch". Likewise, **a second occurrence of the same subject's feature list inside one block is a failure** (one exception: elements without reference images that live in the Visual Anchor Table are restated once per segment by the anchor rule).
 - <Video N>: reference video, numbered by VIDEO_INSTRUCTION.slots index + 1. <Audio N>: standalone audio (voice timbre / sound effect), numbered by AUDIO_INSTRUCTION.slots index + 1 = speaking order (first speaker = <Audio 1> = (S1)). NOTE: a reference video's synchronized soundtrack ALSO consumes an <Audio N> and is numbered BEFORE standalone audios — if this segment has a video soundtrack, standalone audio numbers = soundtrack count + speaking order; with no soundtrack, standalone audios start at <Audio 1>.
 - Audio rule: define <Audio N> and write audio slots ONLY when someone actually speaks in this segment (there is a <d> dialogue in detailed_description). Segments with no dialogue: no <Audio N>, no audio in AUDIO_INSTRUCTION.slots, no (Sx) in action descriptions.
 - Total reference limit: per segment, images ≤9, videos ≤3, audios ≤3, total ≤12. Do NOT declare more than the limit.
 
 #### summary
-1-3 sentences with a FIXED three-beat structure: (1) starting point (which frame / the previous segment's end state this segment begins from, citing <Picture N>); (2) the triggering event (what breaks the initial state); (3) the subject's action and its visible result (what <Subject N> does and what visibly results).
+1-3 sentences with a FIXED three-beat structure: (1) starting point (which frame / the previous segment's end state this segment begins from, citing <Picture N>; **from segment 2 on this beat MUST name the inherited visible anchors**: leftover landmark positions / light phase / key prop position / undissipated VFX or terrain traces, e.g. "starting from <Subject 2> standing outside the crater with dust still rising and cold-violet skylight pouring from above"); (2) the triggering event (what breaks the initial state); (3) the subject's action and its visible result (what <Subject N> does and what visibly results).
 - Open with a bracketed task-type prefix (combined with " + "), vocabulary: `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`. NEVER use `keyframe completion` — this workflow has no first/last-frame anchor path.
 
 #### retention_analysis
@@ -347,6 +488,12 @@ One line per label with markers: fully_preserved / partially_preserved / attribu
 
 #### detailed_description (main body — the core of video quality, write in full detail)
 - Positioning (CRITICAL): this segment's duration follows the **Duration** field of the segment info (global duration setting: {Segment_Duration}); detailed_description MUST fully describe the video from start to end (chained with multiple [Shot N] cuts), not just one action or one frame.
+- 🔗 **Cross-segment frame inheritance rule (CRITICAL — the only cure for "seven fragments")**: this segment is not a new film; it is **the next stretch of the previous segment's footage**. Every segment from #2 on must satisfy, in its [Shot 1]:
+  - ① **No re-establishing the scene**: never write another "wide shot showing the whole / neat rows of vegetable beds stretching into the distance / the whole environment" style **re-opening** (that is segment 1's job). [Shot 1] must be a **continuation of the previous end state** — pick up the character's last posture, facing, prop position and gaze direction and keep playing.
+  - ② **Inherit Fixed Landmarks + Lighting Baseline**: landmarks established earlier (wooden fence on frame right, well at the left third, crater lower-centre…) and the key-light direction and time-of-day phase (cold-violet skylight pouring from above / warm gold side-backlight / harsh noon top light…) MUST be restated or continued with the **same directional wording**; if this segment really changes camera position or time phase, it must **explicitly mark the switch** (e.g. "hard cut to a reverse angle, fence now on frame left") and never change it silently.
+  - ③ **Inherit destructible terrain and traces**: the crater from the last segment, upturned soil, debris, smoke, footprints, blood, flattened seedlings, where a prop landed — this segment is still the same place and time, so **those traces must still exist in the same position** (unless this segment explicitly shows them being cleaned or buried). Ground must never silently heal between segments.
+  - ④ **Inherit on-screen character positions (Exited Character Status)**: a character present earlier but not the protagonist here must have their current location stated (off-screen left / standing outside the crater / left behind); they may not silently vanish. If they re-enter, bring them in from that existing position in [Shot 1].
+  - ⑤ All of this **must be written into the body** (one sentence with directions and light phase landing on [Shot 1]) — not just declared in summary.
 - Style declaration & per-noun styling (CRITICAL): BEFORE `[Shot 1]` write ONE sentence (two at most; never dump the whole style spec into the opening) declaring genre/texture — fixed pattern: "The target video is in a <medium/render> <style name/texture> style." ⚠️ The style must NOT live only in that opening sentence — EVERY environment / effect / prop noun inside the shots MUST carry a style-qualified adjective ("stylized cyan smoke", "four-pointed stars", "flat-shaded foliage", "a stylized trailing arc of light blue energy") so the style permeates sentence by sentence. Forbid generic words unrelated to the style ("live-action", "cinematic", "beautiful", "bright and clear"). Each segment's style MUST match "## 1. Story Style"; never invent a different style per segment.
 - In-shot beats (CRITICAL, all styles): when one [Shot N] contains several beats, **separate each beat into its own paragraph with a blank line**, each beat being a trigger -> action -> result loop (e.g. beat 1 establishes the first frame/scene -> blank line -> beat 2 trigger + subject reaction + wind-up -> blank line -> beat 3 impact/result + environment reaction + camera follow -> blank line -> beat 4 physical end-state). When cuts are few (or it is a one-take), beats MUST carry the storytelling — never write the whole shot as one breathless run-on block.
 - Sentence-to-sentence causality (CRITICAL): every new action sentence must answer "because of what happened in the previous sentence" — event -> immediate subject reaction -> new state chain reaction. Never put a causally unrelated action next to the previous one (it reads like an action checklist).
@@ -540,7 +687,7 @@ Output the remaining segments in the same format, Video numbers zero-padded to t
 5. Do NOT translate dialogue inside <d> tags; preserve the original language.
 6. Do NOT invent <Subject N>/<Picture N>/<Video N>/<Audio N> labels; omit them if no reference material exists.
 7. Scheduling instructions must be single-line JSON; the slots order must strictly match the <Picture N>/<Video N>/<Audio N> numbering in the prompt. No multiline, no comments, no misalignment.
-8. Output nothing outside [SHOT_START]...[SHOT_END] except: in Generate mode you MUST output a 【故事】 story body before the first segment block; in Decompose mode output no story body, no statistics table, no extra notes.
+8. Output nothing outside [SHOT_START]...[SHOT_END] except: (1) the `[VISUAL ANCHOR TABLE]` before the first segment block (mandatory; format in §4.0); (2) the `[STATE LEDGER]` right after it (mandatory; format in §4.0b); (3) in Generate mode the 【故事】 story body before the first segment block (Decompose mode outputs no story body). No statistics table, no extra notes.
 9. Do NOT use vague pronouns (the man/the woman/someone); use character names or descriptive labels.
 10. Do NOT use cross-shot references like "same as above" or "continues".
 11. After the dash in retention_analysis you MUST list the concrete features already defined in subject_definitions (separated by commas, ending with a period). Do NOT write "retained"/"are retained" (the degree is already expressed by fully_preserved etc.), do NOT mechanically write "per <Picture N> fully retained", and do NOT invent appearance/prop details absent from subject_definitions.
@@ -554,6 +701,12 @@ Output the remaining segments in the same format, Video numbers zero-padded to t
 19. Multiple beats inside ONE [Shot N] MUST be split into paragraphs with blank lines (each beat = a trigger -> action -> result loop), and every new action sentence must be caused by the previous one; never write the whole shot as one breathless run-on block.
 20. Every noticeable subject action MUST drag at least ONE attached object into secondary motion (pack/bedrolls/hem/fur collar/hair/handheld prop/smoke/dust), with direction and amplitude stated; even a static shot keeps one micro secondary motion.
 21. VISIBLE-FACT DENSITY: every [Shot N] needs at least 2 camera-capturable facts per second on average (limb centroid / contact point / deformation / displacement / prop change / expression / environment reaction / secondary motion / camera move / synchronized sound); never substitute adjectives or psychology for visible facts.
-22. THREE-PASS RESTATEMENT CONSISTENCY: subject_definitions (define) -> detailed_description (restate at first appearance) -> retention_analysis (list again) must use identical feature words (color/material/count); NEVER introduce looks/props/colors in the body or retention that were not defined.
+22. THREE-PASS RESTATEMENT CONSISTENCY: subject_definitions (define) -> detailed_description (restate **once**, in the single shot where the subject first appears in this block) -> retention_analysis (list again) must use identical feature words (color/material/count); NEVER introduce looks/props/colors in the body or retention that were not defined.
+22b. RESTATE ONLY ONCE: inside one [SHOT_START] block, a subject's feature list may appear exactly ONCE (in the shot where it first appears); every later [Shot N] writes only `<Subject N>` + action/position/state. Two or more occurrences in one block is a failure (official wording: Continue using the same label without redefining).
+22c. VISUAL ANCHORS: every element in the [VISUAL ANCHOR TABLE] that appears in this segment MUST be restated once word-for-word from the table (reworded synonyms banned); never claim an element that is not in the table persists across segments.
+22d. ASSET-DISPATCH COMPLETENESS: every declared character/prop visible in this segment's frames (watched, present, referenced in the background, or the object of an action) MUST be listed in the **Characters/**Props** fields and in SCENE_INSTRUCTION.slots; never add elements that do not appear. The body and slots must match one-to-one.
+22e. CROSS-SEGMENT FRAME INHERITANCE: from segment 2 on, [Shot 1] MUST NOT re-establish the scene (no whole-environment re-opening); it must continue the previous end state's action/eyeline and inherit the fixed landmark positions, light phase, terrain traces (crater/debris/smoke/footprints) and the existing positions of on-screen characters.
+22f. STATE LEDGER: the `[STATE LEDGER]` is output before the first [SHOT_START]; each segment's `**State Handoff**` field lists "previous end state -> this segment's end state" per element and agrees with the ledger.
+22g. STATE CONTINUITY: [Shot 1] lands the inherited state and the segment ending lands the end state; the four causeless-change bans (vanish / reset / relocate / deform) are all obeyed — prop position and orientation, character clothing damage and wounds/blood, VFX appearance-duration-end, accumulated scene damage are all accounted for.
 23. Fixed ref2va: NEVER write `<Picture N> is the first frame of [Shot 1]` / `is the last frame of`; NEVER put `keyframe completion` in the summary; NEVER write `([Shot 1] first frame)` in retention — this workflow has no first/last-frame anchor path; reference images are always plain references.
 24. HEAD SILENCE: the first 1 second of every segment MUST contain NO <d> dialogue at all (spoken line / voiceover / inner monologue); the earliest dialogue timestamp must be ≥ 1 second.'''

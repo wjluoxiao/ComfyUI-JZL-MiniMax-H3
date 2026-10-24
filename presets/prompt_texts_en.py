@@ -12,7 +12,7 @@
 SCRIPT_SKELETON_V2_EN = '''# Role: Senior short-drama screenwriter & MiniMax H3 segment-prompt engineer
 You are a professional short-drama writer and MiniMax H3 video-prompt expert. Your task has two steps:
 Step 1: decompose the user's story by PLOT into {Segment_Count} segments (count rules in B "Segment Count") — each segment is one independent video clip (duration in B "Constraint Framework"; when a range is configured, assign each segment its actual seconds along the story arc and write that number into the segment's **Duration** field).
-Step 2: treat each segment as an independent video and polish it into one complete prompt that can be fed straight into the MiniMax H3 model (six Ref2VA fields + scheduling instructions; format in D).
+Step 2: treat each segment as an independent video and polish it into one complete prompt that can be fed straight into the MiniMax H3 model (six Ref2VA fields + scheduling instructions; format in D). **First lock the `[VISUAL ANCHOR TABLE]` and the `[STATE LEDGER]`** (fixed specs for cross-segment non-asset elements + each element's per-segment state-evolution chain; see D §4.0 / §4.0b).
 
 {Duration_Hard_Rule}
 
@@ -64,7 +64,12 @@ Step 4 · Review (self-check after writing everything; fix anything that fails):
    - Six-field body language = the user's selected output language (中文[ZH] = Chinese, 英文[EN] = English; field names/markers stay English); only <d> and on-screen text keep their original language;
    - The camera-language preference (shot size / camera move / cut rhythm / transition / music / word count) and the custom polish rules have been applied item by item (shot-size tier, cut count, transitions, word count all matching the preference);
    - retention_analysis uses the correct degree markers and lists already-defined features after the dash;
-   - **Three-place consistency**: subject_definitions (feature list) → detailed_description (the same list restated when <Subject N> first appears) → retention_analysis (listed again) agree on colors / materials / quantities; the body contains no undefined new appearance, prop or palette;
+   - **Three-place consistency**: subject_definitions (feature list) → detailed_description (the same list restated **once, in the one shot where <Subject N> first appears in this block**; later [Shot N] write only the label + action) → retention_analysis (listed again) agree on colors / materials / quantities; the body contains no undefined new appearance, prop or palette;
+   - **Visual anchor table**: `[VISUAL ANCHOR TABLE]` is output before the first [SHOT_START]; every table element that appears in this segment is restated word-for-word (no synonyms); elements this segment does not show are never claimed to persist;
+   - **State ledger + state handoff**: `[STATE LEDGER]` is output before the first [SHOT_START]; this segment's `**State Handoff**` lists "previous end state -> this segment's end state" per element and matches that segment's ledger cell (prop position/orientation/integrity, character clothing damage/wounds-blood, VFX appearance-duration-end, accumulated scene damage);
+   - **Four causeless-change bans**: no causeless vanishing / reset / relocation / deformation in this segment ([Shot 1] lands the inherited state and the ending lands the end state);
+   - **Cross-segment inheritance**: from segment 2 on, [Shot 1] has no re-opening (no whole-environment wide shot), and the inherited landmark directions / light phase / terrain traces / on-screen character positions are written into the body;
+   - **Asset-dispatch completeness**: every declared character/prop visible in this segment (watched, present, referenced in the background, or the object of an action) is listed in the **Characters/**Props** fields and in slots, with the body matching slots one-to-one (over-listing and missing both fail);
    - **Style permeates every sentence**: the style is declared in one sentence only (pattern "This segment is a <medium/render> film in the <style> style"), and every environment / VFX / prop noun carries a style-specific modifier;
    - **Intra-shot beats + causal links**: multi-beat shots are split into paragraphs by blank lines (each beat = trigger → action → result), and every new action is caused by the previous sentence;
    - **Secondary motion + visible-fact density**: every main action carries at least one secondary motion of an attached element (bag / hem / hair / prop / smoke / dust); every [Shot N] averages ≥ 2 camera-visible facts per second;
@@ -72,8 +77,7 @@ Step 4 · Review (self-check after writing everything; fix anything that fails):
    - **Two sound fields**: overall_soundscape follows event order (dominant event sounds → ambient bed, each with "material + action + intensity"); non_diegetic_music defaults to N/A, and when music is specified write "genre/tempo + three instruments (with playing technique) + the on-screen event it matches";
    - {Seam_Check_Rule}
 
-## D. Authoritative output format (six Ref2VA fields + scheduling instructions — follow strictly)
-{H3_Shot_Rules}'''
+## D. Authoritative output format (six Ref2VA fields + scheduling instructions — follow strictly){H3_Shot_Rules}'''
 
 
 # ── 分段数说明 ──────────────────────────────────────────────

@@ -120,8 +120,40 @@ def _write_api_settings(data):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  时长兜底：把越界的 [Shot N] 时间戳压回本段「时长」内
+#  剧本前缀块：「视觉锚点表」/「状态账本」提取（拆解 + 增强共用）
 # ═══════════════════════════════════════════════════════════════
+
+_ANCHOR_HEAD_RE = re.compile(r'\[\s*(?:视觉锚点表|VISUAL\s+ANCHOR\s+TABLE)\s*\]', re.IGNORECASE)
+_LEDGER_HEAD_RE = re.compile(r'\[\s*(?:状态账本|STATE\s+LEDGER)\s*\]', re.IGNORECASE)
+
+
+def _extract_prefix_blocks(text):
+    """从第一个 [SHOT_START] 之前的前缀里切出「视觉锚点表」与「状态账本」。
+
+    两者顺序不固定（模型偶发颠倒），所以按「各自开头到另一个开头（或前缀末尾）」切片，
+    而不是假设固定顺序。返回 (锚点表原文, 账本原文)，缺失的为空串。
+    """
+    head = re.split(r'\[SHOT_START\]', str(text or ""), maxsplit=1)[0]
+    heads = []
+    for m in _ANCHOR_HEAD_RE.finditer(head):
+        heads.append((m.start(), "anchor"))
+    for m in _LEDGER_HEAD_RE.finditer(head):
+        heads.append((m.start(), "ledger"))
+    if not heads:
+        return ("", "")
+    heads.sort()
+    found = {"anchor": "", "ledger": ""}
+    for i, (pos, kind) in enumerate(heads):
+        end = heads[i + 1][0] if i + 1 < len(heads) else len(head)
+        chunk = head[pos:end].strip()
+        # 同一类出现多次时保留第一份（后面的是模型重复输出）
+        if chunk and not found[kind]:
+            label = "[视觉锚点表]" if kind == "anchor" else "[状态账本]"
+            body = chunk[chunk.index("]") + 1:].strip()
+            found[kind] = (label + "\n" + body).strip() if body else label
+    return (found["anchor"], found["ledger"])
+
+
 
 _TS_RE = re.compile(r"\[Shot\s*(\d+)\]\s*At\s+(\d{1,3}):(\d{2})\.(\d{1,3})")
 _SEG_DUR_RE = re.compile(r"\*\*(?:时长|Duration)\*\*\s*[:：]\s*(\d+(?:\.\d+)?)")
@@ -1228,14 +1260,27 @@ class JZL_MiniMax_ScriptProcessor:
             if m:
                 story_body = m.group(1).strip()
 
-        # 剧本输出：故事内容块（生成模式）+ 统计表 + 清理后的分段原文
+        # 提取「视觉锚点表」：LLM 在第一个 [SHOT_START] 之前输出的跨段元素规格表。
+        # 它必须原样保留进剧本——① 用户能看到并手工修正；② 提示词增强阶段要靠它避免改写规格；
+        # ③ 下一轮重跑时可直接参考。缺失时给一条提示，便于用户知道模型没按规范输出。
+        anchors_text = ""
+        ledger_text = ""
+        if shots:
+            anchors_text, ledger_text = _extract_prefix_blocks(result or "")
+            if not anchors_text:
+                print("[JZL-拆解] ⚠️ 未检测到「[视觉锚点表]」：跨段法术/特效/地形痕迹可能每段各写各的（建议重跑）")
+            if not ledger_text:
+                print("[JZL-拆解] ⚠️ 未检测到「[状态账本]」：道具位置/服装破损/伤口血迹/特效与地形可能在段间无因变化（建议重跑）")
+
+        # 剧本输出：故事内容块（生成模式）+ 统计表 + 视觉锚点表 + 状态账本 + 清理后的分段原文
         if shots:
             cleaned_result = "\n\n".join(f"[SHOT_START]\n{s}\n[SHOT_END]" for s in cleaned_shots)
+            prefix_block = "\n\n".join(x for x in (stat_table, anchors_text, ledger_text) if x)
             if story_body:
                 script_output = (f"[生成模式扩展后的故事内容]\n****\n{story_body}\n*****\n\n"
-                                 + stat_table + "\n\n" + cleaned_result)
+                                 + prefix_block + "\n\n" + cleaned_result)
             else:
-                script_output = stat_table + "\n\n" + cleaned_result
+                script_output = prefix_block + "\n\n" + cleaned_result
         else:
             script_output = result
 
