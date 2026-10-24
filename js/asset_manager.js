@@ -543,10 +543,42 @@ function rememberCaret(editable) {
     // 把编辑器的实时光标偏移记到自身 __lastCaret（每个编辑器独立记忆，避免全局/闭包记忆过期）。
     // 点击素材卡片会 blur 编辑器导致 selection 丢失，因此在 mousedown（blur 前）调用本函数捕获。
     if (!editable) return;
+    // 普通 <textarea>（重拍编辑框）：直接用 selectionStart
+    if (String(editable.tagName || "").toUpperCase() === "TEXTAREA") {
+        try {
+            if (typeof editable.selectionStart === "number") editable.__lastCaret = editable.selectionStart;
+        } catch (_) {}
+        return;
+    }
     const sel = window.getSelection();
     if (sel && sel.rangeCount && editable.contains(sel.anchorNode)) {
         editable.__lastCaret = caretOffset(editable);
     }
+}
+
+// 在普通 <textarea> 的光标处插入素材名（保留滚动位置，并触发 input 让上层同步保存）
+function insertAssetIntoTextarea(textarea, item, caretRef) {
+    if (!textarea) return;
+    const name = (item && (item.matchName || item.display || item.token || "") || "").trim();
+    if (!name) return;
+    const txt = String(textarea.value || "");
+    let off = null;
+    try {
+        if (typeof textarea.selectionStart === "number") off = textarea.selectionStart;
+    } catch (_) {}
+    if (typeof off !== "number" && typeof textarea.__lastCaret === "number") off = textarea.__lastCaret;
+    if (typeof off !== "number" && caretRef && typeof caretRef.value === "number") off = caretRef.value;
+    if (typeof off !== "number") off = txt.length;
+    off = Math.max(0, Math.min(txt.length, Math.floor(off)));
+    const scroll = textarea.scrollTop;
+    textarea.value = txt.slice(0, off) + name + txt.slice(off);
+    const pos = off + name.length;
+    try { textarea.setSelectionRange(pos, pos); } catch (_) {}
+    textarea.__lastCaret = pos;
+    if (caretRef) caretRef.value = pos;
+    try { textarea.scrollTop = scroll; } catch (_) {}
+    textarea.focus();
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 // contenteditable 光标辅助
@@ -1193,6 +1225,332 @@ function extractShots(script) {
     return out;
 }
 
+// 把编辑后的各段正文写回整份剧本：保留统计表前缀、段与段之间的其它文字、以及尾部内容。
+function jzlApplyShotBodies(script, bodies) {
+    const src = String(script == null ? "" : script);
+    const list = bodies || [];
+    const re = /\[SHOT_START\][\s\S]*?\[SHOT_END\]/g;
+    let out = "", last = 0, i = 0, m;
+    while ((m = re.exec(src))) {
+        out += src.slice(last, m.index);
+        if (i < list.length) {
+            out += "[SHOT_START]\n" + String(list[i] == null ? "" : list[i]).replace(/^\n+|\n+$/g, "") + "\n[SHOT_END]";
+        } else {
+            out += m[0];
+        }
+        last = m.index + m[0].length;
+        i++;
+    }
+    out += src.slice(last);
+    return out;
+}
+
+// ── 🔖 重拍：单镜头大编辑界面 ──────────────────────────────────────
+// 相当于「📝 生成剧本查看器 → 📖 编辑剧本」的大界面，但**一次只显示一个镜头**（◀▶ 或下拉切换），
+// 顶部可切「单选 / 多选」：单选 = 只重拍当前段；多选 = 勾选任意多段一起重拍。
+// 保存时把编辑内容写回整份剧本的对应段（保留统计表前缀/尾部文字），再由外层保存到磁盘或节点配置。
+function openReshootShotEditor(ctx) {
+    const { self, state, onChanged, onSaveFile } = ctx || {};
+    document.querySelectorAll(".jzl-shoteditor").forEach((m) => m.remove());
+    if (!state || !Array.isArray(state.shots) || !state.shots.length) {
+        notify("还没有载入剧本：先点「📝 选择剧本」，或展开重拍模式自动载入", "warning");
+        return;
+    }
+    const bodies = state.shots.map((s) => String(s || ""));
+    let cur = Math.max(0, Math.min(Number.isInteger(state.selected) ? state.selected : 0, bodies.length - 1));
+    let mode = state.mode === "multi" ? "multi" : "single";
+    const picked = new Set(
+        Array.isArray(state.selectedShots) && state.selectedShots.length
+            ? state.selectedShots.filter((i) => Number.isInteger(i) && i >= 0 && i < bodies.length)
+            : [cur]
+    );
+    if (!picked.size) picked.add(cur);
+    let dirty = false;
+
+    const mkBtn = (label, css) => el("button",
+        "flex:0 0 auto;height:30px;padding:0 12px;border-radius:5px;font-size:12px;cursor:pointer;white-space:nowrap;" +
+        (css || "border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;"), label);
+    const segTitle = (i) => jzlSegmentLabel("[SHOT_START]\n" + bodies[i] + "\n[SHOT_END]") || `第 ${i + 1} 段`;
+
+    const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100004;display:flex;align-items:center;justify-content:center;");
+    overlay.classList.add("jzl-shoteditor");
+    const box = el("div", "width:94%;max-width:1360px;height:90vh;background:var(--comfy-menu-bg,#242424);border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 10px 44px rgba(0,0,0,.6);");
+
+    // ── 头部：标题 + 单选/多选 + 段导航 + 保存/关闭 ──
+    const head = el("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;flex:0 0 auto;");
+    head.appendChild(el("span", "font-size:14px;font-weight:600;color:#eee;white-space:nowrap;", "🔖 重拍镜头编辑"));
+    const modeChip = (label, val) => {
+        const b = mkBtn(label, "border:1px solid #5b9bd5;background:#3a3a3a;color:#ddd;");
+        b.dataset.mode = val;
+        b.addEventListener("click", () => {
+            mode = val;
+            state.mode = mode;
+            if (mode === "single") { picked.clear(); picked.add(cur); }
+            syncModeChrome();
+            renderSide();
+            renderNav();
+        });
+        return b;
+    };
+    const singleChip = modeChip("◉ 单选", "single");
+    const multiChip = modeChip("☑ 多选", "multi");
+    const navPrev = mkBtn("◀", "width:30px;padding:0;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;");
+    navPrev.title = "上一段";
+    const navInfo = el("span", "font-size:12px;color:#e8a87c;white-space:nowrap;min-width:160px;text-align:center;", "");
+    const navNext = mkBtn("▶", "width:30px;padding:0;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;");
+    navNext.title = "下一段";
+    const navSel = document.createElement("select");
+    navSel.style.cssText = "flex:1 1 220px;min-width:0;background:#1d1d1d;color:#ddd;border:1px solid #444;border-radius:5px;padding:5px 4px;font-size:12px;";
+    navSel.title = "直接跳到某一段";
+    const saveBtn = mkBtn("💾 保存剧本", "border:1px solid #5ecf8a;background:#2d5a3a;color:#fff;font-weight:600;");
+    const closeBtn = mkBtn("关闭");
+    head.append(singleChip, multiChip, el("span", "width:6px;", ""), navPrev, navInfo, navNext, navSel, saveBtn, closeBtn);
+
+    // ── 主体：左 = 段列表（多选时显示勾选框），中 = 只显示当前这一段，右 = 资产显示窗 ──
+    const bodyWrap = el("div", "flex:1 1 auto;display:flex;gap:10px;min-height:0;");
+    const side = el("div", "flex:0 0 224px;display:none;flex-direction:column;min-height:0;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;box-sizing:border-box;");
+    const sideHead = el("div", "font-size:12px;color:#9fd6a4;margin-bottom:6px;flex:0 0 auto;", "");
+    const sideTools = el("div", "display:flex;gap:6px;margin-bottom:6px;flex:0 0 auto;");
+    const allBtn = mkBtn("全选", "height:24px;padding:0 8px;border:1px solid #5b9bd5;background:#3a3a3a;color:#ddd;");
+    const noneBtn = mkBtn("清空", "height:24px;padding:0 8px;border:1px solid #666;background:#333;color:#ccc;");
+    sideTools.append(allBtn, noneBtn);
+    const sideList = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;");
+    side.append(sideHead, sideTools, sideList);
+
+    const main = el("div", "flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;");
+    const curHead = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:6px;flex:0 0 auto;flex-wrap:wrap;");
+    const curTag = el("span", "font-size:12px;color:#ffd98a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 200px;min-width:0;", "");
+    const copyOneBtn = mkBtn("📋 复制本段", "border:1px solid #666;background:#333;color:#ddd;");
+    // 🎯 显示引用：把素材名着色成 token（与「生成剧本查看器 → 编辑剧本」完全一致的开关）
+    const refBtn = mkBtn("🎯 显示引用", "border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;");
+    refBtn.title = "参考元素切换（纯文本 / 显示引用着色）";
+    curHead.append(curTag, refBtn, copyOneBtn);
+    // 编辑器：contenteditable（与放大编辑界面同构）→ 支持「显示引用」着色与素材 token 插入
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    editor.spellcheck = false;
+    editor.style.cssText = "flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;background:#161616;color:#ddd;border:1px solid #444;border-radius:5px;padding:10px 12px;font-size:13px;overflow-y:auto;outline:none;white-space:pre-wrap;word-break:break-word;line-height:1.6;";
+    editor.dataset.placeholder = "这里只显示当前这一段的内容（不含 [SHOT_START]/[SHOT_END]，保存时会自动补回）；点右侧素材可插入 @引用";
+    editor.addEventListener("mousedown", (e) => e.stopPropagation());
+    const foot = el("div", "font-size:11px;color:#888;margin-top:6px;flex:0 0 auto;white-space:pre-wrap;", "");
+    main.append(curHead, editor, foot);
+
+    // ── 右侧：📁 资产显示窗（缩略图墙，点击把素材名插入到光标处）──
+    // 宽度/内边距/滚动条槽位与「📖 编辑剧本」大界面完全一致：284px ⇒ 3 列 78px 卡片不被滚动条挤成 2 列
+    const assetCol = el("div", "flex:0 0 284px;display:flex;flex-direction:column;min-height:0;");
+    const assetHead = el("div", "font-size:12px;color:#bbb;margin-bottom:6px;flex:0 0 auto;", "📁 资产显示窗（点击插入）");
+    const assetBox = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:4px;box-sizing:border-box;");
+    assetCol.append(assetHead, assetBox);
+
+    bodyWrap.append(side, main, assetCol);
+    box.append(head, bodyWrap);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    // ── 编辑器渲染（纯文本 / 显示引用 两种模式）──
+    let refMode = false;
+    const renderEditor = () => {
+        if (refMode) {
+            renderPromptFromText(editor, bodies[cur], self);
+        } else {
+            editor.innerHTML = "";
+            editor.appendChild(document.createTextNode(bodies[cur] || ""));
+        }
+    };
+    // 回车/粘贴统一成纯文本 \n（与放大编辑界面同规则，避免 Chrome 生成 div/br 破坏计数）
+    editor.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key !== "Enter" || e.shiftKey) return;
+        if (e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        const sel = window.getSelection();
+        let r0 = null;
+        if (sel && sel.rangeCount && editor.contains(sel.anchorNode)) r0 = sel.getRangeAt(0);
+        if (!r0) { r0 = document.createRange(); r0.selectNodeContents(editor); r0.collapse(false); }
+        r0.deleteContents();
+        const tn = document.createTextNode("\n");
+        r0.insertNode(tn);
+        const r2 = document.createRange();
+        r2.setStartAfter(tn);
+        r2.collapse(true);
+        if (sel) { sel.removeAllRanges(); sel.addRange(r2); }
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    editor.addEventListener("paste", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const t = (e.clipboardData || window.clipboardData)?.getData("text/plain") || "";
+        if (!t) return;
+        const sel = window.getSelection();
+        let range = null;
+        if (sel && sel.rangeCount && editor.contains(sel.anchorNode)) range = sel.getRangeAt(0);
+        if (!range) { range = document.createRange(); range.selectNodeContents(editor); range.collapse(false); }
+        range.deleteContents();
+        range.insertNode(document.createTextNode(String(t).replace(/\r\n/g, "\n")));
+        range.collapse(false);
+        if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    renderEditor();
+
+    // 渲染资产窗：点击素材 → 按光标位置把素材名插进编辑器（保持当前显示模式）
+    const insertItem = (item) => {
+        const name = String((item && (item.matchName || item.display || item.token)) || "").trim();
+        if (!name) return;
+        const text = getPromptText(editor);
+        let off = null;
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && editor.contains(sel.anchorNode)) {
+            try { off = caretOffset(editor); } catch (_) {}
+        }
+        if (typeof off !== "number" && typeof editor.__lastCaret === "number") off = editor.__lastCaret;
+        if (typeof off !== "number") off = text.length;
+        off = Math.max(0, Math.min(text.length, Math.floor(off)));
+        const newText = text.slice(0, off) + name + text.slice(off);
+        bodies[cur] = newText;
+        if (refMode) renderPromptFromText(editor, newText, self);
+        else { editor.innerHTML = ""; editor.appendChild(document.createTextNode(newText)); }
+        const pos = off + name.length;
+        try { setCaretToOffset(editor, pos); } catch (_) {}
+        editor.__lastCaret = pos;
+        editor.focus();
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    try {
+        renderAssetWindow(assetBox, editor, self, null, (ed, item) => insertItem(item));
+        assetBox.style.height = "";   // renderAssetWindow 会写死 px 高度，这里交回 flex 控制
+    } catch (e) {
+        assetBox.appendChild(el("div", "font-size:11px;color:#777;padding:4px;", "（资产窗加载失败：" + ((e && e.message) || e) + "）"));
+    }
+
+    const flushEdit = () => { bodies[cur] = getPromptText(editor); };
+    editor.addEventListener("input", () => { dirty = true; flushEdit(); renderSide(); renderNav(); });
+    refBtn.addEventListener("click", () => {
+        flushEdit();
+        refMode = !refMode;
+        renderEditor();
+        refBtn.textContent = refMode ? "🎯 纯文本" : "🎯 显示引用";
+        refBtn.style.background = refMode ? "#2f5a3a" : "#2a4a6a";
+        notify(refMode ? "✅ 已切换为显示引用（素材名着色）" : "✅ 已切换为纯文本", "success");
+    });
+
+    // Esc 关闭（挂在 document 上：overlay 本身不可聚焦，挂在它上面收不到按键）
+    const onKey = (e) => {
+        if (e.key !== "Escape") return;
+        if (!document.body.contains(overlay)) { document.removeEventListener("keydown", onKey, true); return; }
+        e.stopPropagation();
+        if (dirty && !window.confirm("有未保存的修改，确定关闭？")) return;
+        close();
+    };
+    document.addEventListener("keydown", onKey, true);
+
+    const syncModeChrome = () => {
+        singleChip.style.background = mode === "single" ? "#2f5a3a" : "#3a3a3a";
+        singleChip.style.color = mode === "single" ? "#dff5e6" : "#ddd";
+        multiChip.style.background = mode === "multi" ? "#2f5a3a" : "#3a3a3a";
+        multiChip.style.color = mode === "multi" ? "#dff5e6" : "#ddd";
+        side.style.display = mode === "multi" ? "flex" : "none";
+        sideHead.textContent = `勾选要重拍的镜头（已选 ${picked.size} / ${bodies.length}）`;
+    };
+
+    const renderNav = () => {
+        navInfo.textContent = `第 ${cur + 1} / ${bodies.length} 段`;
+        navSel.innerHTML = "";
+        bodies.forEach((s, i) => {
+            const o = document.createElement("option");
+            o.value = String(i);
+            o.textContent = `${picked.has(i) ? "✅ " : ""}第 ${i + 1} 段 · ${segTitle(i)}`;
+            if (i === cur) o.selected = true;
+            navSel.appendChild(o);
+        });
+        curTag.textContent = `正在编辑：第 ${cur + 1} 段 · ${segTitle(cur)}`;
+        const targets = mode === "multi" ? Array.from(picked).sort((a, b) => a - b) : [cur];
+        foot.textContent =
+            `本次重拍：第 ${targets.map((i) => i + 1).join("、")} 段（共 ${targets.length} 段）· ` +
+            `保存后写回整份剧本的第 ${cur + 1} 段${dirty ? " · ⚠️ 有未保存修改" : ""}`;
+    };
+
+    const renderSide = () => {
+        if (mode !== "multi") { sideList.innerHTML = ""; return; }
+        sideHead.textContent = `勾选要重拍的镜头（已选 ${picked.size} / ${bodies.length}）`;
+        sideList.innerHTML = "";
+        bodies.forEach((s, i) => {
+            const row = el("div", "display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:4px;cursor:pointer;font-size:12px;" +
+                (i === cur ? "background:#2a3a4a;color:#cfe3f7;" : "color:#ddd;"));
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.style.cssText = "flex:0 0 auto;width:14px;height:14px;cursor:pointer;accent-color:#5b9bd5;";
+            cb.checked = picked.has(i);
+            cb.addEventListener("click", (e) => e.stopPropagation());
+            cb.addEventListener("change", () => {
+                if (cb.checked) picked.add(i); else picked.delete(i);
+                if (!picked.size) { picked.add(i); cb.checked = true; }   // 至少留一段
+                renderSide(); renderNav();
+            });
+            const lbl = el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                `第 ${i + 1} 段 · ${segTitle(i)}`);
+            row.append(cb, lbl);
+            row.addEventListener("click", () => setCur(i));
+            sideList.appendChild(row);
+        });
+    };
+
+    const setCur = (i) => {
+        flushEdit();
+        cur = Math.max(0, Math.min(i, bodies.length - 1));
+        renderEditor();
+        if (mode === "single") { picked.clear(); picked.add(cur); }
+        renderNav(); renderSide();
+    };
+    navPrev.addEventListener("click", () => setCur(cur - 1));
+    navNext.addEventListener("click", () => setCur(cur + 1));
+    navSel.addEventListener("change", () => setCur(parseInt(navSel.value, 10) || 0));
+    allBtn.addEventListener("click", () => { bodies.forEach((_s, i) => picked.add(i)); renderSide(); renderNav(); });
+    noneBtn.addEventListener("click", () => { picked.clear(); picked.add(cur); renderSide(); renderNav(); });
+    copyOneBtn.addEventListener("click", () => {
+        flushEdit();
+        copyTextToClipboard(`[SHOT_START]\n${bodies[cur]}\n[SHOT_END]`, `第 ${cur + 1} 段`, `✅ 已复制第 ${cur + 1} 段`);
+    });
+
+    const close = () => { document.removeEventListener("keydown", onKey, true); overlay.remove(); };
+
+    saveBtn.addEventListener("click", async () => {
+        flushEdit();
+        const targets = (mode === "multi" ? Array.from(picked) : [cur]).sort((a, b) => a - b);
+        // 与 jzlApplyShotBodies 的落盘格式保持一致（去掉首尾空行），避免「节点里的 shots」与「重建后的剧本」不一致
+        const norm = bodies.map((b) => String(b == null ? "" : b).replace(/^\n+|\n+$/g, ""));
+        state.shots = norm;
+        state.selected = cur;
+        state.mode = mode;
+        state.selectedShots = targets;
+        state.script = jzlApplyShotBodies(state.script || "", norm);
+        if (typeof onChanged === "function") onChanged();
+        // 已指定具体剧本文件 → 同步写回磁盘（与「📝 生成剧本查看器」一致）
+        if (typeof onSaveFile === "function") {
+            try { await onSaveFile(state.script); } catch (_) {}
+        }
+        dirty = false;
+        renderNav();
+        notify(`✅ 已保存第 ${cur + 1} 段｜本次重拍第 ${targets.map((i) => i + 1).join("、")} 段`, "success");
+        close();
+        // 保存后关掉大界面，让用户直接点「▶ 运行」重拍
+    });
+    closeBtn.addEventListener("click", () => {
+        if (dirty && !window.confirm("有未保存的修改，确定关闭？")) return;
+        close();
+    });
+    overlay.addEventListener("click", (e) => {
+        if (e.target !== overlay) return;
+        if (dirty && !window.confirm("有未保存的修改，确定关闭？")) return;
+        close();
+    });
+
+    // ── 初始化 ──
+    syncModeChrome();
+    renderNav();
+    renderSide();
+}
+
 function createReshootSection(ctx) {
     const { self, promptBox, ipWidget, resizeNode, isMini, reshootSegWidget, container } = ctx;
 
@@ -1202,18 +1560,22 @@ function createReshootSection(ctx) {
     header.appendChild(chevron);
     header.appendChild(el("span", "", "🔄 重拍模式"));
     header.appendChild(el("span", "font-size:11px;color:#888;margin-left:auto;font-weight:400;",
-        isMini ? "展开后锁定上方提示词；重拍区仅用于管理/查看提示词（编码输出全部段）"
-               : "展开后锁定上方提示词；点「运行」只重拍当前选中段（穿透单段）"));
+        isMini ? "展开后锁定上方提示词；📝 选择剧本 / 📖 编辑剧本（单镜头大界面，可单选或多选重拍）"
+               : "展开后锁定上方提示词；📝 选择剧本 / 📖 编辑剧本（单镜头大界面）+ 点「运行」只重拍选中的镜头"));
 
     // 主体（默认收起）
     const body = el("div", "flex:0 0 auto;display:none;margin-top:6px;border:1px solid #444;border-radius:6px;padding:8px;background:#222;box-sizing:border-box;");
 
-    // 第一行：提示词来源状态显示 + 上传本地 .txt 提示词（重拍提示词与上方主提示词完全独立）
+    // 第一行：提示词来源状态显示 + 选择剧本（读盘任意剧本文档）+ 编辑剧本（单镜头大界面）+ 上传本地文件
     const selRow = el("div", "display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;");
+    const pickBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;white-space:nowrap;", "📝 选择剧本");
+    pickBtn.title = "和「📝 生成剧本查看器」一样：在 output/jzl 下浏览并挑选任意剧本文档（.txt/.md）";
+    const editBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #c99a4a;background:#4a3a20;color:#ffe6b8;font-size:12px;cursor:pointer;white-space:nowrap;", "📖 编辑剧本");
+    editBtn.title = "大界面：一次只显示一个镜头，可切换、可编辑保存，并可单选/多选要重拍的镜头";
     const uploadBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;white-space:nowrap;", "📂 上传提示词");
     uploadBtn.title = "选择本地 .txt/.md 提示词文件作为重拍提示词源";
     const loadStatus = el("span", "font-size:11px;color:#888;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "提示词来源：最后一次 LLM 拆解");
-    selRow.append(uploadBtn, loadStatus);
+    selRow.append(pickBtn, editBtn, uploadBtn, loadStatus);
 
     // 重拍视频编号（左右箭头切换 1~99）+ 提示词显示窗（可编辑）
     const segRow = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:6px;");
@@ -1236,13 +1598,15 @@ function createReshootSection(ctx) {
     edit.placeholder = "当前段的完整提示词显示在这里，可在此二度修改…";
     edit.addEventListener("mousedown", (e) => e.stopPropagation());
     editWrap.appendChild(edit);
-    // 复制 / 放大编辑：放到「重拍视频编号」行右端（编辑框上方外侧），不再悬浮在框内遮挡正文
+    // 复制 / 放大编辑 / 资产窗：放到「重拍视频编号」行右端（编辑框上方外侧），不再悬浮在框内遮挡正文
     const eActions = el("div", "display:flex;gap:4px;margin-left:auto;z-index:6;");
     const eCopy = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "📋");
     eCopy.title = "复制全部文本";
+    const eAsset = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "📁");
+    eAsset.title = "显示/隐藏资产显示窗（点击素材插入 @引用到编辑框光标处）";
     const eZoom = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "⛶");
     eZoom.title = "放大编辑（打开大界面）";
-    eActions.append(eCopy, eZoom);
+    eActions.append(eCopy, eAsset, eZoom);
     segRow.appendChild(eActions);
     eCopy.addEventListener("mousedown", (e) => e.stopPropagation());
     eCopy.addEventListener("click", (e) => { e.stopPropagation(); copyTextToClipboard(edit.value, "重拍提示词"); });
@@ -1255,10 +1619,51 @@ function createReshootSection(ctx) {
         }, self);
     });
 
-    body.append(selRow, segRow, editWrap);
+    // 📁 资产显示窗（折叠）：点击素材 → 插入到编辑框光标处（textarea 版插入，保持纯文本）
+    const assetBar = el("div", "display:none;margin-top:6px;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:4px;box-sizing:border-box;max-height:132px;overflow-y:auto;scrollbar-gutter:stable;");
+    let assetBarReady = false;
+    eAsset.addEventListener("mousedown", (e) => e.stopPropagation());
+    eAsset.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const show = assetBar.style.display === "none";
+        assetBar.style.display = show ? "block" : "none";
+        eAsset.style.background = show ? "rgba(42,74,106,.95)" : "rgba(30,30,30,.92)";
+        eAsset.style.borderColor = show ? "#5b9bd5" : "#555";
+        if (show && !assetBarReady) {
+            assetBarReady = true;
+            try {
+                renderAssetWindow(assetBar, edit, self, null, (ed, item) => insertAssetIntoTextarea(ed, item));
+                assetBar.style.height = "";   // renderAssetWindow 会写死 px 高度 → 交回 CSS（max-height + 滚动）
+            } catch (err) {
+                assetBar.appendChild(el("div", "font-size:11px;color:#777;padding:4px;", "（资产窗加载失败：" + ((err && err.message) || err) + "）"));
+            }
+        }
+        if (show) setTimeout(() => { try { resizeNode(); } catch (_) {} }, 30);
+    });
+
+    body.append(selRow, segRow, editWrap, assetBar);
 
     // 状态（持久到 manager_settings.reshoot，刷新不丢失；source 记录提示词来源显示）
-    const state = self.__reshootState || (self.__reshootState = { script: "", shots: [], selected: 0, prompt: "", expanded: false, source: "" });
+    // mode/selectedShots：单选 = 只重拍当前段；多选 = 重拍勾选的多段（在「📖 编辑剧本」里勾选）
+    const state = self.__reshootState || (self.__reshootState = {
+        script: "", shots: [], selected: 0, prompt: "", expanded: false, source: "",
+        mode: "single", selectedShots: [], pick: "",
+    });
+    if (!Array.isArray(state.selectedShots)) state.selectedShots = [];
+    if (!state.mode) state.mode = "single";
+
+    // 本次要重拍的段索引（多选 = 勾选集合，单选 = 当前段）
+    const reshootTargets = () => {
+        const n = state.shots.length;
+        let list = state.mode === "multi" ? (state.selectedShots || []) : [state.selected];
+        list = list.filter((i) => Number.isInteger(i) && i >= 0 && i < n);
+        if (!list.length && n) list = [Math.max(0, Math.min(state.selected || 0, n - 1))];
+        return list.slice().sort((a, b) => a - b);
+    };
+    const targetsText = () => {
+        const t = reshootTargets();
+        return t.length ? `第 ${t.map((i) => i + 1).join("、")} 段` : "（无）";
+    };
 
     const readSettings = async () => (await loadManager(self)).settings;
     const commit = async () => {
@@ -1268,6 +1673,7 @@ function createReshootSection(ctx) {
                 script: state.script, shots: state.shots,
                 selected: state.selected, prompt: state.prompt, expanded: expanded,
                 source: state.source,
+                mode: state.mode, selectedShots: reshootTargets(), pick: state.pick || "",
             };
             await saveManager(self, s);
         } catch (_) {}
@@ -1284,7 +1690,9 @@ function createReshootSection(ctx) {
         state.selected = idx;
         state.prompt = state.shots[idx].trim();
         edit.value = state.prompt;
-        segLabel.textContent = `当前选择重拍第 ${idx + 1} 段视频`;
+        segLabel.textContent = state.mode === "multi"
+            ? `重拍范围：${targetsText()}（共 ${reshootTargets().length} 段）`
+            : `当前选择重拍第 ${idx + 1} 段视频`;
         segTag.textContent = `（共 ${state.shots.length} 段）`;
         // Mini：段号同步到「重拍视频编号」参数（编码选段用）
         if (isMini && reshootSegWidget) setWidgetValue(reshootSegWidget, idx + 1);
@@ -1292,6 +1700,18 @@ function createReshootSection(ctx) {
     };
     segPrev.title = "上一段";
     segNext.title = "下一段";
+
+    // 下方的紧凑编辑框与「📖 编辑剧本」共用同一份 state.shots：
+    // 在这里改字 → 直接写回当前段并重建整份剧本（大界面再打开时看到的就是最新内容）。
+    edit.addEventListener("input", () => {
+        if (!state.shots.length) return;
+        const i = Math.max(0, Math.min(state.selected || 0, state.shots.length - 1));
+        state.shots[i] = edit.value;
+        state.prompt = edit.value;
+        state.script = jzlApplyShotBodies(state.script || "", state.shots);
+        clearTimeout(edit.__jzlT);
+        edit.__jzlT = setTimeout(() => { commit(); }, 400);
+    });
 
     // 锁定 / 解锁：主提示词框 + 节点其它全部参数（重拍模式下其它参数不可操作，点击提示）
     const LOCK_TIP = "请关闭重拍模式！";
@@ -1406,6 +1826,8 @@ function createReshootSection(ctx) {
         script = String(script).trim();
         const shots = extractShots(script);
         state.script = script; state.shots = shots; state.selected = 0;
+        state.selectedShots = [];        // 新剧本 → 重拍范围重置为「当前段」
+        state.mode = "single";
         state.source = (meta && meta.display) ? meta.display : "";
         // 生产规范校验：段数 / H3_PROMPT 标记 / 与「生成视频数量」一致性
         const vcW = (self.widgets || []).find((w) => w.name === "video_count");
@@ -1440,6 +1862,7 @@ function createReshootSection(ctx) {
 
     // 默认来源：最后一次 LLM 拆解/增强（后端 output/jzl/最近提示词.json），展开时自动加载
     const autoLoad = async () => {
+        state.pick = "";   // 回到「跟随最后一次拆解」模式
         try {
             const resp = await api.fetchApi(RESHOOT_ENDPOINT);
             const data = await resp.json().catch(() => ({}));
@@ -1449,14 +1872,75 @@ function createReshootSection(ctx) {
                 loadStatus.style.color = "#5ecf8a";
                 await applyScript(data.script, { display: disp });
             } else {
-                loadStatus.textContent = "未找到最后一次 LLM 拆解提示词，可点「📂 上传提示词」选择本地文件";
+                loadStatus.textContent = "未找到最后一次 LLM 拆解提示词，可点「📝 选择剧本」或「📂 上传提示词」";
                 loadStatus.style.color = "#888";
             }
         } catch (_) {
-            loadStatus.textContent = "加载失败，可点「📂 上传提示词」选择本地文件";
+            loadStatus.textContent = "加载失败，可点「📝 选择剧本」或「📂 上传提示词」";
             loadStatus.style.color = "#888";
         }
     };
+
+    // 📝 选择剧本：与「📝 生成剧本查看器」同一套浏览逻辑（output/jzl 下任意 .txt/.md）
+    pickBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    pickBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const storyW = (self.widgets || []).find((w) => w.name === "story_name");
+        const story = String(storyW ? readWidgetValue(storyW) || "" : "").trim();
+        openScriptPicker(story, state.pick || "", async (choice) => {
+            if (choice && choice.latest) { await autoLoad(); return; }
+            const rel = String((choice && choice.rel) || "");
+            if (!rel) return;
+            try {
+                const r = await api.fetchApi(`/jzl/fs_read?path=${encodeURIComponent(rel)}`);
+                const d = await r.json().catch(() => ({}));
+                if (!(d && d.ok)) { notify("❌ 读取失败：" + ((d && d.error) || "未知错误"), "error"); return; }
+                state.pick = rel;
+                await applyScript(d.text || "", { display: `剧本来源：${rel}` });
+                loadStatus.textContent = `剧本来源：${rel}`;
+                loadStatus.style.color = "#5ecf8a";
+            } catch (err) { notify("❌ 读取失败：" + ((err && err.message) || err), "error"); }
+        });
+    });
+
+    // 📖 编辑剧本：大界面（一次只显示一个镜头，可切换/编辑/保存，并可单选多选重拍范围）
+    editBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!state.shots.length) { notify("还没有载入剧本：先点「📝 选择剧本」或「📂 上传提示词」", "warning"); return; }
+        openReshootShotEditor({
+            self,
+            state,
+            onChanged: () => {
+                // 大界面里改了当前段 → 同步到紧凑编辑框与状态行
+                edit.value = state.shots[state.selected] || "";
+                edit.dataset.idx = String(state.selected);
+                segLabel.textContent = state.mode === "multi"
+                    ? `重拍范围：${targetsText()}（共 ${reshootTargets().length} 段）`
+                    : `当前选择重拍第 ${state.selected + 1} 段视频`;
+                segTag.textContent = `（共 ${state.shots.length} 段）`;
+                if (isMini && reshootSegWidget) setWidgetValue(reshootSegWidget, state.selected + 1);
+                commit();
+            },
+            onSaveFile: async (script) => {
+                if (!state.pick) {
+                    notify("ℹ️ 当前剧本不是从文件载入的（跟随最后一次拆解/本地上传），已保存在节点配置里", "warning");
+                    return;
+                }
+                try {
+                    const r = await api.fetchApi("/jzl/fs_write", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ path: state.pick, text: script || "" }),
+                    });
+                    const d = await r.json().catch(() => ({}));
+                    if (d && d.ok) notify("✅ 剧本已写回文件：" + state.pick, "success");
+                    else notify("⚠️ 节点内已保存，但写回磁盘失败：" + ((d && d.error) || "未知错误"), "warning");
+                } catch (err) {
+                    notify("⚠️ 节点内已保存，但写回磁盘失败：" + ((err && err.message) || err), "warning");
+                }
+            },
+        });
+    });
 
     // 上传提示词：选择本地 .txt/.md 提示词文件（FileReader 读取内容作为重拍提示词源）
     uploadBtn.addEventListener("click", () => {
@@ -1472,6 +1956,7 @@ function createReshootSection(ctx) {
             reader.onload = async () => {
                 done();
                 const txt = String(reader.result || "").replace(/^\uFEFF/, "");  // 容错 UTF-8 BOM
+                state.pick = "";   // 本地上传不写盘
                 try { await applyScript(txt, { name: file.name, from: "upload", display: `提示词来源：本地文件 ${file.name}` }); }
                 catch (e) { notify(`解析失败：${e && e.message ? e.message : e}`, "error"); }
             };
@@ -1500,28 +1985,34 @@ function createReshootSection(ctx) {
     header.addEventListener("mousedown", (e) => e.stopPropagation());
     header.addEventListener("click", toggle);
 
-    // 重拍运行拦截：仅 Pro 生效（重拍模式展开且已加载提示词时，点「运行」自动以穿透模式+单段生成选中段）。
+    // 重拍运行拦截：仅 Pro 生效（重拍模式展开且已加载提示词时，点「运行」自动以穿透模式生成选中段）。
+    // 单选 = 只生成当前段；多选 = 把勾选的若干段拼成一份提示词，一次生成多段。
     // apply 在 queuePrompt 提交前临时改参数，restore 在提交后恢复（不污染主提示词/普通模式）。
-    // Mini 不做运行拦截（用「重拍视频编号」参数选段编码），挂空补丁避免 graphToPrompt 处理。
+    // Mini 不做运行拦截（用「重拍视频编号」参数选段编码），挂空补丁避免 graph_to_prompt 处理。
     if (!isMini) {
         self.__reshootBuildRunPatch = () => {
             if (!expanded || !state.shots.length) return null;   // 收起或无数据时不拦截
-            const p = edit.value.trim();
-            if (!p) return null;
+            const idxs = reshootTargets();
+            if (!idxs.length) return null;
+            const blocks = idxs
+                .map((i) => ({ i, body: String(state.shots[i] || "").trim() }))
+                .filter((x) => x.body)
+                .map((x) => `[SHOT_START]\n${x.body}\n[SHOT_END]`);
+            if (!blocks.length) return null;
+            const prompt = blocks.join("\n\n");
             const rmW = (self.widgets || []).find((w) => w.name === "run_mode");
             const vcW = (self.widgets || []).find((w) => w.name === "video_count");
             const backupRM = rmW ? readWidgetValue(rmW) : null;
             const backupVC = vcW ? readWidgetValue(vcW) : null;
             const backupIP = ipWidget ? readWidgetValue(ipWidget) : "";
-            const single = `[SHOT_START]\n${p}\n[SHOT_END]`;
             return {
                 apply() {
                     if (rmW) setWidgetValue(rmW, "🪄 穿透生成模式");
-                    // ⭐ 段数写 1 段：按 widget 形态写入（数值型写 1，下拉型写「生成1段」）。
+                    // ⭐ 段数按选中段数写入：按 widget 形态写入（数值型写数字，下拉型写「生成N段」）。
                     //    跨形态写值会被 ComfyUI 校验拒绝（历史上这里固定写「生成1段」→ 短剧导演台直接报
                     //    Failed to convert an input value to a INT value）。
-                    setVideoCount(vcW, 1);
-                    if (ipWidget) setWidgetValue(ipWidget, single);
+                    setVideoCount(vcW, blocks.length);
+                    if (ipWidget) setWidgetValue(ipWidget, prompt);
                 },
                 restore() {
                     try {
@@ -1546,9 +2037,17 @@ function createReshootSection(ctx) {
         state.prompt = rs.prompt || (state.shots[state.selected] || "");
         state.expanded = !!rs.expanded;
         state.source = rs.source || "";
+        state.mode = rs.mode === "multi" ? "multi" : "single";
+        state.pick = rs.pick || "";
+        state.selectedShots = Array.isArray(rs.selectedShots)
+            ? rs.selectedShots.filter((i) => Number.isInteger(i) && i >= 0 && i < state.shots.length)
+            : [];
         edit.value = state.prompt || (state.shots[state.selected] || "");
         segTag.textContent = state.shots.length ? `（共 ${state.shots.length} 段）` : "（共 0 段）";
-        segLabel.textContent = state.shots.length ? `当前选择重拍第 ${state.selected + 1} 段视频` : "当前选择重拍第 0 段视频";
+        segLabel.textContent = !state.shots.length ? "当前选择重拍第 0 段视频"
+            : (state.mode === "multi"
+                ? `重拍范围：${targetsText()}（共 ${reshootTargets().length} 段）`
+                : `当前选择重拍第 ${state.selected + 1} 段视频`);
         if (state.source) { loadStatus.textContent = state.source; loadStatus.style.color = "#5ecf8a"; }
         if (state.expanded) {
             expanded = true;
@@ -1978,6 +2477,92 @@ function fallbackCopyText(text) {
         document.body.removeChild(ta);
     } catch (_) {}
 }
+// ── 剧本分段辅助（编辑界面配色 + 复制单镜头）──
+// 只认标准分段块 [SHOT_START]…[SHOT_END]；返回 [{start,end,text,index}]（index 从 0 开始）。
+function jzlShotSegments(text) {
+    const src = String(text == null ? "" : text);
+    const re = /\[SHOT_START\][\s\S]*?\[SHOT_END\]/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(src))) out.push({ start: m.index, end: m.index + m[0].length, text: m[0], index: out.length });
+    return out;
+}
+
+// 分段标签：`Video_003 · 荒漠峡谷对峙`（取不到标题就退回 Video 号或首行）
+function jzlSegmentLabel(segText) {
+    const t = String(segText || "");
+    const vid = (t.match(/###\s*(Video_\d+)/i) || [])[1] || "";
+    let title = (t.match(/\*\*(?:标题|Title)\*\*\s*[:：]\s*(.+)/) || [])[1] || "";
+    title = title.trim().replace(/\s+/g, " ");
+    if (vid && title) return `${vid} · ${title}`;
+    if (vid) return vid;
+    if (title) return title;
+    const firstLine = t.split("\n").map((s) => s.trim()).find((s) => s && !/^\[SHOT_START\]$/i.test(s)) || "";
+    return firstLine.slice(0, 40);
+}
+
+// 用 <span> 给每个分段块上底色（单/双数交替），保留纯文本可编辑性：
+// getPromptText 对 SPAN 不加换行，所以存回去与原文逐字一致（不像 DIV 会多出 \n）。
+function jzlRenderScriptBands(editor, text) {
+    const src = String(text == null ? "" : text);
+    editor.innerHTML = "";
+    const segs = jzlShotSegments(src);
+    if (!segs.length) { editor.appendChild(document.createTextNode(src)); return 0; }
+    let last = 0;
+    segs.forEach((sg) => {
+        if (sg.start > last) editor.appendChild(document.createTextNode(src.slice(last, sg.start)));
+        const span = document.createElement("span");
+        span.className = "jzl-shot-band";
+        const odd = sg.index % 2 === 0;   // 第 1、3、5… 段
+        span.style.background = odd ? "rgba(91,155,213,.22)" : "rgba(207,154,74,.20)";
+        span.style.boxShadow = odd ? "inset 3px 0 0 #5b9bd5" : "inset 3px 0 0 #c99a4a";
+        span.style.borderRadius = "3px";
+        span.style.whiteSpace = "pre-wrap";
+        span.textContent = sg.text;
+        editor.appendChild(span);
+        last = sg.end;
+    });
+    if (last < src.length) editor.appendChild(document.createTextNode(src.slice(last)));
+    return segs.length;
+}
+
+// 「📋 复制单镜头」：弹出段列表 → 点第几个就复制那一段（含 [SHOT_START]/[SHOT_END]），
+// 可直接粘到「🪄 穿透生成模式」只重拍这一段。
+function jzlOpenShotCopyPicker(anchorBtn, getCurrentText) {
+    document.querySelectorAll(".jzl-shotpick").forEach((m) => m.remove());
+    const segs = jzlShotSegments(getCurrentText());
+    if (!segs.length) { notify("当前内容里没有 [SHOT_START]…[SHOT_END] 分段", "warning"); return; }
+    const pop = el("div", "position:fixed;z-index:100010;background:#1e1e20;border:1px solid #5b9bd5;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.65);padding:8px;min-width:300px;max-width:min(560px,90vw);max-height:62vh;overflow:auto;");
+    pop.classList.add("jzl-shotpick");
+    pop.appendChild(el("div", "font-size:12px;color:#9fd6a4;margin:2px 2px 8px;", "选择要复制的镜头（复制后可粘到「🪄 穿透生成模式」单独重拍）"));
+    segs.forEach((sg) => {
+        const row = el("div", "display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:#ddd;");
+        row.append(el("span", "flex:0 0 auto;color:#ffd98a;font-weight:600;", `第 ${sg.index + 1} 段`),
+            el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", jzlSegmentLabel(sg.text)));
+        row.addEventListener("mouseenter", () => { row.style.background = "#2c2c31"; });
+        row.addEventListener("mouseleave", () => { row.style.background = ""; });
+        row.addEventListener("click", () => {
+            copyTextToClipboard(sg.text, `第 ${sg.index + 1} 段`,
+                `✅ 已复制第 ${sg.index + 1} 段（可粘到「🪄 穿透生成模式」单独重拍）`);
+            pop.remove();
+        });
+        pop.appendChild(row);
+    });
+    document.body.appendChild(pop);
+    try {
+        const r = anchorBtn.getBoundingClientRect();
+        pop.style.left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left)) + "px";
+        pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, r.bottom + 6)) + "px";
+    } catch (_) { pop.style.left = "80px"; pop.style.top = "80px"; }
+    const off = (e) => {
+        if (!pop.contains(e.target) && e.target !== anchorBtn) {
+            pop.remove();
+            document.removeEventListener("mousedown", off, true);
+        }
+    };
+    setTimeout(() => document.addEventListener("mousedown", off, true), 0);
+}
+
 function openTextZoomEditor(title, getText, onSave, node) {
     document.querySelectorAll(".jzl-zoom-editor").forEach((m) => m.remove());
     const modal = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99999;display:flex;align-items:center;justify-content:center;");
@@ -1995,9 +2580,20 @@ function openTextZoomEditor(title, getText, onSave, node) {
     editor.addEventListener("mousedown", (e) => e.stopPropagation());
     // 初始显示模式：跟随节点参考元素模式（ref=显示引用着色；text=纯文本）
     let alignMode = node ? (node.__jzlAlignMode === "ref" ? "ref" : "text") : "text";
+    // 含 [SHOT_START] 分段的内容默认开启「分段配色」（单/双数段不同底色）；无分段时按钮不出现
+    const _initText = String(getText() || "");
+    const hasShots = jzlShotSegments(_initText).length > 0;
+    // 剧本内容优先用纯文本 + 分段配色打开（可随时点「🎯 显示引用」切回素材名着色）
+    if (hasShots) alignMode = "text";
+    let bandOn = hasShots;
+    const renderPlain = () => {
+        if (bandOn && jzlRenderScriptBands(editor, getText())) return;
+        editor.innerHTML = "";
+        editor.appendChild(document.createTextNode(getText() || ""));
+    };
     const renderInitial = () => {
         if (node && alignMode === "ref") renderPromptFromText(editor, getText(), node);
-        else { editor.innerHTML = ""; editor.appendChild(document.createTextNode(getText() || "")); }
+        else renderPlain();
     };
     renderInitial();
     // 参考元素切换（在「复制」前面）：纯文本 / 显示引用
@@ -2012,17 +2608,38 @@ function openTextZoomEditor(title, getText, onSave, node) {
             aBtn.textContent = "🎯 纯文本";
             notify("✅ 已切换为显示引用（素材名着色）", "success");
         } else {
-            const text = getPromptText(editor);
-            editor.innerHTML = "";
-            editor.appendChild(document.createTextNode(text));
             alignMode = "text";
+            renderPlain();
             aBtn.textContent = "🎯 显示引用";
             notify("✅ 已切换为纯文本", "success");
+        }
+    });
+    // 🎨 分段配色开关：单/双数 [SHOT_START] 段落不同底色，方便定位编辑
+    const bBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:" + (bandOn ? "#2f5a3a" : "#3a3a3a") + ";color:#cfe3f7;font-size:12px;cursor:pointer;white-space:nowrap;",
+        bandOn ? "🎨 分段配色：开" : "🎨 分段配色：关");
+    bBtn.title = "给每个 [SHOT_START]…[SHOT_END] 段落交替上底色（单/双数不同色），便于定位与编辑";
+    bBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    bBtn.addEventListener("click", () => {
+        bandOn = !bandOn;
+        if (!bandOn && alignMode === "ref") {
+            alignMode = "text";
+            aBtn.textContent = "🎯 显示引用";
+        }
+        renderPlain();
+        bBtn.textContent = bandOn ? "🎨 分段配色：开" : "🎨 分段配色：关";
+        bBtn.style.background = bandOn ? "#2f5a3a" : "#3a3a3a";
+        if (bandOn && !jzlShotSegments(getPromptText(editor)).length) {
+            notify("当前内容没有 [SHOT_START] 分段，配色不生效", "warning");
         }
     });
     const cBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;", "📋 复制");
     cBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     cBtn.addEventListener("click", () => copyTextToClipboard(getPromptText(editor), ""));
+    // 📋 复制单镜头：选第几段就复制那一段（含 [SHOT_START]/[SHOT_END]）→ 粘到穿透模式单独重拍
+    const oneBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #c99a4a;background:#4a3a20;color:#ffe6b8;font-size:12px;cursor:pointer;white-space:nowrap;", "📋 复制单镜头");
+    oneBtn.title = "复制单个分段（含 [SHOT_START]…[SHOT_END]）→ 粘到「🪄 穿透生成模式」只重拍这一段";
+    oneBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    oneBtn.addEventListener("click", () => jzlOpenShotCopyPicker(oneBtn, () => getPromptText(editor)));
     const sBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5ecf8a;background:#2d5a3a;color:#fff;font-size:12px;cursor:pointer;font-weight:600;", "💾 保存");
     const xBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #666;background:#3a3a3a;color:#ccc;font-size:12px;cursor:pointer;", "取消");
     // 放大编辑弹窗支持全局共享字号（A−/A+）+ 界面整体缩放（−/＋）：字号改文字、界面改整个弹窗
@@ -2033,6 +2650,7 @@ function openTextZoomEditor(title, getText, onSave, node) {
     uiRow.title = "调整整个弹窗界面大小（不缩放网页/画布）";
     head.append(zoomRow, uiRow);
     if (node) head.append(aBtn);
+    if (hasShots) head.append(bBtn, oneBtn);
     head.append(cBtn, sBtn, xBtn);
     // 资产显示窗（点击素材插入 @ 引用到放大编辑器；仅当节点存在时显示）
     if (node) {
@@ -6285,6 +6903,7 @@ function openOutputBrowser(startRel) {
     const fmtTime = (t) => { try { const d = new Date((Number(t) || 0) * 1000); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; } catch (_) { return ""; } };
     let cur = String(startRel || "").replace(/^\/+|\/+$/g, "");
     let parent = "";
+    const picked = new Set();   // 勾选的文件（rel）→ 批量打包下载；切目录后保留
     const mkBtn = (label, bg, fg) => el("button", `flex:0 0 auto;height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "#3a3a3a"};color:${fg || "#eee"};font-size:12px;cursor:pointer;`, label);
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100000;display:flex;align-items:center;justify-content:center;overflow:auto;");
     overlay.classList.add("jzl-fsbrowser");
@@ -6298,15 +6917,70 @@ function openOutputBrowser(startRel) {
     sysBtn.title = "在服务器本机用系统文件管理器打开（仅桌面环境；云机/无桌面会提示，请直接用下方列表浏览）";
     const closeBtn = mkBtn("关闭");
     head.append(pathBox, upBtn, refreshBtn2, sysBtn, closeBtn);
+    // 批量下载条（勾选框在同一排右侧）：勾选文件 → 打包成一个 zip 下载（云机不用装任何东西）
+    const batchRow = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;padding:6px 8px;border:1px solid #3a4a5a;border-radius:5px;background:#1d2530;");
+    const selAllCb = document.createElement("input");
+    selAllCb.type = "checkbox";
+    selAllCb.style.cssText = "flex:0 0 auto;width:14px;height:14px;cursor:pointer;accent-color:#5b9bd5;";
+    selAllCb.title = "全选 / 取消全选（本目录所有文件）";
+    const selLabel = el("span", "flex:0 0 auto;font-size:12px;color:#cfe3f7;cursor:pointer;", "全选本目录");
+    const countLabel = el("span", "flex:1 1 auto;min-width:0;font-size:12px;color:#9fd6a4;", "已选 0 个文件");
+    const clearBtn = mkBtn("✖️ 清空");
+    const zipBtn = mkBtn("⬇️ 批量下载（打包 zip）", "#2f6b46", "#dff5e6");
+    zipBtn.title = "把勾选的文件打包成一个 zip 下载（视频不重复压缩，只做拷贝）";
+    batchRow.append(selAllCb, selLabel, countLabel, clearBtn, zipBtn);
     box.appendChild(head);
+    box.appendChild(batchRow);
     const list = el("div", "flex:1 1 auto;overflow-y:auto;min-height:140px;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;");
     box.appendChild(list);
-    box.appendChild(el("div", "font-size:11px;color:#888;margin-top:6px;white-space:pre-wrap;", "文本文件（.txt/.json/.md/.csv/.srt/.log）可在线「编辑」并保存；视频/图片点「下载」；云机无需系统文件管理器即可浏览/下载/删除。"));
+    box.appendChild(el("div", "font-size:11px;color:#888;margin-top:6px;white-space:pre-wrap;", "勾选文件后可「批量下载」成一个 zip；文本文件（.txt/.json/.md/.csv/.srt/.log）可在线「编辑」并保存；点文件名可预览。云机无需系统文件管理器。"));
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    const load = async () => {
-        list.textContent = "加载中…";
+    let visibleFiles = [];   // 当前目录的文件（供全选 / 计数）
+    const rowChecks = new Map();  // rel → checkbox（全选/清空时直接改 DOM，不重新拉目录）
+    const syncSel = () => {
+        const n = picked.size;
+        countLabel.textContent = `已选 ${n} 个文件`;
+        zipBtn.style.opacity = n ? "1" : "0.55";
+        zipBtn.disabled = n === 0;
+        const allOn = visibleFiles.length > 0 && visibleFiles.every((f) => picked.has(f.rel));
+        selAllCb.checked = allOn;
+        selAllCb.indeterminate = !allOn && visibleFiles.some((f) => picked.has(f.rel));
+        clearBtn.style.opacity = n ? "1" : "0.55";
+        clearBtn.disabled = n === 0;
+        rowChecks.forEach((cb, rel) => { cb.checked = picked.has(rel); });
+    };
+    selLabel.addEventListener("click", () => selAllCb.click());
+    selAllCb.addEventListener("change", () => {
+        if (selAllCb.checked) visibleFiles.forEach((f) => picked.add(f.rel));
+        else visibleFiles.forEach((f) => picked.delete(f.rel));
+        syncSel();
+    });
+    clearBtn.addEventListener("click", () => { picked.clear(); syncSel(); });
+    zipBtn.addEventListener("click", () => {
+        const paths = Array.from(picked);
+        if (!paths.length) { notify("请先勾选要下载的文件", "warning"); return; }
+        // 表单 POST 让浏览器自己把响应落盘（不占内存、支持几百 MB 的成片）
+        const action = (api && api.apiURL) ? api.apiURL("/jzl/fs_zip") : "/jzl/fs_zip";
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = action;
+        form.style.display = "none";
+        const inp = document.createElement("input");
+        inp.type = "hidden";
+        inp.name = "paths";
+        inp.value = JSON.stringify(paths);
+        form.appendChild(inp);
+        document.body.appendChild(form);
+        form.submit();
+        setTimeout(() => form.remove(), 2000);
+        notify(`⬇️ 正在打包 ${paths.length} 个文件，完成后浏览器会自动下载…`, "success");
+    });
+    syncSel();   // 初始态：未选任何文件 → 批量按钮置灰
+
+    const load = async (keepScroll) => {
+        if (!keepScroll) list.textContent = "加载中…";
         let data = {};
         try {
             const r = await api.fetchApi(`/jzl/fs_list?path=${encodeURIComponent(cur)}`);
@@ -6317,6 +6991,8 @@ function openOutputBrowser(startRel) {
         parent = data.parent || "";
         pathBox.textContent = "output/jzl/" + (cur ? cur + "/" : "");
         list.innerHTML = "";
+        visibleFiles = data.files || [];
+        rowChecks.clear();
         for (const dd of data.dirs || []) {
             const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;cursor:pointer;");
             row.addEventListener("mouseenter", () => { row.style.background = "#242424"; });
@@ -6329,11 +7005,24 @@ function openOutputBrowser(startRel) {
         }
         for (const ff of data.files || []) {
             const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;");
+            // 勾选框（在文件最前面）→ 批量打包下载
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.style.cssText = "flex:0 0 auto;width:14px;height:14px;cursor:pointer;accent-color:#5b9bd5;";
+            cb.title = "勾选后可「⬇️ 批量下载（打包 zip）」";
+            cb.checked = picked.has(ff.rel);
+            cb.addEventListener("mousedown", (e) => e.stopPropagation());
+            cb.addEventListener("change", () => {
+                if (cb.checked) picked.add(ff.rel); else picked.delete(ff.rel);
+                syncSel();
+            });
+            rowChecks.set(ff.rel, cb);
             const icon = ff.ext === "mp4" ? "🎬" : (["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ff.ext) ? "🖼️" : (["txt", "json", "md", "csv", "srt", "log"].includes(ff.ext) ? "📄" : "📦"));
             const nameEl = el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#ddd;cursor:pointer;", ff.name);
             nameEl.title = "点击预览（图片/视频/音频/文本）";
             nameEl.addEventListener("click", () => openFilePreview(ff.rel, ff.name, ff.ext));
-            row.append(el("span", "flex:0 0 auto;font-size:13px;", icon),
+            row.append(cb,
+                el("span", "flex:0 0 auto;font-size:13px;", icon),
                 nameEl,
                 el("span", "flex:0 0 auto;font-size:11px;color:#888;", fmtSize(ff.size)),
                 el("span", "flex:0 0 auto;font-size:11px;color:#666;", fmtTime(ff.mtime)));
@@ -6364,7 +7053,7 @@ function openOutputBrowser(startRel) {
                 try {
                     const rr = await api.fetchApi("/jzl/fs_delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: ff.rel }) });
                     const rd = await rr.json().catch(() => ({}));
-                    if (rd && rd.ok) { notify("🗑 已删除 " + ff.name, "success"); load(); }
+                    if (rd && rd.ok) { picked.delete(ff.rel); notify("🗑 已删除 " + ff.name, "success"); load(); }
                     else notify((rd && rd.error) || "删除失败", "error");
                 } catch (e) { notify("删除失败：" + ((e && e.message) || e), "error"); }
             });
@@ -6374,6 +7063,7 @@ function openOutputBrowser(startRel) {
         if (!(data.dirs || []).length && !(data.files || []).length) {
             list.appendChild(el("div", "font-size:12px;color:#888;padding:8px;", "（空目录）"));
         }
+        syncSel();
     };
 
     upBtn.addEventListener("click", () => { cur = parent; load(); });
