@@ -3957,7 +3957,7 @@ function defaultSettings() {
                 trim_mode: "像素域裁切（推荐）", guide_source: "一采latent尾部（推荐）",
                 second_guide: "first", luma_match: true,
             },
-            // 🎭 人物替换的段间衔接（与「无限时长衔接」同一套窗口/过渡语义，但钉的是「上一段生成结果」）
+            // 🎭 人物替换的分段衔接（与「无限时长衔接」同一套窗口/过渡语义，但接的是「上一段生成结果」）
             seam: { enabled: true, window: 22, settle: 12, ref_video_tail: 0,
                     // pixels = 上段解码像素按本采画布重编码（官方 AddGuide 同款，不糊）
                     // latent = 上段一采 latent 尾部（旧实现，二采会被插值糊掉）
@@ -4892,9 +4892,9 @@ const SWAP_WINDOW_OPTIONS = [
     { value: 56, label: "56 帧（≈2.33s，最稳最慢）" },
 ];
 const SWAP_SETTLE_OPTIONS = [
-    { value: 12, label: "12 帧（默认）" },
-    { value: 29, label: "29 帧（模型启动慢时用）" },
-    { value: 46, label: "46 帧（顽固卡顿时用）" },
+    { value: 12, label: "12 帧（推荐）" },
+    { value: 29, label: "29 帧（衔接仍卡时用）" },
+    { value: 46, label: "46 帧（最顽固时用）" },
 ];
 
 function swapFrameLen(segmentText) {
@@ -4988,42 +4988,51 @@ function renderSwapVideoParamsPanel(c, s, node) {
 }
 
 function renderSwapSeamSection(c, s, node) {
-    // 🎭 人物替换独有：段间衔接（钉帧）。放在「100% 复刻的采样解码设置」之后，
-    //    语义与「无限时长衔接」同源，但钉的是「上一段生成结果」而不是新剧情。
+    // 🎭 人物替换独有：分段衔接。放在「100% 复刻的采样解码设置」之后，
+    //    语义与「无限时长衔接」同源，但接的是「上一段生成结果」而不是新剧情。
     const sd = s.sample_decode || (s.sample_decode = {});
     const seam = sd.seam || (sd.seam = {});
     const touch = () => { try { node?.__jzlUpdateDisplay?.(); } catch (_) {} };
 
-    c.append(makeSectionTitle("段间衔接（钉帧）"));
-    c.append(field("启用段间衔接", checkboxControl(seam.enabled !== false,
-        "第 2 段起用上一段结尾画面钉住本段开头，段界不跳。关掉 = 每段独立生成",
+    c.append(makeSectionTitle("分段衔接"));
+    c.append(field("启用衔接", checkboxControl(seam.enabled !== false,
+        "开：第 2 段起先接住上一段的结尾画面再往下生成，段与段之间不跳。关：每段单独生成",
         v => { seam.enabled = !!v; touch(); })));
-    c.append(field("衔接窗口（帧）", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
+    c.append(field("衔接帧数", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
         v => { seam.window = Number(v); touch(); })));
-    c.append(field("过渡丢弃帧数（12/29/46）", selectControl(SWAP_SETTLE_OPTIONS, Number(seam.settle ?? 12),
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "接住上一段结尾的多少帧当本段开场。越大越稳、越慢；22 帧（约 0.9 秒）最稳。"));
+    c.append(field("过渡帧数", selectControl(SWAP_SETTLE_OPTIONS, Number(seam.settle ?? 12),
         v => { seam.settle = Number(v); touch(); })));
-    c.append(field("参考视频尾部帧", stepperControl(Number(seam.ref_video_tail ?? 0),
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "接住之后再多生成几帧让模型启动，这几帧不进成片。加大它专治接缝「卡一下」。"));
+    c.append(field("参考帧数", stepperControl(Number(seam.ref_video_tail ?? 0),
         { min: 0, max: 600, step: 17 }, v => { seam.ref_video_tail = Math.max(0, Math.round(v)); })));
-    c.append(field("衔接引导来源", selectControl(
-        [{ value: "pixels", label: "像素尾帧（推荐，清晰不糊）" },
-         { value: "latent", label: "latent 尾部（旧，二采会糊）" }],
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "给模型看多少帧源片当参考。0 = 整段都给（动作最准、最慢）；填 39~56 只看开头一小段，省显存。"));
+    const appendPrevCb = checkboxControl(!!seam.append_prev_video,
+        "把上一段结尾也拼进参考视频，让模型看到「已经生成成什么样」",
+        v => { seam.append_prev_video = !!v; });
+    c.append(field("引导来源", selectControl(
+        [{ value: "pixels", label: "像素尾帧（推荐）" },
+         { value: "latent", label: "latent 尾帧（旧，二采会糊）" }],
         String(seam.guide_mode || "pixels"), v => {
             seam.guide_mode = v;
             appendPrevCb.style.opacity = (v === "pixels") ? "1" : "0.45";
             touch();
         })));
-    c.append(field("二采也钉帧", checkboxControl(seam.pin_second !== false,
-        "一采和二采各钉一次，二采按二采分辨率重新编码。关掉 = 只有一采钉帧（二采会糊）",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "衔接画面按像素传还是按 latent 传。像素会按本段分辨率重新编码，所以清晰。"));
+    c.append(field("二采钉帧", checkboxControl(seam.pin_second !== false,
+        "二采也按二采分辨率重新接一次；关掉只有一采接着，二采会糊",
         v => { seam.pin_second = !!v; touch(); })));
-    const appendPrevCb = checkboxControl(!!seam.append_prev_video,
-        "把上一段画面也拼进参考视频（<Video 1> = 源片 + 上段结尾）",
-        v => { seam.append_prev_video = !!v; });
-    c.append(field("参考视频拼接", appendPrevCb));
+    appendPrevCb.title = "把上一段结尾也拼进参考视频，让模型看到「已经生成成什么样」";
+    c.append(field("拼接参考", appendPrevCb));
     appendPrevCb.style.opacity = (String(seam.guide_mode || "pixels") === "pixels") ? "1" : "0.45";
     c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
-        "窗口：钉住上段结尾多少帧（5/22/39/56）。22 帧 ≈ 0.9 秒最稳。\n"
-        + "过渡：钉帧后模型启动的几帧，一起丢掉再接成片（12/29/46）。\n"
-        + "参考视频尾部帧：0 = 整段源片当参考（最贴动作、约 2× 成本）；卡显存时填 39~56。"));
+        "衔接帧数 + 过渡帧数 = 每段前面要多生成的长度（这一段不进成片）。\n"
+        + "例：22 + 12 = 34 帧 → 5 秒的段实际生成 158 帧，成片仍然只取 124 帧。\n"
+        + "衔接取的是「上段结尾往前 34 帧」起的那 22 帧，所以和本段参考视频对得上，不会跳帧。"));
 }
 
 function renderSwapPrefPanel(c, s, d, node) {
@@ -5051,25 +5060,25 @@ function renderSwapHelpPanel(c) {
     h("② 四个按钮");
     p("🎨 视频参数设置：画幅/像素、每段时长、音频方式、参考图放大、二采放大、最大段数");
     p("🎭 采样解码设置：与「短剧导演台」100% 相同（采样分类/种子/一采/二采/SelfLift/解码），"
-        + "末尾多一段本节点独有的「段间衔接（钉帧）」：窗口 / 过渡 / 参考视频尾部帧");
+        + "末尾多一段本节点独有的「分段衔接」：衔接帧数 / 过渡帧数 / 参考帧数");
     p("🎬 生成视频管理：输出名称（output/jzl/{名称}/）、保存方式、本批视频宫格预览");
     p("📖 节点使用说明：本页");
     p("保存后重新执行节点生效（「自动保存」开着时改完即存）。提示词固定在最底部的大输入框里。");
 
     h("③ 为什么接缝比「无限时长」稳");
     p("无限时长没有真值，段 2+ 只能靠上段尾帧往下编 → 会缓慢漂移；换人有逐帧真值：每段都重新对位同一段源片（<Video 1>），"
-        + "跑道那几十帧的源片正好是上一段已产出的内容 → 同一条时间轴、不累积误差。钉帧只负责「画面不跳」。");
+        + "跑道那几十帧的源片正好是上一段已产出的内容 → 同一条时间轴、不累积误差。衔接只负责「画面不跳」。");
 
     h("④ 调参经验");
     p("脸不像 → 参考图放大 1.5~2.0、百万像素 0.6~1.0、二采倍数 1.5");
-    p("接缝跳一下 → 衔接窗口加到 39；或每段时长改 8 秒（接缝更少）；仍不行就关「段间衔接」对比");
-    p("动作对不上 → 参考视频尾部帧设 0、采样步数 8~10");
-    p("太慢 / 爆显存 → 参考视频尾部帧 39~56、段长 8~10 秒、二采先只跑一采看效果");
+    p("接缝跳一下 → 衔接帧数加到 39；还不行把过渡帧数加到 29；或每段时长改 8 秒（接缝更少）");
+    p("动作对不上 → 参考帧数设 0、采样步数 8~10");
+    p("太慢 / 爆显存 → 参考帧数 39~56、段长 8~10 秒、二采先只跑一采看效果");
 
     h("⑤ 已知取舍");
     p("H3 是整帧重生成：背景/道具会被重画（招牌字、路人、光线可能变）。要「只换人不换景」需要掩码回流后处理（后续版本）。");
     p("换人后口型由模型重新生成，与原台词不保证逐字对位 —— 所以默认「保留原声」只换画面。");
-    p("成本：每段都带整段参考视频时约等于同长度再算一遍（≈2×），可用「参考视频尾部帧」压到 1.2~1.3×。");
+    p("成本：每段都带整段参考视频时约等于同长度再算一遍（≈2×），可用「参考帧数」压到 1.2~1.3×。");
 }
 
 function renderVideoParamsPanel(c, s, node) {
@@ -6261,7 +6270,7 @@ function setupSwapNode(self) {
     // 两行方案信息（只读）：第 1 行＝画布/段长/衔接；第 2 行＝音频/二采/采样/输出名称
     const infoRow = el("div", "flex:0 0 auto;font-size:11px;color:#c9a86a;line-height:1.55;white-space:pre-line;"
         + "overflow:hidden;min-height:28px;word-break:break-all;", "");
-    infoRow.title = "当前方案（只读）：画布 / 每段帧数 / 段间衔接 / 音频 / 二采 / 采样步数 / 输出名称 —— 在四个按钮面板里修改";
+    infoRow.title = "当前方案（只读）：画布 / 每段帧数 / 分段衔接 / 音频 / 二采 / 采样步数 / 输出名称 —— 在四个按钮面板里修改";
     infoRow.addEventListener("mousedown", (e) => e.stopPropagation());
     container.appendChild(infoRow);
     self.__jzlSwapInfo = infoRow;

@@ -2,8 +2,12 @@
 
 把一段**已有视频**里的演员换成参考图里的演员：源片按 17k+5 切成段，每段以
 「源片同名段（含衔接跑道）」当 `<Video 1>` 参考视频、定妆图当 `<Picture 1>` 走 ref2va 重新生成；
-第 2 段起把上一段**生成结果**的一采 latent 尾窗钉成本段首帧 keyframe（永不降噪、每步重注入），
+第 2 段起把上一段**生成结果**的像素尾窗钉成本段首帧 keyframe（永不降噪、每步重注入），
 段首「跑道 + 过渡」帧解码后按**像素域**裁掉 ⇒ 成片时长 = 源片时长、成片段界无缝。
+
+钉帧的时间位置很关键：段首跑道的生成位置 0 对应源片「目标起点 − 跑道」，所以钉的是
+「上段结尾往前 跑道 帧」起的窗口（而不是上段最后几帧）—— 否则钉帧与本段参考视频差一个
+过渡时长，模型会整体抢跑 `过渡` 帧，接缝处就是一次跳帧。
 
 为什么换人的接缝比「无限时长」更容易做（也是本节点与导演台的关键差异）：
   · 无限时长没有“真值”，段 2+ 只能靠上段尾帧 + 新提示词往下编 → 画面/色彩/节奏会缓慢漂移；
@@ -162,9 +166,10 @@ def _fill_prompt(prompt, index, count, start_frame, keep_frames):
 def _store_pixels(image, width, height, count):
     """把一段解码结果的尾部 count 帧存成 uint8 像素（供下一段钉帧 / 参考视频拼接）。
 
+    count = 段首跑道（窗口 + 过渡）：下段钉帧要从这里往回退「过渡」帧再取窗口，才与参考视频同相位。
     存像素而不是 latent：钉帧每次采样都要按本次画布重新 vae.encode，
     latent 跨分辨率只能插值，会让 keyframe 变糊并传染整段。
-    uint8 存 22 帧 @1280×704 约 59MB，只保留一份（每段覆盖）。
+    uint8 存 34 帧 @1280×704 约 92MB，只保留一份（每段覆盖）。
     """
     if image is None or not hasattr(image, "shape") or int(image.shape[0]) < 1:
         return None
@@ -185,20 +190,29 @@ def _pixels_to_frames(px, width, height):
     return frames.contiguous()
 
 
-def _apply_pixel_guide(positive, prev_pixels, vae, width, height, window):
-    """把上一段解码像素的最后 window 帧按本采画布 vae.encode 成首帧 keyframe。
+def _apply_pixel_guide(positive, prev_pixels, vae, width, height, window, back=0):
+    """把上一段解码像素按本采画布 vae.encode 成段首 keyframe（位置固定在第 0 帧）。
 
-    像素先缩放到本采分辨率再编码，所以 keyframe 是清晰的；
-    若直接拿一采的 latent 尾部跨分辨率使用，只能插值 ⇒ 糊。
+    `back` = 往前回退多少帧再取窗口：段首跑道 = 窗口 + 过渡，生成位置 0 对应的源片时间
+    是「目标起点 − 跑道」，所以钉住的必须是「上段结尾往前 跑道 帧」到「往前 过渡 帧」之间
+    的那 window 帧 —— 否则钉帧与本段参考视频差一个过渡时长，模型续写会整体抢跑。
+    像素先缩放到本采分辨率再编码，所以 keyframe 是清晰的；直接拿一采 latent 尾部跨分辨率
+    使用只能插值 ⇒ 糊。
     """
     if prev_pixels is None or vae is None:
         return positive
     frames = _pixels_to_frames(prev_pixels, width, height)
+    total, span = int(frames.shape[0]), max(1, int(window))
+    p0 = max(0, total - span - max(0, int(back)))
+    frames = frames[p0:p0 + span]
     n = int(frames.shape[0])
     if n >= 5:
         while n % 17 != 5:      # 官方同款：多帧裁到 17k+5
             n -= 1
         frames = frames[:n]
+        if n < span:
+            print(f"[JZL-{TAG}]   ⚠️ 衔接画面只有 {n} 帧（需要 {span} 帧，上段只能回溯 {total} 帧）"
+                  f"→ 衔接可能偏短")
     else:
         frames = frames[:1]
     keyframe = {"resolved_frame_index": 0, "latent": vae.encode(frames)}
@@ -343,7 +357,7 @@ _SWAP_DEFAULTS = {
         "selflift": {"steps": 8, "transition_step": 6, "lowres_scale": 0.5, "rho": 0.6,
                      "w_min": 0.5, "w_max": 1.0, "upscaler_model": "none",
                      "upscaler_unload": True, "highres_tiling": False},
-        # 段间衔接（与「无限时长」同一套语义：窗口/过渡/钉帧）
+        # 分段衔接（与「无限时长」同一套语义：衔接帧数 / 过渡帧数 / 钉帧）
         "seam": {"enabled": True, "window": 22, "settle": 12, "ref_video_tail": 0,
                  # 引导来源：pixels = 上段解码像素按本采画布重编码（清晰）
                  #           latent = 上段一采 latent 尾部（旧实现，二采会糊）
@@ -490,7 +504,7 @@ def _parse_swap_settings(raw):
 # ═══════════════════════════════════════════════════════════════
 
 class JZL_MiniMaxCharacterSwap(io.ComfyNode):
-    """长视频人物替换：源片逐段 ref2va 重生成 + 段间钉帧衔接 + 跑道裁切 + 原声回流。"""
+    """长视频人物替换：源片逐段 ref2va 重生成 + 分段衔接 + 跑道裁切 + 原声回流。"""
 
     @classmethod
     def define_schema(cls):
@@ -629,14 +643,14 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
         print(f"[JZL-{TAG}] 源片 {total_src} 帧（{total_src / float(VIDEO_FPS):.2f} 秒）｜画布 {width}x{height}"
               f"｜每段 {seg_len} 帧（{seg_len / float(VIDEO_FPS):.2f} 秒）｜段数 {count}")
         if runway > 0:
-            print(f"[JZL-{TAG}] 段间衔接：窗口 {window} 帧 + 过渡 {settle} 帧 = 跑道 {runway} 帧"
-                  f"（第 2 段起生成时长 = 段长 + 跑道，成片裁掉 → 落盘精确 = 段长）；"
+            print(f"[JZL-{TAG}] 分段衔接：衔接 {window} 帧 + 过渡 {settle} 帧 = 每段多生成 {runway} 帧"
+                  f"（第 2 段起生成时长 = 段长 + 这段，成片裁掉 → 落盘精确 = 段长）；"
                   f"源片同步前移 {runway} 帧当参考 → 与上一段已产出的内容同源，不会累积漂移")
         print(f"[JZL-{TAG}] 参考：{len(ref_imgs)} 张定妆图（参考图放大 {ref_scale:.1f}×，面积倍率）"
               f"｜音频方式：{audio_mode}"
               f"｜二采：{(str(sec_w) + '×' + str(sec_h)) if use_second else '关闭'}")
         print(f"[JZL-{TAG}] 衔接引导：{'像素尾帧重编码' if guide_mode == 'pixels' else '一采latent尾部（旧）'}"
-              f"｜钉帧：{'一采+二采各一次' if pin_second else '仅一采'}"
+              f"｜二采钉帧：{'开' if pin_second else '关'}"
               f"{'｜参考视频拼接上段输出' if append_prev else ''}")
         print(f"[JZL-{TAG}] 落盘目录：{out_dir}")
 
@@ -679,25 +693,37 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             # ① 源片参考片段：源片 [src_start, src_start+gen_len) → 生成画布尺寸
             #    只在需要时才缩放这一段（不整片缓存画布副本，长片内存立刻省一半以上）
             src_clip = _resize_chunked(_slice_frames(frames_all, src_start, gen_len), width, height)
+            # 「参考帧数」>0 时只保留该段开头 N 帧：参考的第 1 帧 = 生成位置 0 = 源片 src_start，
+            # 这样参考视频和接住的画面在同一时间轴上；取尾部会整体错位一整段。
+            ref_total = int(src_clip.shape[0])
             ref_tail = int(ref_video_tail or 0)
             if ref_tail >= 5:
-                n = min(int(src_clip.shape[0]), align_frame_count(ref_tail))
-                src_clip = src_clip[int(src_clip.shape[0]) - n:]
-            # ①b 可选：把「上一段已产出的画面」也拼进参考视频
-            #     官方编码器会把参考视频截断到 gen_len 帧，所以这里用「源片主体 + 上段尾窗」拼满
+                ref_total = min(ref_total, align_frame_count(ref_tail))
+
+            # ①b 可选：把上一段结尾拼到参考视频末尾 —— 让模型看到「已经换好的人长什么样」
+            #     拼接后总长仍是 17k+5（源片部分取 17 的倍数 + 窗口的 5 余数），不会被编码器截掉尾巴
+            prev_ref = None
             if append_prev and i > 0 and prev_pixels is not None:
                 _pv = _pixels_to_frames(prev_pixels, width, height)
-                _pv = _pv[-min(int(_pv.shape[0]), max(5, int(window))):]
-                keep_src = max(5, int(gen_len) - int(_pv.shape[0]))
-                while keep_src % 17 != 5:
+                prev_ref = _pv[-min(int(_pv.shape[0]), max(5, int(window))):]
+                if int(ref_total) - int(prev_ref.shape[0]) < 5:
+                    print(f"[JZL-{TAG}]   分段 {idx}：参考帧数 {ref_total} 帧放不下上段尾窗 "
+                          f"{int(prev_ref.shape[0])} 帧 → 本段不拼接参考")
+                    prev_ref = None
+            if prev_ref is not None:
+                keep_src = int(ref_total) - int(prev_ref.shape[0])
+                while keep_src % 17 != 0:
                     keep_src -= 1
-                src_clip = torch.cat([src_clip[:keep_src], _pv.to(dtype=src_clip.dtype,
-                                                                 device=src_clip.device)], dim=0)
+                src_clip = torch.cat([src_clip[:keep_src],
+                                      prev_ref.to(dtype=src_clip.dtype, device=src_clip.device)], dim=0)
+            else:
+                src_clip = src_clip[:int(ref_total)]
             # 参考视频必须是 17k+5（官方编码器会向下吸附；这里先说清楚实际送进去多少帧）
             ref_video_frames = int(src_clip.shape[0])
 
             # ② 原声片段：既作 <Video 1> 的音轨参考（音色/节奏），也是「保留原声」的成片音轨
-            ref_audio_clip = _slice_audio(source_audio, src_start, gen_len) if keep_original_audio else None
+            #    长度跟参考视频实际送进去的帧数一致，避免音轨和画面参考对不齐
+            ref_audio_clip = _slice_audio(source_audio, src_start, ref_video_frames) if keep_original_audio else None
             ref_video_audios = [ref_audio_clip] if (ref_audio_clip is not None and audio_vae is not None) else []
 
             print(f"[JZL-{TAG}] 分段 {idx}/{count}：源片 [{src_start}, {src_start + gen_len})"
@@ -728,11 +754,17 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                     print(f"[JZL-{TAG}]   分段 {idx}：窗口按段长自动调整为 {seam_plan['window']} 帧"
                           f"（配置 {window} 帧）")
 
+            # 段首跑道 = 窗口 + 过渡。钉帧位置、丢弃量都按【实际窗口】反推：
+            # 生成位置 0 ↔ 源片「目标起点 − 跑道」，所以钉帧是「上段结尾往前 跑道 帧」起、取窗口帧，
+            # 丢掉「窗口 + 过渡」恰好把成片切到目标起点 → 钉帧、参考视频、成片三者同一条时间轴。
+            _seam_window = int(seam_plan["window"]) if seam_plan is not None else int(window)
+            _lead = max(0, int(runway) - _seam_window)
+
             if seam_plan is not None and guide_mode == "pixels" and prev_pixels is not None:
                 positive = _apply_pixel_guide(positive, prev_pixels, vae, width, height,
-                                             seam_plan["window"])
-                print(f"[JZL-{TAG}]   衔接（像素）：上段末 {int(prev_pixels.shape[0])} 帧 → 按 "
-                      f"{width}x{height} 重编码钉成本段首帧（清晰，不插值）")
+                                             _seam_window, back=_lead)
+                print(f"[JZL-{TAG}]   衔接（像素）：上段 [{start - _seam_window - _lead}, {start - _lead}) "
+                      f"共 {_seam_window} 帧 → 按 {width}x{height} 重编码钉成本段首帧（与参考视频同相位）")
             elif seam_plan is not None and prev_latent is not None:
                 positive, _kf = _seam_apply_guide(positive, prev_latent, seam_plan,
                                                  audio_link=True, vae=vae, guide_source="latent")
@@ -754,7 +786,7 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                 if (pin_second and seam_plan is not None and guide_mode == "pixels"
                         and prev_pixels is not None):
                     positive2 = _apply_pixel_guide(positive, prev_pixels, vae, sec_w, sec_h,
-                                                   seam_plan["window"])
+                                                   _seam_window, back=_lead)
                     print(f"[JZL-{TAG}]   衔接（二采·像素）：按 {sec_w}x{sec_h} 重编码钉成本段首帧")
                 try:
                     samples = _run_second_pass(model, positive2, first, sample_decode, second_run,
@@ -777,14 +809,14 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                 print(f"[JZL-{TAG}]   分段 {idx}：⚠️ 本段未钉帧，但仍有 {runway} 帧跑道 → 只裁跑道不裁衔接"
                       f"（接缝可能跳一下，属预期）")
             if trim_plan is not None and int(trim_plan.get("window", 0)) > 0:
-                image, audio = _seam_trim_decoded(image, audio, trim_plan, settle_frames=settle,
+                image, audio = _seam_trim_decoded(image, audio, trim_plan, settle_frames=_lead,
                                                   trim_audio=True, tag=TAG)
                 kept = int(image.shape[0])
                 print(f"[JZL-{TAG}]   像素域裁切：解码 {raw_frames} 帧 - 窗口 {int(trim_plan['window'])}"
-                      f" - 过渡 {settle} = {kept} 帧")
+                      f" - 过渡 {_lead} = {kept} 帧")
                 if kept < kept_target:
                     print(f"[JZL-{TAG}]   分段 {idx}：⚠️ 裁切后只有 {kept} 帧 < 目标 {kept_target} 帧"
-                          f"（生成 {raw_frames} 帧，跑道 {runway} 帧）→ 本段会偏短，请核对段长/窗口设置")
+                          f"（生成 {raw_frames} 帧，跑道 {runway} 帧）→ 本段会偏短，请核对每段时长/衔接帧数")
 
             # ⑨ 末段不足一段：截到源片剩余帧数（音画同源同量）
             if int(image.shape[0]) > kept_target:
@@ -815,12 +847,13 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                   f"{audio_keep / float(VIDEO_FPS):.2f} 秒，种子 {seed_i}）")
 
             # ⑬ 给下一段留状态：
-            #    · 像素尾帧（uint8，按二采画布存 → 下段一采/二采都能用清晰像素重编码）
+            #    · 像素尾帧（uint8，按二采画布存 → 下段一采/二采都能用清晰像素重编码）；
+            #      存「窗口 + 过渡」帧：下段钉帧要从这里往回退过渡帧再取窗口，才与本段参考视频同相位
             #    · 一采 latent（仅 latent 引导模式需要）
             #    · 本段落盘后末帧亮度（接缝亮度匹配）
             store_w, store_h = (sec_w, sec_h) if use_second else (width, height)
             try:
-                prev_pixels = _store_pixels(image, store_w, store_h, max(5, int(window)))
+                prev_pixels = _store_pixels(image, store_w, store_h, max(5, int(runway or window)))
             except Exception as _pe:
                 prev_pixels = None
                 print(f"[JZL-{TAG}]   分段 {idx}：⚠️ 保存尾部像素失败（{_pe}）→ 下一段改用 latent 引导")
