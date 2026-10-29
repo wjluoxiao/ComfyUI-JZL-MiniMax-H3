@@ -678,6 +678,26 @@
       "0": { "name": "Processed Script" }
     }
   },
+  "JZL_MiniMaxCharacterSwap": {
+    "display_name": "JZL - 🎭 MiniMax-H3 Character Swap",
+    "inputs": {
+      "model": { "name": "Model" },
+      "clip": { "name": "CLIP" },
+      "vae": { "name": "VAE" },
+      "audio_vae": { "name": "Audio VAE" },
+      "source_video": { "name": "Source Video" },
+      "source_audio": { "name": "Source Audio" },
+      "ref_images": { "name": "Character Stills" },
+      "ref_image": { "name": "Character Still" },
+      "story_name": { "name": "Output Name" },
+      "manager_settings": { "name": "Node Config" },
+      "prompt": { "name": "Prompt" }
+    },
+    "outputs": {
+      "0": { "name": "Merged Video" },
+      "1": { "name": "Segment Files" }
+    }
+  },
   "JZL_MiniMaxVideoViewer": {
     "display_name": "JZL - 🎬 Generated Video Viewer",
     "inputs": {

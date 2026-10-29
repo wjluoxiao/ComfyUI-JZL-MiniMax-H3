@@ -21,6 +21,9 @@ const MAX_NODE_TYPE = "JZL_MiniMaxAssetManagerMax";
 const INF_NODE_TYPE = "JZL_MiniMaxAssetManagerInfinite";
 // 🎬 短剧导演台：克隆「无限时长」，按钮改为「2 + 4 + 4」三排（多了「生成设定」「视频参数」两个面板）
 const SHORTDRAMA_NODE_TYPE = "JZL_MiniMaxAssetManagerShortDrama";
+// 🎭 人物替换：长视频换人（源片逐段 ref2va 重生成）。选项全部收进三个按钮面板：
+//    🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理
+const SWAP_NODE_TYPE = "JZL_MiniMaxCharacterSwap";
 const VIEWER_NODE_TYPE = "JZL_MiniMaxVideoViewer";
 const SCRIPT_VIEWER_NODE_TYPE = "JZL_MiniMaxScriptViewer";
 
@@ -2222,11 +2225,48 @@ async function saveManager(node, value) {
     if (value && value.sample_decode && node?.type === SHORTDRAMA_NODE_TYPE) {
         delete value.sample_decode.infinite;
     }
+    // 🎭 人物替换：只存本节点用到的三组键（避免把导演台的全套配置塞进换人节点的工作流 JSON）
+    if (value && node?.type === SWAP_NODE_TYPE) {
+        value = pruneSwapSettings(value);
+    }
     const w = node?.widgets?.find((x) => x.name === "manager_settings");
     if (w) setWidgetValue(w, JSON.stringify(value));
     try { node?.__jzlUpdateInfo?.(); } catch (_) {}  // 保存后实时同步节点「实时显示」
     try { node?.__jzlUpdateDisplay?.(); } catch (_) {}  // 生成详情（无限时长节点含「无限时长：开/关」）同步刷新
     return value;
+}
+
+// 🎭 人物替换的配置裁剪：只保留面板真正读写的键（与后端 _parse_swap_settings 一一对应）
+function pruneSwapSettings(v) {
+    const pick = (o, keys) => {
+        const out = {};
+        if (!o || typeof o !== "object") return out;
+        for (const k of keys) if (o[k] !== undefined) out[k] = o[k];
+        return out;
+    };
+    const sd = v.sample_decode || {};
+    const sl = sd.selflift || {};
+    const sec = sd.second || {};
+    return {
+        auto_save: v.auto_save !== false,
+        gen_params: pick(v.gen_params, ["segment", "aspect_ratio", "megapixels",
+            "scale_factor", "upscale_scale", "second_mode", "second_width", "second_height",
+            "audio_mode", "max_segments"]),
+        sample_decode: Object.assign(
+            pick(sd, ["sample_mode", "sampler", "scheduler", "steps", "cfg", "denoise",
+                "seed", "seed_mode", "decode_cleanup"]),
+            {
+                // 与短剧导演台同一套键：SelfLift 采样参数整组保留
+                selflift: pick(sl, ["steps", "transition_step", "lowres_scale", "rho", "w_min", "w_max",
+                    "upscaler_model", "upscaler_unload", "highres_tiling"]),
+                seam: pick(sd.seam, ["enabled", "window", "settle", "ref_video_tail",
+                    "guide_mode", "pin_second", "append_prev_video"]),
+                second: pick(sec, ["enabled", "sampler", "scheduler", "sigmas_mode", "custom_sigmas",
+                    "steps", "denoise", "precision", "upscaler_model", "device", "enable_chunking",
+                    "tiling", "tiling_tiles", "tiling_overlap"]),
+            }),
+        save: pick(v.save, ["mode", "auto_merge_delete"]),
+    };
 }
 
 async function chooseFile(kind) {
@@ -3894,8 +3934,11 @@ function defaultSettings() {
             inference_mode: "one by one", max_frames: 24, max_size: 256,
         },
         gen_params: {
-            aspect_ratio: "16:9 (Widescreen)", megapixels: 0.4, multiple: 32, duration: 5,
+            aspect_ratio: "16:9 (Widescreen)", megapixels: 1.0, multiple: 32, duration: 5,
             width: 0, height: 0, scale_factor: 1.0, upscale_scale: 1.0,
+            // 🎭 人物替换专用（其它导演台不读这些键，互不影响）
+            segment: "固定5秒", audio_mode: "保留原声（推荐）", max_segments: 60,
+            second_mode: "目标分辨率", second_width: 1280, second_height: 704,
         },
         sample_decode: {
             sampler: "res_multistep", scheduler: "simple", steps: 4, cfg: 1.0,
@@ -3914,6 +3957,11 @@ function defaultSettings() {
                 trim_mode: "像素域裁切（推荐）", guide_source: "一采latent尾部（推荐）",
                 second_guide: "first", luma_match: true,
             },
+            // 🎭 人物替换的段间衔接（与「无限时长衔接」同一套窗口/过渡语义，但钉的是「上一段生成结果」）
+            seam: { enabled: true, window: 22, settle: 12, ref_video_tail: 0,
+                    // pixels = 上段解码像素按本采画布重编码（官方 AddGuide 同款，不糊）
+                    // latent = 上段一采 latent 尾部（旧实现，二采会被插值糊掉）
+                    guide_mode: "pixels", pin_second: true, append_prev_video: false },
             second: {
                 enabled: false,
                 upscaler_model: "",
@@ -4829,6 +4877,201 @@ function jzlCalcResolution(aspectRatio, megapixels) {
     return [align(wr), align(hr)];
 }
 
+// ══════════════════════════════════════════════════════════════
+//  🎭 人物替换（JZL_MiniMaxCharacterSwap）专用面板
+//  选项全部收进 3 个按钮：🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理
+//  写的是 manager_settings 里的 gen_params / sample_decode / save —— 与后端
+//  _parse_swap_settings() 同一套键名，不做任何翻译（避免「面板显示一套、实际跑另一套」）。
+// ══════════════════════════════════════════════════════════════
+const SWAP_SEGMENT_OPTIONS = Array.from({ length: 17 }, (_, i) => `固定${i + 4}秒`);
+const SWAP_AUDIO_OPTIONS = ["保留原声（推荐）", "使用生成音轨", "静音"];
+const SWAP_WINDOW_OPTIONS = [
+    { value: 5, label: "5 帧（≈0.21s，最省）" },
+    { value: 22, label: "22 帧（≈0.92s，推荐）" },
+    { value: 39, label: "39 帧（≈1.63s）" },
+    { value: 56, label: "56 帧（≈2.33s，最稳最慢）" },
+];
+const SWAP_SETTLE_OPTIONS = [
+    { value: 12, label: "12 帧（默认）" },
+    { value: 29, label: "29 帧（模型启动慢时用）" },
+    { value: 46, label: "46 帧（顽固卡顿时用）" },
+];
+
+function swapFrameLen(segmentText) {
+    // 与后端 _resolve_length 同规则：秒 → 24fps 帧数 → 吸附到 17k+5
+    const m = String(segmentText || "").match(/(\d+(?:\.\d+)?)/);
+    let n = m ? Math.max(5, Math.round(parseFloat(m[1]) * 24)) : 124;
+    while (n % 17 !== 5) n += 1;
+    return n;
+}
+
+function renderSwapVideoParamsPanel(c, s, node) {
+    const gp = s.gen_params || (s.gen_params = {});
+    renderAutoSave(c, s);
+    const touch = () => { try { node?.__jzlUpdateDisplay?.(); } catch (_) {} };
+
+    c.append(makeSectionTitle("画幅比例"));
+    c.append(bigBoxGrid(["跟随源片（推荐）"].concat(OPTIONS.aspectRatio),
+        String(gp.aspect_ratio || "跟随源片（推荐）"), v => { gp.aspect_ratio = v; refreshRes(); touch(); }, 5, 26));
+
+    c.append(makeSectionTitle("分辨率与段长"));
+    c.append(field("百万像素（MP）", stepperControl(Number(gp.megapixels ?? 0.4),
+        { min: 0.1, max: 3.6, step: 0.1 }, v => { gp.megapixels = v; refreshRes(); touch(); })));
+
+    const resBox = el("div", "font-size:13px;color:#c9a86a;padding:6px 10px;text-align:center;"
+        + "background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);"
+        + "border-radius:4px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;");
+    resBox.title = "生成画布（32 对齐）。「跟随源片」= 执行时按源片宽高比 + 上面的 MP 预算实时计算";
+    c.append(field("分辨率", resBox));
+    const refreshRes = () => {
+        const ar = String(gp.aspect_ratio || "跟随源片（推荐）");
+        if (ar.startsWith("跟随源片")) {
+            resBox.textContent = "跟随源片宽高比（执行时计算）";
+        } else {
+            const [W, H] = jzlCalcResolution(ar, Number(gp.megapixels ?? 0.4));
+            resBox.textContent = `${W} × ${H}`;
+        }
+    };
+    refreshRes();
+
+    c.append(field("每段时长", selectControl(SWAP_SEGMENT_OPTIONS, String(gp.segment || "固定5秒"),
+        v => { gp.segment = v; showSegLen(); touch(); })));
+    const segHint = el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;", "");
+    c.append(segHint);
+    const showSegLen = () => {
+        const f = swapFrameLen(gp.segment || "固定5秒");
+        segHint.textContent = `每段生成 ${f} 帧 = ${(f / 24).toFixed(2)} 秒（自动对齐到模型支持的帧数）。`
+            + "段越短接缝越多、越慢；5~8 秒最稳。这只是切段粒度，成片总时长等于源片。";
+    };
+    showSegLen();
+
+    c.append(makeSectionTitle("音频"));
+    c.append(field("音频方式", selectControl(SWAP_AUDIO_OPTIONS, String(gp.audio_mode || SWAP_AUDIO_OPTIONS[0]),
+        v => { gp.audio_mode = v; touch(); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "保留原声 = 成片用源片原声（对白/音效不变，推荐；同时把原声作为 <Video 1> 音轨参考）。\n"
+        + "使用生成音轨 = 用模型重新生成的声音（台词/节奏可能与原片不同）。静音 = 不要音轨。"));
+
+    c.append(makeSectionTitle("参考与放大"));
+    c.append(field("参考图放大", stepperControl(Number(gp.scale_factor ?? 1.0),
+        { min: 1.0, max: 5.0, step: 0.1 }, v => { gp.scale_factor = v; })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "参考图面积 = 画布面积 × 倍率（1.0 = 同面积，2.0 = 面积翻倍）。脸不够像就加，越大越慢。"));
+
+    c.append(makeSectionTitle("二采放大"));
+    c.append(field("二采放大方式", selectControl(
+        [{ value: "目标分辨率", label: "目标分辨率（推荐，1280×704）" },
+         { value: "放大倍数", label: "放大倍数（按一采画布乘倍数）" }],
+        String(gp.second_mode || "目标分辨率"), v => { gp.second_mode = v; syncSecMode(); touch(); })));
+    const fSecW = field("二采目标宽度", stepperControl(Number(gp.second_width ?? 1280),
+        { min: 32, max: 4096, step: 32 }, v => { gp.second_width = Math.round(v); touch(); }));
+    const fSecH = field("二采目标高度", stepperControl(Number(gp.second_height ?? 704),
+        { min: 32, max: 4096, step: 32 }, v => { gp.second_height = Math.round(v); touch(); }));
+    const fSecScale = field("二采latent放大", stepperControl(Number(gp.upscale_scale ?? 1.0),
+        { min: 1.0, max: 4.0, step: 0.05 }, v => { gp.upscale_scale = v; touch(); }));
+    c.append(fSecW, fSecH, fSecScale);
+    const syncSecMode = () => {
+        const isTgt = String(gp.second_mode || "目标分辨率") === "目标分辨率";
+        fSecW.style.display = isTgt ? "flex" : "none";
+        fSecH.style.display = isTgt ? "flex" : "none";
+        fSecScale.style.display = isTgt ? "none" : "flex";
+    };
+    syncSecMode();
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "换人脸是小目标，建议 1280×704。二采目标比一采画布还小只会更糊（节点会提示）。"));
+
+    c.append(makeSectionTitle("安全阀"));
+    c.append(field("最大段数", stepperControl(Number(gp.max_segments ?? 60),
+        { min: 1, max: 200, step: 1 }, v => { gp.max_segments = Math.round(v); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "源片切出的段数超过它就直接报错（避免误接一部两小时的片子跑一晚上）。"));
+}
+
+function renderSwapSeamSection(c, s, node) {
+    // 🎭 人物替换独有：段间衔接（钉帧）。放在「100% 复刻的采样解码设置」之后，
+    //    语义与「无限时长衔接」同源，但钉的是「上一段生成结果」而不是新剧情。
+    const sd = s.sample_decode || (s.sample_decode = {});
+    const seam = sd.seam || (sd.seam = {});
+    const touch = () => { try { node?.__jzlUpdateDisplay?.(); } catch (_) {} };
+
+    c.append(makeSectionTitle("段间衔接（钉帧）"));
+    c.append(field("启用段间衔接", checkboxControl(seam.enabled !== false,
+        "第 2 段起用上一段结尾画面钉住本段开头，段界不跳。关掉 = 每段独立生成",
+        v => { seam.enabled = !!v; touch(); })));
+    c.append(field("衔接窗口（帧）", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
+        v => { seam.window = Number(v); touch(); })));
+    c.append(field("过渡丢弃帧数（12/29/46）", selectControl(SWAP_SETTLE_OPTIONS, Number(seam.settle ?? 12),
+        v => { seam.settle = Number(v); touch(); })));
+    c.append(field("参考视频尾部帧", stepperControl(Number(seam.ref_video_tail ?? 0),
+        { min: 0, max: 600, step: 17 }, v => { seam.ref_video_tail = Math.max(0, Math.round(v)); })));
+    c.append(field("衔接引导来源", selectControl(
+        [{ value: "pixels", label: "像素尾帧（推荐，清晰不糊）" },
+         { value: "latent", label: "latent 尾部（旧，二采会糊）" }],
+        String(seam.guide_mode || "pixels"), v => {
+            seam.guide_mode = v;
+            appendPrevCb.style.opacity = (v === "pixels") ? "1" : "0.45";
+            touch();
+        })));
+    c.append(field("二采也钉帧", checkboxControl(seam.pin_second !== false,
+        "一采和二采各钉一次，二采按二采分辨率重新编码。关掉 = 只有一采钉帧（二采会糊）",
+        v => { seam.pin_second = !!v; touch(); })));
+    const appendPrevCb = checkboxControl(!!seam.append_prev_video,
+        "把上一段画面也拼进参考视频（<Video 1> = 源片 + 上段结尾）",
+        v => { seam.append_prev_video = !!v; });
+    c.append(field("参考视频拼接", appendPrevCb));
+    appendPrevCb.style.opacity = (String(seam.guide_mode || "pixels") === "pixels") ? "1" : "0.45";
+    c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
+        "窗口：钉住上段结尾多少帧（5/22/39/56）。22 帧 ≈ 0.9 秒最稳。\n"
+        + "过渡：钉帧后模型启动的几帧，一起丢掉再接成片（12/29/46）。\n"
+        + "参考视频尾部帧：0 = 整段源片当参考（最贴动作、约 2× 成本）；卡显存时填 39~56。"));
+}
+
+function renderSwapPrefPanel(c, s, d, node) {
+    // ⭐ 100% 复刻「JZL - 🤖 MiniMax-H3短剧导演台」的 🎭 采样解码设置：
+    //    直接调用同一个 renderPrefPanel（采样分类 / 随机种子 / 采样 / 二次采样（含 Sigmas 模式、空间分块）/
+    //    SelfLift 采样 / 解码），保证两个节点的面板逐项一致、改一处两边同步。
+    //    唯一差别：本节点不显示「♾️ 无限时长衔接」（renderPrefPanel 内部以 node.type 判断，自动跳过）。
+    renderPrefPanel(c, s, d, node);
+    renderSwapSeamSection(c, s, node);
+}
+
+function renderSwapHelpPanel(c) {
+    const p = (txt, style) => c.append(el("p", style || "margin:6px 0;line-height:1.8;font-size:13px;color:var(--fg-color,#ddd);", txt));
+    const h = (txt) => c.append(el("div", "margin:14px 0 6px;font-size:14px;font-weight:700;color:#c9a86a;", txt));
+    c.append(el("div", "font-size:15px;font-weight:700;color:var(--fg-color,#eee);margin-bottom:6px;", "🎭 MiniMax-H3 人物替换 · 使用说明"));
+    p("把一段已有视频里的演员换成你给的定妆图（不是局部换脸，而是逐段重生成：动作/机位/场景保留、人换掉）。长视频自动分段、自动衔接，成片时长恒等于源片。");
+
+    h("① 接线");
+    p("源视频 ← 「加载视频 / GetVideoComponents」的 IMAGE 输出（按 24fps 解释，非 24fps 请先转码）");
+    p("源视频原声 ← 同一条时间轴上的 AUDIO（「保留原声」时必需）");
+    p("定妆图 ref_image_0..8 ← 新演员参考图（<Picture 1..9>），建议正面清晰、单人");
+    p("主模型 / CLIP / 视觉VAE / 音频VAE ← 与导演台一致；建议用 ref2va 变体模型");
+    p("端口顺序：主模型 → CLIP → 视觉VAE → 音频VAE → 源视频 → 源视频原声 → 定妆图；提示词在最底部。");
+
+    h("② 四个按钮");
+    p("🎨 视频参数设置：画幅/像素、每段时长、音频方式、参考图放大、二采放大、最大段数");
+    p("🎭 采样解码设置：与「短剧导演台」100% 相同（采样分类/种子/一采/二采/SelfLift/解码），"
+        + "末尾多一段本节点独有的「段间衔接（钉帧）」：窗口 / 过渡 / 参考视频尾部帧");
+    p("🎬 生成视频管理：输出名称（output/jzl/{名称}/）、保存方式、本批视频宫格预览");
+    p("📖 节点使用说明：本页");
+    p("保存后重新执行节点生效（「自动保存」开着时改完即存）。提示词固定在最底部的大输入框里。");
+
+    h("③ 为什么接缝比「无限时长」稳");
+    p("无限时长没有真值，段 2+ 只能靠上段尾帧往下编 → 会缓慢漂移；换人有逐帧真值：每段都重新对位同一段源片（<Video 1>），"
+        + "跑道那几十帧的源片正好是上一段已产出的内容 → 同一条时间轴、不累积误差。钉帧只负责「画面不跳」。");
+
+    h("④ 调参经验");
+    p("脸不像 → 参考图放大 1.5~2.0、百万像素 0.6~1.0、二采倍数 1.5");
+    p("接缝跳一下 → 衔接窗口加到 39；或每段时长改 8 秒（接缝更少）；仍不行就关「段间衔接」对比");
+    p("动作对不上 → 参考视频尾部帧设 0、采样步数 8~10");
+    p("太慢 / 爆显存 → 参考视频尾部帧 39~56、段长 8~10 秒、二采先只跑一采看效果");
+
+    h("⑤ 已知取舍");
+    p("H3 是整帧重生成：背景/道具会被重画（招牌字、路人、光线可能变）。要「只换人不换景」需要掩码回流后处理（后续版本）。");
+    p("换人后口型由模型重新生成，与原台词不保证逐字对位 —— 所以默认「保留原声」只换画面。");
+    p("成本：每段都带整段参考视频时约等于同长度再算一遍（≈2×），可用「参考视频尾部帧」压到 1.2~1.3×。");
+}
+
 function renderVideoParamsPanel(c, s, node) {
     const { cur, set, comboOptions } = panelWidgetIO(node);
     renderAutoSave(c, s);
@@ -5448,6 +5691,31 @@ function renderVideoManagerPanel(c, node, settings, d) {
         try { notify(msg, isErr ? "error" : "success"); } catch (_) {}
     };
     const AUTO_VAL = "__auto__";
+    let refresh = null;   // 「📥 加载视频」的刷新函数（下面赋值；输出名称改动时也要触发）
+    // ── 🎭 人物替换：输出名称（落盘目录 output/jzl/{输出名称}/）放在最前面 ──
+    //    该节点把 story_name 从节点表面收进本面板（与导演台把故事名收进「运行参数设置」同一做法）
+    if (node?.type === SWAP_NODE_TYPE) {
+        const nameW = (node?.widgets || []).find((x) => x.name === "story_name");
+        const nameInp = el("input", "flex:1 1 0;min-width:0;");
+        nameInp.className = "jzl-input";
+        nameInp.type = "text";
+        nameInp.value = String(readWidgetValue(nameW) ?? "") || "人物替换";
+        nameInp.placeholder = "人物替换";
+        nameInp.title = "落盘目录：output/jzl/{输出名称}/（下方宫格按此名称加载本批视频）";
+        nameInp.addEventListener("mousedown", (e) => e.stopPropagation());
+        nameInp.addEventListener("change", () => {
+            const val = String(nameInp.value || "").trim() || "人物替换";
+            if (nameW) setWidgetValue(nameW, val);
+            try { node?.__jzlUpdateDisplay?.(); } catch (_) {}
+            try { c.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+            if (refresh) refresh();   // 换名字后立刻切到该目录的视频
+        });
+        const nameRow = field("输出名称", nameInp);
+        nameRow.title = "换人成片与各分段都落在 output/jzl/{输出名称}/";
+        c.append(nameRow);
+        c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.6;",
+            "落盘目录：output/jzl/{输出名称}/。「生成视频查看器」读同名文件夹即可看到本批结果。"));
+    }
     // ── 保存模式：默认「分段保存」，可勾选「拼接保存」「拼接保存后删除分段视频」──
     if (!settings.save) settings.save = { mode: "分段保存", auto_save: false, auto_merge: false, auto_merge_delete: false };
     const save = settings.save;
@@ -5486,7 +5754,6 @@ function renderVideoManagerPanel(c, node, settings, d) {
         "Max 恒定：每段【调度→编码→采样→解码】完成立即 ffmpeg 落盘 output/jzl/{故事名}/ 并释放显存/内存（跑 N 段与 1 段占用不叠加）。分段保存为必选项（恒保留本批各段）；勾选拼接保存=生成后另把本批分段读盘 concat 合并为一个完整视频；再勾选删除分段=合并成功后清理本批各分段 mp4。"));
 
     // ── 📥 加载视频：自动识别（跟随节点故事名）/ 选择已识别文件夹，6 列宫格 ──
-    let refresh = null;
     const top = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;");
     top.append(el("span", "font-size:13px;font-weight:600;color:var(--fg-color,#eee);white-space:nowrap;", "📥 加载视频"));
     const sel = document.createElement("select");
@@ -5678,13 +5945,23 @@ function buildModal(node, data, panelId) {
             break;
         }
         case "prompt": renderPromptPanel(panelBox, settings, d, node); break;
-        case "preference": renderPrefPanel(panelBox, settings, d, node); break;
+        case "preference":
+            // 🎭 人物替换：100% 复用短剧导演台的采样解码设置（同一函数）+ 追加本节点独有的「段间衔接」
+            if (node?.type === SWAP_NODE_TYPE) renderSwapPrefPanel(panelBox, settings, d, node);
+            else renderPrefPanel(panelBox, settings, d, node);
+            break;
         case "preference_settings": renderPreferenceSettingsPanel(panelBox, settings); break;
         case "gen_settings": renderGenSettingsPanel(panelBox, settings, node, d); break;
-        case "video_params": renderVideoParamsPanel(panelBox, settings, node); break;
+        case "video_params":
+            if (node?.type === SWAP_NODE_TYPE) renderSwapVideoParamsPanel(panelBox, settings, node);
+            else renderVideoParamsPanel(panelBox, settings, node);
+            break;
         case "save_settings": renderSaveSettingsPanel(panelBox, settings, node, d); break;
         case "video_manager": renderVideoManagerPanel(panelBox, node, settings, d); break;
-        case "help": renderHelpPanel(panelBox); break;
+        case "help":
+            if (node?.type === SWAP_NODE_TYPE) renderSwapHelpPanel(panelBox);
+            else renderHelpPanel(panelBox);
+            break;
         default: renderAutoSave(panelBox, settings);
     }
     dialog.append(panelBox);
@@ -5819,6 +6096,313 @@ if (!app.__jzlReshootGraphPatched) {
     }
 }
 
+// 🎭 人物替换的默认提示词（与后端 nodes_character_swap.DEFAULT_PROMPT 保持一致；
+//   仅用于「旧工作流值错位」修复时还原，不作为执行依据）
+const SWAP_DEFAULT_PROMPT = "把 <Video 1> 里的人物替换为 <Picture 1>。\n"
+    + "严格保持 <Video 1> 的动作、表情、机位、场景、道具、光线与色彩不变。";
+
+// 看起来像不像「节点配置 JSON」（只判断开头几个键，够用于错位识别）
+function swapLooksLikeConfig(v) {
+    return typeof v === "string" && /^\s*\{\s*"(auto_save|gen_params|sample_decode|save|models|assets)"/.test(v);
+}
+
+// console 在某些宿主/早期前端里可能不可用；日志失败绝不能中断修复流程
+function swapLog(msg) {
+    try { console.log(msg); } catch (_) {}
+}
+
+// 看起来像不像「换人提示词正文」（用于把错位到 story_name 的正文搬回来）
+function swapLooksLikePrompt(v) {
+    const s = String(v || "");
+    return s.length >= 12 && (/<Video\s*\d>/.test(s) || /替换/.test(s) || /保持/.test(s));
+}
+
+// 旧版「人物替换」节点的值/端口修复：
+//  ① 端口 source_frames → source_video（改名 + 移位后按位置还原会把连线挂到幽灵端口上，这里迁走连线）
+//  ② 端口顺序归位（旧工作流按自身 inputs 顺序还原，会和 schema 顺序不一致 → 强制排成标准顺序）
+//  ③ widget 值按名纠正：旧版 widgets_values = [prompt, story_name, display_info, manager_settings]，
+//     新版 = [story_name, manager_settings, prompt] → 旧工作流载入后整体错位一格
+//     （典型症状：提示词框里显示一串 {"auto_save":...} JSON，输出名称变成提示词正文）
+const SWAP_INPUT_ORDER = ["model", "clip", "vae", "audio_vae", "source_video", "source_audio",
+    "ref_images", "story_name", "manager_settings", "prompt"];
+
+function reorderSwapInputs(self) {
+    const ins = self.inputs || [];
+    if (ins.length < 2) return;
+    const rank = (n) => { const i = SWAP_INPUT_ORDER.indexOf(n); return i < 0 ? 999 : i; };
+    const order = ins.map((v, i) => ({ v, i }))
+        .sort((a, b) => (rank(a.v.name) - rank(b.v.name)) || (a.i - b.i))
+        .map((x) => x.v);
+    if (order.every((v, i) => v === ins[i])) return;
+    ins.length = 0;
+    order.forEach((v) => ins.push(v));
+    ins.forEach((inp, idx) => {
+        inp.slot = idx;
+        if (inp.link == null) return;
+        const lk = (self.graph && self.graph.links && self.graph.links[inp.link])
+            || (self.graph && self.graph._links && self.graph._links.get && self.graph._links.get(inp.link));
+        if (lk) lk.target_slot = idx;
+    });
+    self.setDirtyCanvas?.(true, true);
+    swapLog("[JZL-人物替换] 端口顺序已归位为标准顺序");
+}
+
+function healSwapNodeLegacy(self) {
+    // ① 幽灵端口 source_frames：把连线迁到 source_video 后删除
+    try {
+        const ins = self.inputs || [];
+        const oldIdx = ins.findIndex((i) => i && i.name === "source_frames");
+        if (oldIdx >= 0) {
+            const linkId = ins[oldIdx].link;
+            ins.splice(oldIdx, 1);                       // 先删，再按新数组算目标槽位（否则下标会错一位）
+            ins.forEach((i, k) => { i.slot = k; });
+            const newIdx = ins.findIndex((i) => i && i.name === "source_video");
+            if (newIdx >= 0 && linkId != null) {
+                ins[newIdx].link = linkId;
+                const lk = (self.graph && self.graph.links && self.graph.links[linkId])
+                    || (self.graph && self.graph._links && self.graph._links.get && self.graph._links.get(linkId));
+                if (lk) { lk.target_slot = newIdx; lk.target_id = self.id; }
+                swapLog("[JZL-人物替换] 已把旧端口 source_frames 的连线迁移到 source_video");
+            }
+            self.setDirtyCanvas?.(true, true);
+        }
+        reorderSwapInputs(self);   // ② 端口顺序归位（旧工作流按自身顺序还原 → 与 schema 不一致）
+    } catch (_) {}
+
+    // ③ widget 值错位修复
+    try {
+        const wOf = (n) => (self.widgets || []).find((w) => w && w.name === n);
+        const msW = wOf("manager_settings");
+        const prW = wOf("prompt");
+        const snW = wOf("story_name");
+        if (!msW) return;
+        // 配置 JSON 跑到别的 widget 上了 → 搬回 manager_settings
+        if (!swapLooksLikeConfig(readWidgetValue(msW))) {
+            for (const cand of [prW, snW]) {
+                if (!cand) continue;
+                const v = readWidgetValue(cand);
+                if (swapLooksLikeConfig(v)) {
+                    setWidgetValue(msW, v);
+                    if (cand === prW) {
+                        // prompt 里是 JSON ⇒ 提示词原文丢了（被挤到 story_name），下面第 ④ 步会还原
+                        setWidgetValue(prW, "");
+                    } else {
+                        setWidgetValue(cand, "人物替换");
+                    }
+                    swapLog("[JZL-人物替换] 已把错位的节点配置 JSON 移回 manager_settings");
+                    break;
+                }
+            }
+        }
+        // ④ 提示词正文跑到 story_name 上（旧顺序 [prompt, story_name, ...]）→ 还原
+        if (snW) {
+            const sv = String(readWidgetValue(snW) || "");
+            if (swapLooksLikePrompt(sv) && !swapLooksLikeConfig(sv)) {
+                if (prW && !String(readWidgetValue(prW) || "").trim()) setWidgetValue(prW, sv);
+                setWidgetValue(snW, "人物替换");
+                swapLog("[JZL-人物替换] 已把错位的提示词正文移回提示词框");
+            }
+        }
+        // ⑤ 提示词仍为空（错位后彻底丢失）→ 填回默认提示词，避免用户面对空白框
+        if (prW && !String(readWidgetValue(prW) || "").trim()) {
+            setWidgetValue(prW, SWAP_DEFAULT_PROMPT);
+        }
+        try { self.__jzlSwapSyncPrompt?.(); } catch (_) {}
+        try { self.__jzlUpdateDisplay?.(); } catch (_) {}
+    } catch (_) {}
+}
+
+// ── 🎭 人物替换：节点表面只留「4 个按钮 + 两行方案信息」，其余全部收进面板；
+//    提示词固定在最底部（DOM 按钮块插到 prompt widget 之前） ──
+function setupSwapNode(self) {
+    ensureManagerStyle();
+    // 内部/面板管理的 widget 不占节点表面：manager_settings（配置 JSON）、story_name（已移入 🎬 生成视频管理）
+    for (const w of self.widgets || []) {
+        if (w && (w.name === "manager_settings" || w.name === "story_name")) {
+            w.hidden = true;
+            if (!w.options) w.options = {};
+            w.options.hidden = true;
+            w.computeSize = () => [0, -4];
+        }
+    }
+
+    const container = document.createElement("div");
+    // 整块 DOM 填满节点（与导演台同款）：内部 flex 列布局 —— 按钮/信息固定，提示词区 flex:1 吸收剩余高度。
+    // 这样无论节点多高，空白都由**提示词输入框**吃掉，不会出现一块空紫色区域。
+    container.style.cssText = "width:100%;height:100%;display:flex;flex-direction:column;gap:6px;"
+        + "padding:2px 0;box-sizing:border-box;overflow:hidden;";
+
+    const btnH = 32;
+    const grid = document.createElement("div");
+    grid.style.cssText = `flex:0 0 auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));`
+        + `grid-auto-rows:${btnH}px;gap:6px;`;
+    const buttons = [
+        { label: "🎨 视频参数设置", panel: "video_params" },
+        { label: "🎭 采样解码设置", panel: "preference" },
+        { label: "🎬 生成视频管理", panel: "video_manager" },
+        { label: "📖 节点使用说明", panel: "help" },
+    ];
+    for (const b of buttons) {
+        const btn = document.createElement("button");
+        btn.textContent = b.label;
+        btn.style.cssText = ["width:100%;", `height:${btnH}px;`, "box-sizing:border-box;",
+            "display:flex;", "align-items:center;", "justify-content:center;",
+            "border-radius:6px;", "border:2px solid #5b9bd5;", "background:#3a3a3a;",
+            "color:#eee;", "font-size:14px;", "cursor:pointer;", "white-space:nowrap;",
+            "overflow:hidden;", "text-overflow:ellipsis;"].join("");
+        btn.addEventListener("mousedown", (e) => e.stopPropagation());
+        btn.addEventListener("mouseenter", () => { btn.style.background = "#4a4a4a"; });
+        btn.addEventListener("mouseleave", () => { btn.style.background = "#3a3a3a"; });
+        btn.addEventListener("click", () => openModal(self, b.panel));
+        grid.appendChild(btn);
+    }
+    container.appendChild(grid);
+
+    // 两行方案信息（只读）：第 1 行＝画布/段长/衔接；第 2 行＝音频/二采/采样/输出名称
+    const infoRow = el("div", "flex:0 0 auto;font-size:11px;color:#c9a86a;line-height:1.55;white-space:pre-line;"
+        + "overflow:hidden;min-height:28px;word-break:break-all;", "");
+    infoRow.title = "当前方案（只读）：画布 / 每段帧数 / 段间衔接 / 音频 / 二采 / 采样步数 / 输出名称 —— 在四个按钮面板里修改";
+    infoRow.addEventListener("mousedown", (e) => e.stopPropagation());
+    container.appendChild(infoRow);
+    self.__jzlSwapInfo = infoRow;
+
+    // ── 提示词（DOM textarea，flex:1 占满剩余高度；隐藏原生 prompt widget 由这里代理）──
+    // 与导演台同一套做法：原生 widget 的渲染高度跟着节点乱跳，改成自己的 textarea 才能「跟着节点变高」。
+    const promptLabel = el("div", "flex:0 0 auto;font-size:12px;color:#bbb;", "📝 提示词");
+    promptLabel.title = "换人提示词。占位符：{seg} 本段序号 / {total} 总段数 / {start} 起始帧 / {frames} 本段帧数";
+    promptLabel.addEventListener("mousedown", (e) => e.stopPropagation());
+    container.appendChild(promptLabel);
+
+    const promptWrap = el("div", "flex:1 1 auto;min-height:60px;display:flex;position:relative;");
+    promptWrap.setAttribute("data-capture-wheel", "true");   // 滚轮归本框（不被画布缩放抢走）
+    const promptTa = document.createElement("textarea");
+    promptTa.className = "jzl-input";
+    promptTa.spellcheck = false;
+    promptTa.placeholder = "把 <Video 1> 里的人物替换为 <Picture 1>…";
+    promptTa.style.cssText = "width:100%;height:100%;box-sizing:border-box;resize:none;"
+        + "background:#2a2a2a;color:#ddd;border:1px solid #444;border-radius:4px;"
+        + "padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;overflow-y:auto;white-space:pre-wrap;";
+    promptTa.addEventListener("mousedown", (e) => e.stopPropagation());
+    promptWrap.appendChild(promptTa);
+    container.appendChild(promptWrap);
+
+    const promptW = () => (self.widgets || []).find((w) => w && w.name === "prompt");
+    // 隐藏原生 prompt widget（值仍照常序列化 → 执行端读到的还是它）
+    const hideNativePrompt = () => {
+        const pw = promptW();
+        if (!pw) return;
+        pw.hidden = true;
+        if (!pw.options) pw.options = {};
+        pw.options.hidden = true;
+        try { delete pw.computeSize; } catch (_) { pw.computeSize = undefined; }
+        pw.computeSize = () => [0, -4];
+    };
+    hideNativePrompt();
+    // widget → textarea（工作流载入 / 修复后回填）
+    const syncPromptFromWidget = () => {
+        const pw = promptW();
+        const v = String(readWidgetValue(pw) ?? "");
+        if (promptTa.value !== v) promptTa.value = v;
+    };
+    // textarea → widget（用户输入）
+    promptTa.addEventListener("input", () => {
+        const pw = promptW();
+        if (pw) setWidgetValue(pw, promptTa.value);
+        try { self.graph?.setDirtyCanvas?.(true, false); } catch (_) {}
+    });
+    promptTa.addEventListener("change", () => {
+        const pw = promptW();
+        if (pw) setWidgetValue(pw, promptTa.value);
+    });
+    self.__jzlSwapSyncPrompt = syncPromptFromWidget;
+    syncPromptFromWidget();
+
+    const widget = self.addDOMWidget?.("jzl_swap_buttons", "JZL_SWAP_BUTTONS", container, {
+        serialize: false,
+        hideOnZoom: false,
+    });
+    if (widget) {
+        // 与导演台同款：删掉 computeSize（让它参与「剩余空间分配」而不是固定高度），
+        // getHeight 100% → 容器填满节点；内部提示词块 flex:1 → 空白永远是提示词框在长。
+        try { delete widget.computeSize; } catch (_) { widget.computeSize = undefined; }
+        widget.options = widget.options || {};
+        widget.options.serialize = false;
+        widget.options.getMinHeight = () => 300;
+        widget.options.getHeight = () => "100%";
+        widget.computeLayoutSize = () => ({ minHeight: 300, maxHeight: undefined, minWidth: 420 });
+        const syncW = () => {
+            try {
+                const fw = Number.isFinite(self.size?.[0]) ? self.size[0] : 0;
+                if (fw && widget.width !== fw) widget.width = fw;
+            } catch (_) {}
+            try { self._jzlSwapApplyMaxH?.(); } catch (_) {}
+        };
+        widget.options.onDraw = () => { try { syncW(); } catch (_) {} };
+        widget.options.afterResize = () => { try { syncW(); } catch (_) {} };
+        // Nodes 2.0：把容器 max-height 绑到 --node-height（否则 Vue 网格会把面板按内容撑开/撑爆）
+        try {
+            self._jzlSwapApplyMaxH = bindDomWidgetMaxHeight(self, container, { minHeight: 260, definite: true });
+        } catch (_) {}
+        syncW();
+    }
+
+    const readCfg = () => {
+        let s = {};
+        const msW = (self.widgets || []).find((x) => x.name === "manager_settings");
+        if (msW) { try { s = JSON.parse(readWidgetValue(msW) || "{}") || {}; } catch (_) { s = {}; } }
+        return s;
+    };
+    const storyName = () => {
+        const sw = (self.widgets || []).find((x) => x.name === "story_name");
+        return String(readWidgetValue(sw) || "").trim();
+    };
+
+    // 两行方案信息：与「🎨/🎭」面板写进 manager_settings 的值实时同步
+    const updateDisplay = () => {
+        const s = readCfg();
+        const gp = s.gen_params || {};
+        const sd = s.sample_decode || {};
+        const seam = sd.seam || {};
+        const sec = sd.second || {};
+        const dv = (x) => `<span style="color:#9fd6a4">${x}</span>`;
+        const ar = String(gp.aspect_ratio || "跟随源片（推荐）");
+        let canvasTxt = "跟随源片";
+        if (!ar.startsWith("跟随源片")) {
+            const [W, H] = jzlCalcResolution(ar, Number(gp.megapixels ?? 0.4));
+            canvasTxt = `${W}×${H}`;
+        } else {
+            canvasTxt = `跟随源片·${Number(gp.megapixels ?? 0.4).toFixed(2)}MP`;
+        }
+        const f = swapFrameLen(gp.segment || "固定5秒");
+        const up = Number(gp.upscale_scale ?? 1.0);
+        const isSL = String(sd.sample_mode || "常规采样") === "SelfLift采样";
+        const secTgt = String(gp.second_mode || "目标分辨率") === "目标分辨率";
+        const secOn = sec.enabled !== false;
+        const secTxt = isSL ? "跳过(SelfLift)"
+            : (!secOn ? "关闭"
+                : (secTgt ? `${gp.second_width ?? 1280}×${gp.second_height ?? 704}`
+                          : `×${up.toFixed(2)}`));
+        const seamTxt = seam.enabled === false ? "关闭" : `窗口${seam.window ?? 22}+过渡${seam.settle ?? 12}`;
+        const guideTxt = String(seam.guide_mode || "pixels") === "latent" ? "latent(旧)" : "像素";
+        const pinTxt = seam.pin_second === false ? "1采" : "1采+2采";
+        const audioTxt = String(gp.audio_mode || "保留原声（推荐）").replace("（推荐）", "");
+        const sampTxt = isSL
+            ? `SelfLift ${sd.selflift?.steps ?? 8}步/${sd.scheduler || "simple"}`
+            : `${sd.sampler || "res_multistep"} ${sd.steps ?? 5}步/${sd.scheduler || "simple"}`;
+        const seedTxt = String(sd.seed_mode || "fixed") === "randomize" ? "随机" : String(sd.seed ?? 0);
+        const nameTxt = storyName() || "人物替换";
+        infoRow.innerHTML =
+            `画布：${dv(canvasTxt)} 丨 每段：${dv(`${f}帧/${(f / 24).toFixed(2)}秒`)}`
+            + ` 丨 衔接：${dv(seamTxt)} 丨 引导：${dv(guideTxt)}·${dv(pinTxt)}`
+            + `\n参考图：${dv(`放大${Number(gp.scale_factor ?? 1).toFixed(1)}×`)} 丨 二采：${dv(secTxt)} 丨 采样：${dv(sampTxt)}`
+            + ` 丨 音频：${dv(audioTxt)} 丨 种子：${dv(seedTxt)} 丨 输出：${dv(nameTxt)}`;
+    };
+    self.__jzlUpdateDisplay = updateDisplay;
+    setTimeout(updateDisplay, 0);
+    setTimeout(updateDisplay, 300);
+    try { if (!Number.isFinite(self.size?.[1]) || self.size[1] < 400) self.setSize?.([560, 520]); } catch (_) {}
+}
+
 app.registerExtension({
     name: "JZL.MiniMaxAssetManager",
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -5858,6 +6442,27 @@ app.registerExtension({
         }
         const isMini = nodeData?.name === MINI_NODE_TYPE;
         const isShortDrama = nodeData?.name === SHORTDRAMA_NODE_TYPE;
+        // 🎭 人物替换：独立节点（4 个按钮 + 两行方案信息），走自己的 setup，不混进导演台那套资产/提示词 DOM
+        if (nodeData?.name === SWAP_NODE_TYPE) {
+            const _swOrig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const _r = _swOrig?.apply(this, arguments);
+                try { setupSwapNode(this); } catch (e) { console.error("[JZL-Swap]", e); }
+                // 值/端口修复要在 configure 之后再跑一次（工作流载入时 widgets_values 是异步还原的）
+                const self = this;
+                [0, 60, 400].forEach((ms) => setTimeout(() => { try { healSwapNodeLegacy(self); } catch (_) {} }, ms));
+                return _r;
+            };
+            const _swCfg = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (info) {
+                const _r = _swCfg?.apply(this, arguments);
+                try { healSwapNodeLegacy(this); } catch (e) { console.error("[JZL-Swap-heal]", e); }
+                const self = this;
+                setTimeout(() => { try { healSwapNodeLegacy(self); } catch (_) {} }, 200);
+                return _r;
+            };
+            return;
+        }
         // 无限时长 / 短剧导演台 与 Max 共用按钮布局 + 保存/采样解码面板
         const isMax = nodeData?.name === MAX_NODE_TYPE || nodeData?.name === INF_NODE_TYPE || isShortDrama;
         if (nodeData?.name !== NODE_TYPE && !isMini && !isMax) return;
