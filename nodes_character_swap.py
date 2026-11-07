@@ -79,8 +79,34 @@ _SEGMENT_SECONDS_OPTIONS = tuple(x for x in SEGMENT_DURATION_CHOICES if x.starts
 AUDIO_MODES = ("保留原声（推荐）", "使用生成音轨", "静音")
 
 DEFAULT_PROMPT = (
-    "把 <Video 1> 里的人物替换为 <Picture 1>。\n"
-    "严格保持 <Video 1> 的动作、表情、机位、场景、道具、光线与色彩不变。"
+    "[SHOT_START]\n"
+    "\n"
+    "===H3_PROMPT===\n"
+    "subject_definitions:\n"
+    "<Subject 1> 是 <Picture 1> 中的人物。身份、五官、脸型、发型、发色、肤色、体型、服装、配饰与配色"
+    "全部以 <Picture 1> 为准；<Picture 1> 只是参考图，不作为画面内容出现。\n"
+    "\n"
+    "summary:\n"
+    "[reference generation + audio reference] 目标视频沿用 <Video 1> 的同一段表演，"
+    "把 <Video 1> 里的人物替换为 <Subject 1>。\n"
+    "\n"
+    "retention_analysis:\n"
+    "<Subject 1> (出现在 [Shot 1]): fully_preserved - 长相、发型、服装、配饰、配色取自 <Picture 1>，"
+    "不保留 <Video 1> 中原人物的长相与服装。\n"
+    "<Video 1>: fully_preserved - 动作、表情、口型、走位、时机、机位、景别、景深、镜头运动、"
+    "场景、道具、背景、光线方向与整体色调。\n"
+    "\n"
+    "detailed_description:\n"
+    "<Subject 1> 以 <Video 1> 中人物的同一姿态、同一动作节奏、同一表情完成整段表演，口型开合与停顿"
+    "与 <Video 1> 一致；镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 "
+    "<Video 1> 一致。只替换人物本身：脸、发型、服装、配饰换成 <Picture 1> 的，动作与场景不换。\n"
+    "\n"
+    "[Shot 1] 沿用 <Video 1> 的表演与运镜。\n"
+    "\n"
+    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
+    "\n"
+    "non_diegetic_music: N/A\n"
+    "[SHOT_END]"
 )
 
 
@@ -537,7 +563,11 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                     tooltip="本节点完整配置 JSON（由 🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理 写入），随工作流保存"),
                 # 提示词固定放在最底部（节点表面从上到下：模型类端口 → 素材端口 → 按钮区 → 提示词）
                 io.String.Input("prompt", multiline=True, default=DEFAULT_PROMPT,
-                    tooltip="换人提示词。可用占位符：{seg}=本段序号、{total}=总段数、{start}=本段在源片里的起始帧、"
+                    tooltip="换人提示词。模型按 ===H3_PROMPT=== 结构理解，务必保留 subject_definitions / "
+                            "retention_analysis / detailed_description 三段：前者定义 <Subject 1> = <Picture 1>，"
+                            "中间写明哪些保留、哪些替换，后者描述画面。只写一句「把人物换成 <Picture 1>」会被"
+                            "参考视频压过去（模型直接照抄原人物）。"
+                            "可用占位符：{seg}=本段序号、{total}=总段数、{start}=本段在源片里的起始帧、"
                             "{frames}=本段帧数。参考图按顺序是 <Picture 1..9>，源片固定是 <Video 1>"),
             ],
             outputs=[
@@ -744,6 +774,9 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             print(f"[JZL-{TAG}]   参考调用：{_info if _info else '（仅文本，无参考）'}")
 
             # ④ 段间衔接：把上一段「生成结果」的尾窗钉成本段首帧
+            #    positive_base = 不含衔接 keyframe 的原始条件：一采/二采各从它出发钉一次，
+            #    否则二采会在「一采分辨率的 keyframe」上再叠一个 → 两个 keyframe 都落在第 0 帧。
+            positive_base = positive
             seam_plan = None
             if i > 0 and seam_enabled:
                 # 窗口合法性按【本次目标 latent】算（像素模式下不依赖上段 latent）
@@ -761,12 +794,12 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             _lead = max(0, int(runway) - _seam_window)
 
             if seam_plan is not None and guide_mode == "pixels" and prev_pixels is not None:
-                positive = _apply_pixel_guide(positive, prev_pixels, vae, width, height,
+                positive = _apply_pixel_guide(positive_base, prev_pixels, vae, width, height,
                                              _seam_window, back=_lead)
                 print(f"[JZL-{TAG}]   衔接（像素）：上段 [{start - _seam_window - _lead}, {start - _lead}) "
                       f"共 {_seam_window} 帧 → 按 {width}x{height} 重编码钉成本段首帧（与参考视频同相位）")
             elif seam_plan is not None and prev_latent is not None:
-                positive, _kf = _seam_apply_guide(positive, prev_latent, seam_plan,
+                positive, _kf = _seam_apply_guide(positive_base, prev_latent, seam_plan,
                                                  audio_link=True, vae=vae, guide_source="latent")
                 positive = _seam_fit_guides_to_canvas(positive, latent["samples"], tag=TAG)
                 print(f"[JZL-{TAG}]   衔接（latent）：上段尾窗 {seam_plan['window']} 帧"
@@ -781,11 +814,11 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
 
             # ⑥ 二采（可选）：latent 放大 + 补采，结果只用于解码落盘
             if use_second:
-                # ⑥b 二采也要钉帧：用同一批像素按二采画布重新编码，
-                #     否则二采只能把一采分辨率的 keyframe 插值放大 → 糊
+                # ⑥b 二采也要钉帧：从 positive_base 出发、按二采画布重新编码一次，
+                #     否则会在「一采分辨率的 keyframe」上再叠一个（两个 keyframe 都落在第 0 帧）→ 糊/错位
                 if (pin_second and seam_plan is not None and guide_mode == "pixels"
                         and prev_pixels is not None):
-                    positive2 = _apply_pixel_guide(positive, prev_pixels, vae, sec_w, sec_h,
+                    positive2 = _apply_pixel_guide(positive_base, prev_pixels, vae, sec_w, sec_h,
                                                    _seam_window, back=_lead)
                     print(f"[JZL-{TAG}]   衔接（二采·像素）：按 {sec_w}x{sec_h} 重编码钉成本段首帧")
                 try:

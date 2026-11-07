@@ -143,9 +143,11 @@ class JZL_MiniMaxH3ReferenceToVideo(io.ComfyNode):
                 continue
             h, w = img.shape[1], img.shape[2]
             if ref_image_size == "match":
-                # aspect-preserving scale (down only) to the generation's pixel area
-                # JZL 扩展：面积倍率 ref_scale（默认 1.0 = 官方行为）
-                scale = min(1.0, math.sqrt(ref_scale * (width * height) / (w * h)))
+                # 面积倍率：参考图最终像素面积 = 生成画布面积 × ref_scale。
+                # 只受绝对上限约束（短边 ≤ REF_IMAGE_SHORT_EDGE）。不能写成 min(1.0, ...)：
+                # 照片比画布大时那样会让 ref_scale 完全失效，加倍数没有任何效果。
+                scale = math.sqrt(ref_scale * (width * height) / float(w * h))
+                scale = min(scale, max(1.0, REF_IMAGE_SHORT_EDGE / float(min(w, h))))
             else:
                 scale = min(1.0, REF_IMAGE_SHORT_EDGE / min(w, h))
             tw = max(CANVAS_MULTIPLE, round(w * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)

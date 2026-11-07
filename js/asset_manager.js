@@ -4955,8 +4955,9 @@ function renderSwapVideoParamsPanel(c, s, node) {
     c.append(makeSectionTitle("参考与放大"));
     c.append(field("参考图放大", stepperControl(Number(gp.scale_factor ?? 1.0),
         { min: 1.0, max: 5.0, step: 0.1 }, v => { gp.scale_factor = v; })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
-        "参考图面积 = 画布面积 × 倍率（1.0 = 同面积，2.0 = 面积翻倍）。脸不够像就加，越大越慢。"));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "参考图面积 = 画布面积 × 倍率（1.0 = 同面积，2.0 = 面积翻倍）。脸不够像就加，越大越慢。\n"
+        + "换人不生效时这是最有效的旋钮：先试 2.0~3.0。上限是短边 2048。"));
 
     c.append(makeSectionTitle("二采放大"));
     c.append(field("二采放大方式", selectControl(
@@ -5032,7 +5033,9 @@ function renderSwapSeamSection(c, s, node) {
     c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
         "衔接帧数 + 过渡帧数 = 每段前面要多生成的长度（这一段不进成片）。\n"
         + "例：22 + 12 = 34 帧 → 5 秒的段实际生成 158 帧，成片仍然只取 124 帧。\n"
-        + "衔接取的是「上段结尾往前 34 帧」起的那 22 帧，所以和本段参考视频对得上，不会跳帧。"));
+        + "衔接取的是「上段结尾往前 34 帧」起的那 22 帧，所以和本段参考视频对得上，不会跳帧。\n"
+        + "⚠️ 衔接画面会压住定妆图：模型会顺着「上一段的脸」往下演。若发现越往后越不像 <Picture 1>，"
+        + "先把「启用衔接」关掉对比一次 —— 这说明问题在换人本身（参考图/放大倍数/提示词），不在衔接。"));
 }
 
 function renderSwapPrefPanel(c, s, d, node) {
@@ -5065,7 +5068,20 @@ function renderSwapHelpPanel(c) {
     p("📖 节点使用说明：本页");
     p("保存后重新执行节点生效（「自动保存」开着时改完即存）。提示词固定在最底部的大输入框里。");
 
-    h("③ 为什么接缝比「无限时长」稳");
+    h("③ 提示词怎么写（换人不生效多半是这里）");
+    p("模型按 ===H3_PROMPT=== 结构理解提示词，三段缺一不可：subject_definitions 定义 <Subject 1> = <Picture 1>；"
+        + "retention_analysis 逐项写明「什么保留、什么替换」；detailed_description 描述画面。");
+    p("只写一句「把 <Video 1> 里的人物换成 <Picture 1>」基本没用：源片参考有几百个 token，"
+        + "一句指令压不过它，模型会直接照抄原人物。默认提示词已经写好，一般不用改。");
+    p("想更准就像这样把新角色写具体（越具体越像）：<Subject 1> 是 <Picture 1> 中的女性，及腰黑色长直发、"
+        + "浅棕色眼瞳、米白色针织衫、细框眼镜。");
+    p("⭐ 参考图比什么都重要：优先用「三视图角色卡」（正面/侧面/背面全身 + 头部特写并排），"
+        + "单张半身照的换人成功率明显更低；图里只有一个人、脸要清晰。");
+    p("🔍 想确认「是换人不行还是衔接不行」：把「每段视频时长」调到比源片还长 → 整段只生成 1 段，"
+        + "此时完全没有衔接。1 段都换不掉 = 问题在参考图/放大倍数/提示词；1 段能换、多段越往后越不像 = "
+        + "衔接把上一段的脸带偏了（关衔接或减少衔接帧数对比）。");
+
+    h("④ 为什么接缝比「无限时长」稳");
     p("无限时长没有真值，段 2+ 只能靠上段尾帧往下编 → 会缓慢漂移；换人有逐帧真值：每段都重新对位同一段源片（<Video 1>），"
         + "跑道那几十帧的源片正好是上一段已产出的内容 → 同一条时间轴、不累积误差。衔接只负责「画面不跳」。");
 
@@ -6105,10 +6121,49 @@ if (!app.__jzlReshootGraphPatched) {
     }
 }
 
-// 🎭 人物替换的默认提示词（与后端 nodes_character_swap.DEFAULT_PROMPT 保持一致；
-//   仅用于「旧工作流值错位」修复时还原，不作为执行依据）
-const SWAP_DEFAULT_PROMPT = "把 <Video 1> 里的人物替换为 <Picture 1>。\n"
-    + "严格保持 <Video 1> 的动作、表情、机位、场景、道具、光线与色彩不变。";
+// 🎭 人物替换的默认提示词（与后端 nodes_character_swap.DEFAULT_PROMPT 保持一致）
+// 模型按 ===H3_PROMPT=== 结构理解提示词；只写一句「把人物换成 <Picture 1>」会被参考视频压过去。
+const SWAP_DEFAULT_PROMPT = [
+    "[SHOT_START]",
+    "",
+    "===H3_PROMPT===",
+    "subject_definitions:",
+    "<Subject 1> 是 <Picture 1> 中的人物。身份、五官、脸型、发型、发色、肤色、体型、服装、配饰与配色"
+        + "全部以 <Picture 1> 为准；<Picture 1> 只是参考图，不作为画面内容出现。",
+    "",
+    "summary:",
+    "[reference generation + audio reference] 目标视频沿用 <Video 1> 的同一段表演，"
+        + "把 <Video 1> 里的人物替换为 <Subject 1>。",
+    "",
+    "retention_analysis:",
+    "<Subject 1> (出现在 [Shot 1]): fully_preserved - 长相、发型、服装、配饰、配色取自 <Picture 1>，"
+        + "不保留 <Video 1> 中原人物的长相与服装。",
+    "<Video 1>: fully_preserved - 动作、表情、口型、走位、时机、机位、景别、景深、镜头运动、"
+        + "场景、道具、背景、光线方向与整体色调。",
+    "",
+    "detailed_description:",
+    "<Subject 1> 以 <Video 1> 中人物的同一姿态、同一动作节奏、同一表情完成整段表演，口型开合与停顿"
+        + "与 <Video 1> 一致；镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 "
+        + "<Video 1> 一致。只替换人物本身：脸、发型、服装、配饰换成 <Picture 1> 的，动作与场景不换。",
+    "",
+    "[Shot 1] 沿用 <Video 1> 的表演与运镜。",
+    "",
+    "overall_soundscape: 沿用 <Video 1> 的原始环境声。",
+    "",
+    "non_diegetic_music: N/A",
+    "[SHOT_END]",
+].join("\n");
+
+// 历史版本的默认提示词：老工作流里存的是这几句，命中就自动升级成结构化版本
+const SWAP_LEGACY_PROMPTS = [
+    "把 <Video 1> 里的人物替换为 <Picture 1>。\n严格保持 <Video 1> 的动作、表情、机位、场景、道具、光线与色彩不变。",
+    "把 <Video 1> 里的人物替换为 <Picture 1>。\n严格保持 <Video 1> 的动作、表情、机位、场景、道具、光线与色彩不变。\n",
+];
+
+function swapPromptLooksLegacy(v) {
+    const s = String(v || "").trim();
+    return !!s && SWAP_LEGACY_PROMPTS.some((p) => p.trim() === s);
+}
 
 // 看起来像不像「节点配置 JSON」（只判断开头几个键，够用于错位识别）
 function swapLooksLikeConfig(v) {
@@ -6216,6 +6271,12 @@ function healSwapNodeLegacy(self) {
         if (prW && !String(readWidgetValue(prW) || "").trim()) {
             setWidgetValue(prW, SWAP_DEFAULT_PROMPT);
         }
+        // ⑥ 老版本的两句默认提示词 → 升级成结构化版本（模型只认 ===H3_PROMPT=== 结构，
+        //    一句「把人物换成 <Picture 1>」会被参考视频压过去，导致换人不生效）
+        if (prW && swapPromptLooksLegacy(readWidgetValue(prW))) {
+            setWidgetValue(prW, SWAP_DEFAULT_PROMPT);
+            swapLog("[JZL-人物替换] 默认提示词已升级为结构化格式（===H3_PROMPT===）");
+        }
         try { self.__jzlSwapSyncPrompt?.(); } catch (_) {}
         try { self.__jzlUpdateDisplay?.(); } catch (_) {}
     } catch (_) {}
@@ -6287,7 +6348,8 @@ function setupSwapNode(self) {
     const promptTa = document.createElement("textarea");
     promptTa.className = "jzl-input";
     promptTa.spellcheck = false;
-    promptTa.placeholder = "把 <Video 1> 里的人物替换为 <Picture 1>…";
+    promptTa.placeholder = "用 ===H3_PROMPT=== 结构写：subject_definitions 里定义 <Subject 1> = <Picture 1>，"
+        + "retention_analysis 写明「长相/服装换 <Picture 1>、动作/场景保留 <Video 1>」…";
     promptTa.style.cssText = "width:100%;height:100%;box-sizing:border-box;resize:none;"
         + "background:#2a2a2a;color:#ddd;border:1px solid #444;border-radius:4px;"
         + "padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;overflow-y:auto;white-space:pre-wrap;";
