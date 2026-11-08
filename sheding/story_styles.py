@@ -1,14 +1,15 @@
 # MiniMax-H3 故事风格设定
 # =========================
 # 风格为「叙事重心谱系」：忠于用户剧情，只决定哪些内容占更多镜头/时长/扩写比例。
-# 真实来源 = 本目录 styles/*.md（每个文件一个风格，文件名即下拉选项）。
-# 本文件仅负责从 styles/ 目录动态加载；styles 目录缺失时才用下方最小兜底。
+# 真实来源 = skills/style/*.md（每个文件一个内置风格，文件名去数字前缀即下拉选项）。
+# 用户导入的自定义风格存 <ComfyUI user>/jzl_skills/style/*.md，由 skills_loader 管理，
+# 只在节点面板「自定义 skill」模式下可选，不混进内置下拉（避免旧工作流选项漂移）。
 # 直接修改 .md 文件，重启 ComfyUI 或重新加载工作流即可生效。
 
 import os as _os
 import re as _re
 
-_STYLES_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "styles")
+_STYLES_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "skills", "style")
 
 # ── 最小兜底（仅当 styles/ 目录不存在或无 .md 时使用，避免下拉为空）──
 _FALLBACK = {
@@ -46,41 +47,54 @@ LEGACY_STYLE_MAP = {
 }
 
 
-def _load_styles_from_dir():
-    """从 styles/ 目录读取全部 .md 风格文件；文件名去数字前缀即风格名。
+def _load_styles_from_dir(lang="zh"):
+    """读取内置风格目录；文件名去数字前缀即风格名。
 
+    · lang="zh" → skills/style/*.md
+    · lang="en" → skills/style/en/*.md（英文译文；缺译文时由 resolve_style 回退中文）
     已废弃的旧风格名（LEGACY_STYLE_MAP 的键）会被跳过——即使升级时旧 md 未删干净，
     下拉也不会再出现这些老风格（兼容覆盖式安装的残留文件）。"""
     styles = {}
-    if not _os.path.isdir(_STYLES_DIR):
+    base = _os.path.join(_STYLES_DIR, "en") if str(lang or "").lower().startswith("en") else _STYLES_DIR
+    if not _os.path.isdir(base):
         return styles
-    names = [n for n in _os.listdir(_STYLES_DIR) if n.endswith(".md")]
+    names = [n for n in _os.listdir(base) if n.endswith(".md")]
     names.sort()
     for name in names:
         key = _re.sub(r"^\d+[-_]\s*", "", name[:-3]).strip()
         if not key or key in LEGACY_STYLE_MAP:  # 跳过空名与已废弃的旧风格
             continue
         try:
-            with open(_os.path.join(_STYLES_DIR, name), encoding="utf-8") as _f:
+            with open(_os.path.join(base, name), encoding="utf-8") as _f:
                 styles[key] = _f.read().strip()
         except Exception:
             continue
     return styles
 
 
-STORY_STYLES = _load_styles_from_dir() or dict(_FALLBACK)
+STORY_STYLES = _load_styles_from_dir("zh") or dict(_FALLBACK)
+STORY_STYLES_EN = _load_styles_from_dir("en")      # 可能为空（未放译文时由 resolve_style 回退中文）
 
 
-def resolve_style(name):
-    """按风格名取风格全文；旧名自动映射到合并后的新风格。"""
+def resolve_style(name, lang="zh"):
+    """按风格名取风格全文；旧名自动映射到合并后的新风格。
+
+    lang="en" 且存在英文译文时返回英文版，否则回退中文原文。
+    """
+    is_en = str(lang or "").lower().startswith("en")
+    table = STORY_STYLES_EN if (is_en and STORY_STYLES_EN) else STORY_STYLES
     if not name:
-        return STORY_STYLES.get(list(STORY_STYLES.keys())[0], "") if STORY_STYLES else ""
-    if name in STORY_STYLES:
-        return STORY_STYLES[name]
-    mapped = LEGACY_STYLE_MAP.get(str(name).strip())
-    if mapped and mapped in STORY_STYLES:
-        return STORY_STYLES[mapped]
-    return STORY_STYLES.get(name, name)
+        return table.get(list(table.keys())[0], "") if table else ""
+    key = str(name).strip()
+    if key in table:
+        return table[key]
+    mapped = LEGACY_STYLE_MAP.get(key)
+    if mapped and mapped in table:
+        return table[mapped]
+    # 英文表缺这一项 → 回退回中文（正常风格仍可用，不会变成空）
+    if table is not STORY_STYLES and key in STORY_STYLES:
+        return STORY_STYLES[key]
+    return table.get(key, STORY_STYLES.get(key, name))
 
 
 # ── 下拉显示标签（前端 combo getOptionLabel 使用）────────────────────────

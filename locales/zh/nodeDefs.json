@@ -284,6 +284,26 @@
       "0": { "name": "已处理剧本" }
     }
   },
+  "JZL_MiniMaxCharacterSwap": {
+    "display_name": "JZL - 🎭 MiniMax-H3人物替换",
+    "inputs": {
+      "model": { "name": "主模型" },
+      "clip": { "name": "CLIP" },
+      "vae": { "name": "视觉VAE" },
+      "audio_vae": { "name": "音频VAE" },
+      "source_video": { "name": "源视频" },
+      "source_audio": { "name": "源视频原声" },
+      "ref_images": { "name": "定妆图" },
+      "ref_image": { "name": "新角色定妆图" },
+      "story_name": { "name": "输出名称" },
+      "manager_settings": { "name": "节点配置" },
+      "prompt": { "name": "提示词" }
+    },
+    "outputs": {
+      "0": { "name": "成片路径" },
+      "1": { "name": "分段视频" }
+    }
+  },
   "JZL_MiniMaxAssetManagerShortDrama": {
     "display_name": "JZL - 🤖 MiniMax-H3短剧导演台",
     "inputs": {
