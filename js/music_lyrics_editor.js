@@ -132,9 +132,9 @@ function makeButton(node, w, item) {
     const inline = kind === "inline";
     const b = document.createElement("button");
     b.textContent = label;
-    b.style.cssText = "padding:7px 6px;border:1px solid #555;border-radius:6px;background:#2a2a2e;color:#eee;cursor:pointer;font-size:12px;line-height:1.25;text-align:left;";
+    b.style.cssText = "padding:7px 6px;border:1px solid var(--jz-border);border-radius:6px;background:var(--jz-bg-raise);color:var(--jz-text-strong);cursor:pointer;font-size:12px;line-height:1.25;text-align:left;";
     b.addEventListener("mouseenter", () => { b.style.background = "#3a3a40"; });
-    b.addEventListener("mouseleave", () => { b.style.background = "#2a2a2e"; });
+    b.addEventListener("mouseleave", () => { b.style.background = "var(--jz-bg-raise)"; });
     b.addEventListener("click", () => { insertTag(node, w, tag, inline); closeTagPicker(); });
     if (inline) b.style.borderColor = "#6a5acd";
     return b;
@@ -148,7 +148,7 @@ function addGroup(panel, title, note, items, node, w, accent) {
     if (note) {
         const n = document.createElement("div");
         n.textContent = note;
-        n.style.cssText = "color:#999;font-size:11px;margin:-3px 0 6px;line-height:1.35;";
+        n.style.cssText = "color:var(--jz-text-dim);font-size:11px;margin:-3px 0 6px;line-height:1.35;";
         panel.appendChild(n);
     }
     const grid = document.createElement("div");
@@ -165,16 +165,16 @@ function showTagPicker(node, w) {
     overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) closeTagPicker(); });
 
     const panel = document.createElement("div");
-    panel.style.cssText = "background:#1b1b1f;border:1px solid #444;border-radius:10px;padding:14px;max-width:700px;width:92%;max-height:86vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);";
+    panel.style.cssText = "background:var(--jz-bg);border:1px solid var(--jz-border);border-radius:10px;padding:14px;max-width:700px;width:92%;max-height:86vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);";
 
     const title = document.createElement("div");
     title.textContent = "添加元素（插入到当前光标处）";
-    title.style.cssText = "color:#eee;font-size:14px;font-weight:600;margin-bottom:4px;";
+    title.style.cssText = "color:var(--jz-text-strong);font-size:14px;font-weight:600;margin-bottom:4px;";
     panel.appendChild(title);
 
     const sub = document.createElement("div");
     sub.textContent = "段落标签会独占一行并自动换行；行级角色标注直接插在光标处，请接着写歌词。";
-    sub.style.cssText = "color:#999;font-size:11px;margin-bottom:8px;line-height:1.35;";
+    sub.style.cssText = "color:var(--jz-text-dim);font-size:11px;margin-bottom:8px;line-height:1.35;";
     panel.appendChild(sub);
 
     addGroup(panel, "① 官方段落标签（MiniMax 官方 README 明列）", null,

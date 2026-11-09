@@ -535,7 +535,7 @@ const KIND_ICON = { image: "🖼️", video: "🎬", audio: "🎧" };
 
 // @资产 富文本着色：图片按类型（角色/场景/道具/自定义）分色，视频/音频各一色
 const ASSET_COLORS = {
-    image: { "角色": "#4da3ff", "场景": "#5ecf8a", "道具": "#ffb84d", "自定义": "#ffd166", "分镜": "#ffd166", "其他": "#9aa7b8" },
+    image: { "角色": "#4da3ff", "场景": "var(--jz-ok)", "道具": "var(--jz-warn)", "自定义": "var(--jz-warn)", "分镜": "var(--jz-warn)", "其他": "#9aa7b8" },
     video: "#c792ea",
     audio: "#ff8fa3",
 };
@@ -888,7 +888,7 @@ function openMentionMenu(editable, start, end, query, node) {
         }
     } catch (_) {}
     const menu = document.createElement("div");
-    menu.style.cssText = "position:fixed;z-index:10001;background:#1e1e1e;border:1px solid #444;border-radius:8px;max-height:340px;max-width:460px;overflow-y:auto;box-shadow:0 8px 20px rgba(0,0,0,0.5);padding:8px;";
+    menu.style.cssText = "position:fixed;z-index:10001;background:var(--jz-bg-soft);border:1px solid var(--jz-border);border-radius:8px;max-height:340px;max-width:460px;overflow-y:auto;box-shadow:0 8px 20px rgba(0,0,0,0.5);padding:8px;";
     menu.style.left = rect.left + "px";
     menu.style.top = (rect.bottom + 4) + "px";
 
@@ -902,7 +902,7 @@ function openMentionMenu(editable, start, end, query, node) {
         cell.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;border-radius:6px;padding:4px;border:1px solid transparent;";
 
         const thumb = document.createElement("div");
-        thumb.style.cssText = "width:64px;height:64px;border-radius:5px;border:1px solid #444;background:#111;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:26px;";
+        thumb.style.cssText = "width:64px;height:64px;border-radius:5px;border:1px solid var(--jz-border);background:var(--jz-inset);display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:26px;";
         if (item.kind === "image") {
             const img = document.createElement("img");
             img.style.cssText = "width:100%;height:100%;object-fit:cover;";
@@ -914,17 +914,17 @@ function openMentionMenu(editable, start, end, query, node) {
         }
 
         const typeTag = document.createElement("span");
-        typeTag.style.cssText = "font-size:10px;color:#8ab8dd;line-height:1;";
+        typeTag.style.cssText = "font-size:10px;color:var(--jz-info);line-height:1;";
         typeTag.textContent = item.type || KIND_LABEL[item.kind] || "";
 
         const label = document.createElement("span");
-        label.style.cssText = "font-size:11px;color:#ddd;line-height:1.2;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;";
+        label.style.cssText = "font-size:11px;color:var(--jz-text);line-height:1.2;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;";
         label.textContent = item.slotLabel || item.name;
 
         cell.append(thumb, typeTag, label);
         cell.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
         cell.addEventListener("click", () => chooseMention(item));
-        cell.addEventListener("mouseenter", () => { cell.style.border = "1px solid #5b9bd5"; cell.style.background = "#2a2a2a"; });
+        cell.addEventListener("mouseenter", () => { cell.style.border = "1px solid #5b9bd5"; cell.style.background = "var(--jz-bg-raise)"; });
         cell.addEventListener("mouseleave", () => { cell.style.border = "1px solid transparent"; cell.style.background = "transparent"; });
         grid.appendChild(cell);
     }
@@ -1154,7 +1154,7 @@ function renderAssetWindow(windowBox, textarea, node, onInsert, insertFn) {
     grid.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:3px;align-content:flex-start;";
     for (const item of items) {
         const cell = document.createElement("div");
-        cell.style.cssText = "flex:0 0 78px;width:78px;cursor:pointer;border-radius:6px;overflow:hidden;border:1px solid #333;background:#111;";
+        cell.style.cssText = "flex:0 0 78px;width:78px;cursor:pointer;border-radius:6px;overflow:hidden;border:1px solid var(--jz-border);background:var(--jz-inset);";
         cell.title = [item.name, item.description].filter(Boolean).join("\n");  // hover 显示完整内容
         // 缩略图（图片）或图标（视频/音频）
         const thumb = document.createElement("div");
@@ -1170,7 +1170,7 @@ function renderAssetWindow(windowBox, textarea, node, onInsert, insertFn) {
         }
         // 名称标签（类型 + 自定义名）——字号 11px 可显示约 7 个字（如「角色A小白兔」），超长省略号
         const label = document.createElement("div");
-        label.style.cssText = "width:100%;height:22px;line-height:22px;font-size:11px;color:#cdd8e2;background:rgba(10,20,30,.7);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 3px;box-sizing:border-box;";
+        label.style.cssText = "width:100%;height:22px;line-height:22px;font-size:11px;color:var(--jz-info);background:rgba(10,20,30,.7);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 3px;box-sizing:border-box;";
         label.textContent = item.slotLabel || item.display || "";
         cell.append(thumb, label);
         cell.addEventListener("mousedown", (e) => {
@@ -1204,12 +1204,12 @@ function notify(msg, type = "success") {
 // 通用 modal 确认框（与 buildModal 同风格，非浏览器原生 confirm）：点击确认后执行 onOk
 function confirmClearAssets(onOk) {
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:10050;display:flex;align-items:center;justify-content:center;");
-    const box = el("div", "background:#1c1c1e;border:1px solid #333;border-radius:8px;width:360px;max-width:90vw;box-shadow:0 20px 40px rgba(0,0,0,0.6);padding:20px;box-sizing:border-box;");
-    box.append(el("div", "font-size:15px;font-weight:700;color:#eee;margin-bottom:10px;", "🗑 清除全部素材"));
-    box.append(el("div", "font-size:13px;color:#ddd;line-height:1.7;margin-bottom:18px;white-space:pre-line;", "确定要一键清除所有已添加的素材吗？\n（图片 / 视频 / 音频全部清空，此操作不可撤销！）"));
+    const box = el("div", "background:var(--jz-bg);border:1px solid var(--jz-border);border-radius:8px;width:360px;max-width:90vw;box-shadow:0 20px 40px rgba(0,0,0,0.6);padding:20px;box-sizing:border-box;");
+    box.append(el("div", "font-size:15px;font-weight:700;color:var(--jz-text-strong);margin-bottom:10px;", "🗑 清除全部素材"));
+    box.append(el("div", "font-size:13px;color:var(--jz-text);line-height:1.7;margin-bottom:18px;white-space:pre-line;", "确定要一键清除所有已添加的素材吗？\n（图片 / 视频 / 音频全部清空，此操作不可撤销！）"));
     const row = el("div", "display:flex;justify-content:flex-end;gap:10px;");
-    const cancelBtn = el("button", "background:transparent;border:1px solid var(--border-color,#555);color:#fff;border-radius:4px;padding:7px 18px;font-size:13px;cursor:pointer;", "取消");
-    const okBtn = el("button", "background:#7a2a2a;color:#fff;border:none;border-radius:4px;padding:7px 18px;font-size:13px;font-weight:600;cursor:pointer;", "🗑 确认清除");
+    const cancelBtn = el("button", "background:transparent;border:1px solid var(--border-color,var(--jz-border));color:var(--jz-text);border-radius:4px;padding:7px 18px;font-size:13px;cursor:pointer;", "取消");
+    const okBtn = el("button", "background:var(--jz-btn-error);color:var(--jz-on-accent);border:none;border-radius:4px;padding:7px 18px;font-size:13px;font-weight:600;cursor:pointer;", "🗑 确认清除");
     cancelBtn.addEventListener("click", () => overlay.remove());
     okBtn.addEventListener("click", () => { overlay.remove(); onOk && onOk(); });
     row.append(cancelBtn, okBtn);
@@ -1274,18 +1274,18 @@ function openReshootShotEditor(ctx) {
 
     const mkBtn = (label, css) => el("button",
         "flex:0 0 auto;height:30px;padding:0 12px;border-radius:5px;font-size:12px;cursor:pointer;white-space:nowrap;" +
-        (css || "border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;"), label);
+        (css || "border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);"), label);
     const segTitle = (i) => jzlSegmentLabel("[SHOT_START]\n" + bodies[i] + "\n[SHOT_END]") || `第 ${i + 1} 段`;
 
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100004;display:flex;align-items:center;justify-content:center;");
     overlay.classList.add("jzl-shoteditor");
-    const box = el("div", "width:94%;max-width:1360px;height:90vh;background:var(--comfy-menu-bg,#242424);border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 10px 44px rgba(0,0,0,.6);");
+    const box = el("div", "width:94%;max-width:1360px;height:90vh;background:var(--comfy-menu-bg,#242424);border:1px solid var(--jz-border);border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 10px 44px rgba(0,0,0,.6);");
 
     // ── 头部：标题 + 单选/多选 + 段导航 + 保存/关闭 ──
     const head = el("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;flex:0 0 auto;");
-    head.appendChild(el("span", "font-size:14px;font-weight:600;color:#eee;white-space:nowrap;", "🔖 重拍镜头编辑"));
+    head.appendChild(el("span", "font-size:14px;font-weight:600;color:var(--jz-text-strong);white-space:nowrap;", "🔖 重拍镜头编辑"));
     const modeChip = (label, val) => {
-        const b = mkBtn(label, "border:1px solid #5b9bd5;background:#3a3a3a;color:#ddd;");
+        const b = mkBtn(label, "border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text);");
         b.dataset.mode = val;
         b.addEventListener("click", () => {
             mode = val;
@@ -1299,52 +1299,52 @@ function openReshootShotEditor(ctx) {
     };
     const singleChip = modeChip("◉ 单选", "single");
     const multiChip = modeChip("☑ 多选", "multi");
-    const navPrev = mkBtn("◀", "width:30px;padding:0;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;");
+    const navPrev = mkBtn("◀", "width:30px;padding:0;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);");
     navPrev.title = "上一段";
-    const navInfo = el("span", "font-size:12px;color:#e8a87c;white-space:nowrap;min-width:160px;text-align:center;", "");
-    const navNext = mkBtn("▶", "width:30px;padding:0;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;");
+    const navInfo = el("span", "font-size:12px;color:var(--jz-orange);white-space:nowrap;min-width:160px;text-align:center;", "");
+    const navNext = mkBtn("▶", "width:30px;padding:0;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);");
     navNext.title = "下一段";
     const navSel = document.createElement("select");
-    navSel.style.cssText = "flex:1 1 220px;min-width:0;background:#1d1d1d;color:#ddd;border:1px solid #444;border-radius:5px;padding:5px 4px;font-size:12px;";
+    navSel.style.cssText = "flex:1 1 220px;min-width:0;background:var(--jz-bg);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:5px;padding:5px 4px;font-size:12px;";
     navSel.title = "直接跳到某一段";
-    const saveBtn = mkBtn("💾 保存剧本", "border:1px solid #5ecf8a;background:#2d5a3a;color:#fff;font-weight:600;");
+    const saveBtn = mkBtn("💾 保存剧本", "border:1px solid #5ecf8a;background:var(--jz-btn-ok);color:var(--jz-on-accent);font-weight:600;");
     const closeBtn = mkBtn("关闭");
     head.append(singleChip, multiChip, el("span", "width:6px;", ""), navPrev, navInfo, navNext, navSel, saveBtn, closeBtn);
 
     // ── 主体：左 = 段列表（多选时显示勾选框），中 = 只显示当前这一段，右 = 资产显示窗 ──
     const bodyWrap = el("div", "flex:1 1 auto;display:flex;gap:10px;min-height:0;");
-    const side = el("div", "flex:0 0 224px;display:none;flex-direction:column;min-height:0;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;box-sizing:border-box;");
-    const sideHead = el("div", "font-size:12px;color:#9fd6a4;margin-bottom:6px;flex:0 0 auto;", "");
+    const side = el("div", "flex:0 0 224px;display:none;flex-direction:column;min-height:0;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:6px;box-sizing:border-box;");
+    const sideHead = el("div", "font-size:12px;color:var(--jz-ok);margin-bottom:6px;flex:0 0 auto;", "");
     const sideTools = el("div", "display:flex;gap:6px;margin-bottom:6px;flex:0 0 auto;");
-    const allBtn = mkBtn("全选", "height:24px;padding:0 8px;border:1px solid #5b9bd5;background:#3a3a3a;color:#ddd;");
-    const noneBtn = mkBtn("清空", "height:24px;padding:0 8px;border:1px solid #666;background:#333;color:#ccc;");
+    const allBtn = mkBtn("全选", "height:24px;padding:0 8px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text);");
+    const noneBtn = mkBtn("清空", "height:24px;padding:0 8px;border:1px solid #666;background:var(--jz-border);color:var(--jz-text);");
     sideTools.append(allBtn, noneBtn);
     const sideList = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;");
     side.append(sideHead, sideTools, sideList);
 
     const main = el("div", "flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;");
     const curHead = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:6px;flex:0 0 auto;flex-wrap:wrap;");
-    const curTag = el("span", "font-size:12px;color:#ffd98a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 200px;min-width:0;", "");
-    const copyOneBtn = mkBtn("📋 复制本段", "border:1px solid #666;background:#333;color:#ddd;");
+    const curTag = el("span", "font-size:12px;color:var(--jz-warn);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 200px;min-width:0;", "");
+    const copyOneBtn = mkBtn("📋 复制本段", "border:1px solid #666;background:var(--jz-border);color:var(--jz-text);");
     // 🎯 显示引用：把素材名着色成 token（与「生成剧本查看器 → 编辑剧本」完全一致的开关）
-    const refBtn = mkBtn("🎯 显示引用", "border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;");
+    const refBtn = mkBtn("🎯 显示引用", "border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);");
     refBtn.title = "参考元素切换（纯文本 / 显示引用着色）";
     curHead.append(curTag, refBtn, copyOneBtn);
     // 编辑器：contenteditable（与放大编辑界面同构）→ 支持「显示引用」着色与素材 token 插入
     const editor = document.createElement("div");
     editor.contentEditable = "true";
     editor.spellcheck = false;
-    editor.style.cssText = "flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;background:#161616;color:#ddd;border:1px solid #444;border-radius:5px;padding:10px 12px;font-size:13px;overflow-y:auto;outline:none;white-space:pre-wrap;word-break:break-word;line-height:1.6;";
+    editor.style.cssText = "flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;background:var(--jz-bg);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:5px;padding:10px 12px;font-size:13px;overflow-y:auto;outline:none;white-space:pre-wrap;word-break:break-word;line-height:1.6;";
     editor.dataset.placeholder = "这里只显示当前这一段的内容（不含 [SHOT_START]/[SHOT_END]，保存时会自动补回）；点右侧素材可插入 @引用";
     editor.addEventListener("mousedown", (e) => e.stopPropagation());
-    const foot = el("div", "font-size:11px;color:#888;margin-top:6px;flex:0 0 auto;white-space:pre-wrap;", "");
+    const foot = el("div", "font-size:11px;color:var(--jz-text-dim);margin-top:6px;flex:0 0 auto;white-space:pre-wrap;", "");
     main.append(curHead, editor, foot);
 
     // ── 右侧：📁 资产显示窗（缩略图墙，点击把素材名插入到光标处）──
     // 宽度/内边距/滚动条槽位与「📖 编辑剧本」大界面完全一致：284px ⇒ 3 列 78px 卡片不被滚动条挤成 2 列
     const assetCol = el("div", "flex:0 0 284px;display:flex;flex-direction:column;min-height:0;");
-    const assetHead = el("div", "font-size:12px;color:#bbb;margin-bottom:6px;flex:0 0 auto;", "📁 资产显示窗（点击插入）");
-    const assetBox = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:4px;box-sizing:border-box;");
+    const assetHead = el("div", "font-size:12px;color:var(--jz-text-dim);margin-bottom:6px;flex:0 0 auto;", "📁 资产显示窗（点击插入）");
+    const assetBox = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:4px;box-sizing:border-box;");
     assetCol.append(assetHead, assetBox);
 
     bodyWrap.append(side, main, assetCol);
@@ -1435,7 +1435,7 @@ function openReshootShotEditor(ctx) {
         refMode = !refMode;
         renderEditor();
         refBtn.textContent = refMode ? "🎯 纯文本" : "🎯 显示引用";
-        refBtn.style.background = refMode ? "#2f5a3a" : "#2a4a6a";
+        refBtn.style.background = refMode ? "var(--jz-accent-green)" : "var(--jz-accent-bg)";
         notify(refMode ? "✅ 已切换为显示引用（素材名着色）" : "✅ 已切换为纯文本", "success");
     });
 
@@ -1450,10 +1450,10 @@ function openReshootShotEditor(ctx) {
     document.addEventListener("keydown", onKey, true);
 
     const syncModeChrome = () => {
-        singleChip.style.background = mode === "single" ? "#2f5a3a" : "#3a3a3a";
-        singleChip.style.color = mode === "single" ? "#dff5e6" : "#ddd";
-        multiChip.style.background = mode === "multi" ? "#2f5a3a" : "#3a3a3a";
-        multiChip.style.color = mode === "multi" ? "#dff5e6" : "#ddd";
+        singleChip.style.background = mode === "single" ? "var(--jz-accent-green)" : "var(--jz-border)";
+        singleChip.style.color = mode === "single" ? "#dff5e6" : "var(--jz-text)";
+        multiChip.style.background = mode === "multi" ? "var(--jz-accent-green)" : "var(--jz-border)";
+        multiChip.style.color = mode === "multi" ? "#dff5e6" : "var(--jz-text)";
         side.style.display = mode === "multi" ? "flex" : "none";
         sideHead.textContent = `勾选要重拍的镜头（已选 ${picked.size} / ${bodies.length}）`;
     };
@@ -1481,7 +1481,7 @@ function openReshootShotEditor(ctx) {
         sideList.innerHTML = "";
         bodies.forEach((s, i) => {
             const row = el("div", "display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:4px;cursor:pointer;font-size:12px;" +
-                (i === cur ? "background:#2a3a4a;color:#cfe3f7;" : "color:#ddd;"));
+                (i === cur ? "background:var(--jz-tint-info);color:var(--jz-info);" : "color:var(--jz-text);"));
             const cb = document.createElement("input");
             cb.type = "checkbox";
             cb.style.cssText = "flex:0 0 auto;width:14px;height:14px;cursor:pointer;accent-color:#5b9bd5;";
@@ -1560,35 +1560,35 @@ function createReshootSection(ctx) {
     const { self, promptBox, ipWidget, resizeNode, isMini, reshootSegWidget, container } = ctx;
 
     // 折叠头
-    const header = el("div", "flex:0 0 auto;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-size:13px;font-weight:600;color:#e8a87c;border:1px solid #5b9bd5;border-radius:6px;padding:6px 8px;background:#2a2a2a;margin-top:4px;box-sizing:border-box;");
+    const header = el("div", "flex:0 0 auto;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-size:13px;font-weight:600;color:var(--jz-orange);border:1px solid #5b9bd5;border-radius:6px;padding:6px 8px;background:var(--jz-bg-raise);margin-top:4px;box-sizing:border-box;");
     const chevron = el("span", "font-size:11px;transition:transform .15s;", "▶");
     header.appendChild(chevron);
     header.appendChild(el("span", "", "🔄 重拍模式"));
-    header.appendChild(el("span", "font-size:11px;color:#888;margin-left:auto;font-weight:400;",
+    header.appendChild(el("span", "font-size:11px;color:var(--jz-text-dim);margin-left:auto;font-weight:400;",
         isMini ? "展开后锁定上方提示词；📝 选择剧本 / 📖 编辑剧本（单镜头大界面，可单选或多选重拍）"
                : "展开后锁定上方提示词；📝 选择剧本 / 📖 编辑剧本（单镜头大界面）+ 点「运行」只重拍选中的镜头"));
 
     // 主体（默认收起）
-    const body = el("div", "flex:0 0 auto;display:none;margin-top:6px;border:1px solid #444;border-radius:6px;padding:8px;background:#222;box-sizing:border-box;");
+    const body = el("div", "flex:0 0 auto;display:none;margin-top:6px;border:1px solid var(--jz-border);border-radius:6px;padding:8px;background:var(--jz-inset);box-sizing:border-box;");
 
     // 第一行：提示词来源状态显示 + 选择剧本（读盘任意剧本文档）+ 编辑剧本（单镜头大界面）+ 上传本地文件
     const selRow = el("div", "display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;");
-    const pickBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;white-space:nowrap;", "📝 选择剧本");
+    const pickBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:12px;cursor:pointer;white-space:nowrap;", "📝 选择剧本");
     pickBtn.title = "和「📝 生成剧本查看器」一样：在 output/jzl 下浏览并挑选任意剧本文档（.txt/.md）";
-    const editBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #c99a4a;background:#4a3a20;color:#ffe6b8;font-size:12px;cursor:pointer;white-space:nowrap;", "📖 编辑剧本");
+    const editBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #c99a4a;background:var(--jz-tint-warn);color:var(--jz-warn);font-size:12px;cursor:pointer;white-space:nowrap;", "📖 编辑剧本");
     editBtn.title = "大界面：一次只显示一个镜头，可切换、可编辑保存，并可单选/多选要重拍的镜头";
-    const uploadBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;white-space:nowrap;", "📂 上传提示词");
+    const uploadBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);font-size:12px;cursor:pointer;white-space:nowrap;", "📂 上传提示词");
     uploadBtn.title = "选择本地 .txt/.md 提示词文件作为重拍提示词源";
-    const loadStatus = el("span", "font-size:11px;color:#888;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "提示词来源：最后一次 LLM 拆解");
+    const loadStatus = el("span", "font-size:11px;color:var(--jz-text-dim);flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "提示词来源：最后一次 LLM 拆解");
     selRow.append(pickBtn, editBtn, uploadBtn, loadStatus);
 
     // 重拍视频编号（左右箭头切换 1~99）+ 提示词显示窗（可编辑）
     const segRow = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:6px;");
-    segRow.appendChild(el("span", "font-size:12px;color:#bbb;white-space:nowrap;", "重拍视频编号"));
-    const segPrev = el("button", "width:26px;height:26px;flex:0 0 auto;border-radius:4px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;line-height:1;padding:0;", "◀");
-    const segLabel = el("span", "font-size:12px;color:#e8a87c;white-space:nowrap;min-width:150px;text-align:center;", "当前选择重拍第 0 段视频");
-    const segNext = el("button", "width:26px;height:26px;flex:0 0 auto;border-radius:4px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;line-height:1;padding:0;", "▶");
-    const segTag = el("span", "font-size:11px;color:#888;white-space:nowrap;", "（共 0 段）");
+    segRow.appendChild(el("span", "font-size:12px;color:var(--jz-text-dim);white-space:nowrap;", "重拍视频编号"));
+    const segPrev = el("button", "width:26px;height:26px;flex:0 0 auto;border-radius:4px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);font-size:12px;cursor:pointer;line-height:1;padding:0;", "◀");
+    const segLabel = el("span", "font-size:12px;color:var(--jz-orange);white-space:nowrap;min-width:150px;text-align:center;", "当前选择重拍第 0 段视频");
+    const segNext = el("button", "width:26px;height:26px;flex:0 0 auto;border-radius:4px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);font-size:12px;cursor:pointer;line-height:1;padding:0;", "▶");
+    const segTag = el("span", "font-size:11px;color:var(--jz-text-dim);white-space:nowrap;", "（共 0 段）");
     segPrev.addEventListener("mousedown", (e) => e.stopPropagation());
     segNext.addEventListener("mousedown", (e) => e.stopPropagation());
     segPrev.addEventListener("click", () => setSeg(state.selected));          // ◀ 上一段（setSeg 1-based：当前段号-1）
@@ -1599,17 +1599,17 @@ function createReshootSection(ctx) {
     editWrap.setAttribute("data-capture-wheel", "true");   // 同主提示词框：聚焦后滚轮归本控件，不被画布抢走缩放
     const edit = document.createElement("textarea");
     edit.spellcheck = false;
-    edit.style.cssText = "width:100%;height:190px;box-sizing:border-box;background:#161616;color:#ddd;border:1px solid #444;border-radius:5px;padding:6px 8px;font-size:12px;resize:none;outline:none;overflow-y:auto;white-space:pre-wrap;word-break:break-word;line-height:1.5;";
+    edit.style.cssText = "width:100%;height:190px;box-sizing:border-box;background:var(--jz-bg);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:5px;padding:6px 8px;font-size:12px;resize:none;outline:none;overflow-y:auto;white-space:pre-wrap;word-break:break-word;line-height:1.5;";
     edit.placeholder = "当前段的完整提示词显示在这里，可在此二度修改…";
     edit.addEventListener("mousedown", (e) => e.stopPropagation());
     editWrap.appendChild(edit);
     // 复制 / 放大编辑 / 资产窗：放到「重拍视频编号」行右端（编辑框上方外侧），不再悬浮在框内遮挡正文
     const eActions = el("div", "display:flex;gap:4px;margin-left:auto;z-index:6;");
-    const eCopy = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "📋");
+    const eCopy = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid var(--jz-border);background:var(--jz-float);color:var(--jz-text);font-size:12px;cursor:pointer;line-height:1;padding:0;", "📋");
     eCopy.title = "复制全部文本";
-    const eAsset = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "📁");
+    const eAsset = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid var(--jz-border);background:var(--jz-float);color:var(--jz-text);font-size:12px;cursor:pointer;line-height:1;padding:0;", "📁");
     eAsset.title = "显示/隐藏资产显示窗（点击素材插入 @引用到编辑框光标处）";
-    const eZoom = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "⛶");
+    const eZoom = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid var(--jz-border);background:var(--jz-float);color:var(--jz-text);font-size:12px;cursor:pointer;line-height:1;padding:0;", "⛶");
     eZoom.title = "放大编辑（打开大界面）";
     eActions.append(eCopy, eAsset, eZoom);
     segRow.appendChild(eActions);
@@ -1625,7 +1625,7 @@ function createReshootSection(ctx) {
     });
 
     // 📁 资产显示窗（折叠）：点击素材 → 插入到编辑框光标处（textarea 版插入，保持纯文本）
-    const assetBar = el("div", "display:none;margin-top:6px;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:4px;box-sizing:border-box;max-height:132px;overflow-y:auto;scrollbar-gutter:stable;");
+    const assetBar = el("div", "display:none;margin-top:6px;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:4px;box-sizing:border-box;max-height:132px;overflow-y:auto;scrollbar-gutter:stable;");
     let assetBarReady = false;
     eAsset.addEventListener("mousedown", (e) => e.stopPropagation());
     eAsset.addEventListener("click", (e) => {
@@ -1633,7 +1633,7 @@ function createReshootSection(ctx) {
         const show = assetBar.style.display === "none";
         assetBar.style.display = show ? "block" : "none";
         eAsset.style.background = show ? "rgba(42,74,106,.95)" : "rgba(30,30,30,.92)";
-        eAsset.style.borderColor = show ? "#5b9bd5" : "#555";
+        eAsset.style.borderColor = show ? "#5b9bd5" : "var(--jz-border)";
         if (show && !assetBarReady) {
             assetBarReady = true;
             try {
@@ -1720,7 +1720,7 @@ function createReshootSection(ctx) {
 
     // 锁定 / 解锁：主提示词框 + 节点其它全部参数（重拍模式下其它参数不可操作，点击提示）
     const LOCK_TIP = "请关闭重拍模式！";
-    const lockHint = el("span", "font-size:11px;color:#ffb84d;white-space:nowrap;", "🔒 其它参数已锁定");
+    const lockHint = el("span", "font-size:11px;color:var(--jz-warn);white-space:nowrap;", "🔒 其它参数已锁定");
     lockHint.style.display = "none";
     lockHint.title = LOCK_TIP;
     header.appendChild(lockHint);
@@ -1731,13 +1731,13 @@ function createReshootSection(ctx) {
         // 1) 主提示词框
         if (locked) {
             promptBox.contentEditable = "false";
-            promptBox.style.background = "#1d1d1d";
+            promptBox.style.background = "var(--jz-bg)";
             promptBox.style.color = "#777";
             promptBox.dataset.placeholder = "🔒 重拍模式已锁定：上方提示词不可编辑（仅重拍选中镜头）";
         } else {
             promptBox.contentEditable = "true";
-            promptBox.style.background = "#2a2a2a";
-            promptBox.style.color = "#ddd";
+            promptBox.style.background = "var(--jz-bg-raise)";
+            promptBox.style.color = "var(--jz-text)";
             promptBox.dataset.placeholder = "输入故事/剧本提示词，用 @ 引用素材…";
         }
         // 2) 节点表面参数 widget（新版前端每个 widget 有 DOM element）→ 鼠标不可操作
@@ -1825,7 +1825,7 @@ function createReshootSection(ctx) {
         if (!script || !String(script).trim()) {
             notify("提示词为空", "error");
             loadStatus.textContent = "⚠️ 提示词为空";
-            loadStatus.style.color = "#ffb84d";
+            loadStatus.style.color = "var(--jz-warn)";
             return;
         }
         script = String(script).trim();
@@ -1848,15 +1848,15 @@ function createReshootSection(ctx) {
             // 状态行始终显示提示词来源；规范问题用 toast 弹出 + 行尾 ⚠ 标记
             notify("⚠️ " + warns.join("；"), "error");
             loadStatus.textContent = (state.source || `已加载 ${shots.length} 段`) + " ⚠️";
-            loadStatus.style.color = "#ffb84d";
+            loadStatus.style.color = "var(--jz-warn)";
             loadStatus.title = "生产规范提示：\n" + warns.join("\n");
         } else if (state.source) {
             loadStatus.textContent = state.source;
-            loadStatus.style.color = "#5ecf8a";
+            loadStatus.style.color = "var(--jz-ok)";
             loadStatus.title = "";
         } else {
             loadStatus.textContent = `已加载 ${shots.length} 段`;
-            loadStatus.style.color = "#5ecf8a";
+            loadStatus.style.color = "var(--jz-ok)";
             loadStatus.title = "";
         }
         // 默认选中第1段
@@ -1874,15 +1874,15 @@ function createReshootSection(ctx) {
             if (data && data.script) {
                 const disp = `提示词来源：最后一次 LLM 拆解（${data.story_name || "未命名"}${data.time ? " · " + data.time : ""}）`;
                 loadStatus.textContent = disp;
-                loadStatus.style.color = "#5ecf8a";
+                loadStatus.style.color = "var(--jz-ok)";
                 await applyScript(data.script, { display: disp });
             } else {
                 loadStatus.textContent = "未找到最后一次 LLM 拆解提示词，可点「📝 选择剧本」或「📂 上传提示词」";
-                loadStatus.style.color = "#888";
+                loadStatus.style.color = "var(--jz-text-dim)";
             }
         } catch (_) {
             loadStatus.textContent = "加载失败，可点「📝 选择剧本」或「📂 上传提示词」";
-            loadStatus.style.color = "#888";
+            loadStatus.style.color = "var(--jz-text-dim)";
         }
     };
 
@@ -1903,7 +1903,7 @@ function createReshootSection(ctx) {
                 state.pick = rel;
                 await applyScript(d.text || "", { display: `剧本来源：${rel}` });
                 loadStatus.textContent = `剧本来源：${rel}`;
-                loadStatus.style.color = "#5ecf8a";
+                loadStatus.style.color = "var(--jz-ok)";
             } catch (err) { notify("❌ 读取失败：" + ((err && err.message) || err), "error"); }
         });
     });
@@ -2053,7 +2053,7 @@ function createReshootSection(ctx) {
             : (state.mode === "multi"
                 ? `重拍范围：${targetsText()}（共 ${reshootTargets().length} 段）`
                 : `当前选择重拍第 ${state.selected + 1} 段视频`);
-        if (state.source) { loadStatus.textContent = state.source; loadStatus.style.color = "#5ecf8a"; }
+        if (state.source) { loadStatus.textContent = state.source; loadStatus.style.color = "var(--jz-ok)"; }
         if (state.expanded) {
             expanded = true;
             chevron.textContent = "▼";
@@ -2451,10 +2451,10 @@ function jzlBindWheelZoom(container, onZoom) {
 // 共享字号行控件（A− / 当前值 / A+）：点击步进并应用到 container 内全部文本编辑区
 function jzlBuildZoomRow(container) {
     const row = el("span", "display:inline-flex;align-items:center;gap:4px;margin-left:2px;user-select:none;");
-    const minus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:11px;cursor:pointer;padding:0;", "A−");
-    const val = el("span", "min-width:26px;text-align:center;font-size:12px;color:#e8a87c;font-variant-numeric:tabular-nums;", String(jzlZoomDisplay()));
+    const minus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:11px;cursor:pointer;padding:0;", "A−");
+    const val = el("span", "min-width:26px;text-align:center;font-size:12px;color:var(--jz-orange);font-variant-numeric:tabular-nums;", String(jzlZoomDisplay()));
     val.classList.add("jzl-zoom-val");
-    const plus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:11px;cursor:pointer;padding:0;", "A+");
+    const plus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:11px;cursor:pointer;padding:0;", "A+");
     minus.title = "缩小编辑字号（Ctrl+滚轮 同样可调）";
     plus.title = "放大编辑字号（Ctrl+滚轮 同样可调）";
     const step = (d) => {
@@ -2524,11 +2524,11 @@ window.addEventListener("resize", () => {
 // 构建「界面缩放」行：− / 百分比 / ＋，作用于 target（弹窗本体），与字号 A± 独立记忆
 function jzlBuildUIRow(target) {
     const row = el("span", "display:inline-flex;align-items:center;gap:4px;margin-left:2px;user-select:none;");
-    const lab = el("span", "font-size:11px;color:#888;white-space:nowrap;", "界面");
-    const minus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:13px;cursor:pointer;padding:0;", "−");
-    const val = el("span", "min-width:40px;text-align:center;font-size:12px;color:#ffd98a;font-variant-numeric:tabular-nums;", Math.round(jzlUIGet() * 100) + "%");
+    const lab = el("span", "font-size:11px;color:var(--jz-text-dim);white-space:nowrap;", "界面");
+    const minus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #8a6d3b;background:var(--jz-tint-warn);color:var(--jz-warn);font-size:13px;cursor:pointer;padding:0;", "−");
+    const val = el("span", "min-width:40px;text-align:center;font-size:12px;color:var(--jz-warn);font-variant-numeric:tabular-nums;", Math.round(jzlUIGet() * 100) + "%");
     val.classList.add("jzl-ui-zoom-val");
-    const plus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:13px;cursor:pointer;padding:0;", "+");
+    const plus = el("button", "width:22px;height:22px;line-height:1;border-radius:4px;border:1px solid #8a6d3b;background:var(--jz-tint-warn);color:var(--jz-warn);font-size:13px;cursor:pointer;padding:0;", "+");
     minus.title = "缩小整个界面（不缩放网页/画布）";
     plus.title = "放大整个界面（不缩放网页/画布）";
     const step = (d) => {
@@ -2635,12 +2635,12 @@ function jzlOpenShotCopyPicker(anchorBtn, getCurrentText) {
     document.querySelectorAll(".jzl-shotpick").forEach((m) => m.remove());
     const segs = jzlShotSegments(getCurrentText());
     if (!segs.length) { notify("当前内容里没有 [SHOT_START]…[SHOT_END] 分段", "warning"); return; }
-    const pop = el("div", "position:fixed;z-index:100010;background:#1e1e20;border:1px solid #5b9bd5;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.65);padding:8px;min-width:300px;max-width:min(560px,90vw);max-height:62vh;overflow:auto;");
+    const pop = el("div", "position:fixed;z-index:100010;background:var(--jz-inset);border:1px solid #5b9bd5;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.65);padding:8px;min-width:300px;max-width:min(560px,90vw);max-height:62vh;overflow:auto;");
     pop.classList.add("jzl-shotpick");
-    pop.appendChild(el("div", "font-size:12px;color:#9fd6a4;margin:2px 2px 8px;", "选择要复制的镜头（复制后可粘到「🪄 穿透生成模式」单独重拍）"));
+    pop.appendChild(el("div", "font-size:12px;color:var(--jz-ok);margin:2px 2px 8px;", "选择要复制的镜头（复制后可粘到「🪄 穿透生成模式」单独重拍）"));
     segs.forEach((sg) => {
-        const row = el("div", "display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:#ddd;");
-        row.append(el("span", "flex:0 0 auto;color:#ffd98a;font-weight:600;", `第 ${sg.index + 1} 段`),
+        const row = el("div", "display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--jz-text);");
+        row.append(el("span", "flex:0 0 auto;color:var(--jz-warn);font-weight:600;", `第 ${sg.index + 1} 段`),
             el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", jzlSegmentLabel(sg.text)));
         row.addEventListener("mouseenter", () => { row.style.background = "#2c2c31"; });
         row.addEventListener("mouseleave", () => { row.style.background = ""; });
@@ -2670,16 +2670,16 @@ function openTextZoomEditor(title, getText, onSave, node) {
     document.querySelectorAll(".jzl-zoom-editor").forEach((m) => m.remove());
     const modal = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99999;display:flex;align-items:center;justify-content:center;");
     modal.classList.add("jzl-zoom-editor");
-    const box = el("div", "width:84%;max-width:1040px;height:92%;max-height:920px;background:var(--comfy-menu-bg,#242424);border:1px solid var(--border-color,#555);border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
+    const box = el("div", "width:84%;max-width:1040px;height:92%;max-height:920px;background:var(--comfy-menu-bg,#242424);border:1px solid var(--border-color,var(--jz-border));border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
     const head = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:10px;flex:0 0 auto;flex-wrap:wrap;");
-    head.appendChild(el("span", "font-size:14px;font-weight:600;color:#eee;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", title));
+    head.appendChild(el("span", "font-size:14px;font-weight:600;color:var(--jz-text-strong);flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", title));
     // 主体：左 = contenteditable 编辑器，右 = 资产显示窗（点击插入 @）
     const body = el("div", "flex:1 1 auto;display:flex;min-height:0;");
     // 内容区：contenteditable（支持 @token 富文本显示）
     const editor = document.createElement("div");
     editor.contentEditable = "true";
     editor.spellcheck = false;
-    editor.style.cssText = "flex:1 1 auto;min-width:0;width:100%;box-sizing:border-box;background:#161616;color:#ddd;border:1px solid #444;border-radius:5px;padding:10px 12px;font-size:13px;overflow-y:auto;outline:none;white-space:pre-wrap;word-break:break-word;line-height:1.6;";
+    editor.style.cssText = "flex:1 1 auto;min-width:0;width:100%;box-sizing:border-box;background:var(--jz-bg);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:5px;padding:10px 12px;font-size:13px;overflow-y:auto;outline:none;white-space:pre-wrap;word-break:break-word;line-height:1.6;";
     editor.addEventListener("mousedown", (e) => e.stopPropagation());
     // 初始显示模式：跟随节点参考元素模式（ref=显示引用着色；text=纯文本）
     let alignMode = node ? (node.__jzlAlignMode === "ref" ? "ref" : "text") : "text";
@@ -2700,7 +2700,7 @@ function openTextZoomEditor(title, getText, onSave, node) {
     };
     renderInitial();
     // 参考元素切换（在「复制」前面）：纯文本 / 显示引用
-    const aBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;white-space:nowrap;",
+    const aBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:12px;cursor:pointer;white-space:nowrap;",
         node && alignMode === "ref" ? "🎯 纯文本" : "🎯 显示引用");
     aBtn.title = "参考元素切换（纯文本 / 显示引用）";
     aBtn.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -2718,7 +2718,7 @@ function openTextZoomEditor(title, getText, onSave, node) {
         }
     });
     // 🎨 分段配色开关：单/双数 [SHOT_START] 段落不同底色，方便定位编辑
-    const bBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:" + (bandOn ? "#2f5a3a" : "#3a3a3a") + ";color:#cfe3f7;font-size:12px;cursor:pointer;white-space:nowrap;",
+    const bBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:" + (bandOn ? "var(--jz-accent-green)" : "var(--jz-border)") + ";color:var(--jz-on-accent);font-size:12px;cursor:pointer;white-space:nowrap;",
         bandOn ? "🎨 分段配色：开" : "🎨 分段配色：关");
     bBtn.title = "给每个 [SHOT_START]…[SHOT_END] 段落交替上底色（单/双数不同色），便于定位与编辑";
     bBtn.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -2730,21 +2730,21 @@ function openTextZoomEditor(title, getText, onSave, node) {
         }
         renderPlain();
         bBtn.textContent = bandOn ? "🎨 分段配色：开" : "🎨 分段配色：关";
-        bBtn.style.background = bandOn ? "#2f5a3a" : "#3a3a3a";
+        bBtn.style.background = bandOn ? "var(--jz-accent-green)" : "var(--jz-border)";
         if (bandOn && !jzlShotSegments(getPromptText(editor)).length) {
             notify("当前内容没有 [SHOT_START] 分段，配色不生效", "warning");
         }
     });
-    const cBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;", "📋 复制");
+    const cBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);font-size:12px;cursor:pointer;", "📋 复制");
     cBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     cBtn.addEventListener("click", () => copyTextToClipboard(getPromptText(editor), ""));
     // 📋 复制单镜头：选第几段就复制那一段（含 [SHOT_START]/[SHOT_END]）→ 粘到穿透模式单独重拍
-    const oneBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #c99a4a;background:#4a3a20;color:#ffe6b8;font-size:12px;cursor:pointer;white-space:nowrap;", "📋 复制单镜头");
+    const oneBtn = el("button", "flex:0 0 auto;height:28px;padding:0 10px;border-radius:5px;border:1px solid #c99a4a;background:var(--jz-tint-warn);color:var(--jz-warn);font-size:12px;cursor:pointer;white-space:nowrap;", "📋 复制单镜头");
     oneBtn.title = "复制单个分段（含 [SHOT_START]…[SHOT_END]）→ 粘到「🪄 穿透生成模式」只重拍这一段";
     oneBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     oneBtn.addEventListener("click", () => jzlOpenShotCopyPicker(oneBtn, () => getPromptText(editor)));
-    const sBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5ecf8a;background:#2d5a3a;color:#fff;font-size:12px;cursor:pointer;font-weight:600;", "💾 保存");
-    const xBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #666;background:#3a3a3a;color:#ccc;font-size:12px;cursor:pointer;", "取消");
+    const sBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #5ecf8a;background:var(--jz-btn-ok);color:var(--jz-on-accent);font-size:12px;cursor:pointer;font-weight:600;", "💾 保存");
+    const xBtn = el("button", "flex:0 0 auto;height:28px;padding:0 12px;border-radius:5px;border:1px solid #666;background:var(--jz-border);color:var(--jz-text);font-size:12px;cursor:pointer;", "取消");
     // 放大编辑弹窗支持全局共享字号（A−/A+）+ 界面整体缩放（−/＋）：字号改文字、界面改整个弹窗
     // 顺序要求：字号放大 / 界面放大 调节按钮 排在「显示引用」按钮【前面】
     const zoomRow = jzlBuildZoomRow(box);
@@ -2806,10 +2806,10 @@ function openTextZoomEditor(title, getText, onSave, node) {
             editor.dispatchEvent(new Event("input", { bubbles: true }));
         });
         const assetCol = el("div", "flex:0 0 284px;display:flex;flex-direction:column;margin-left:10px;min-height:0;");
-        const assetTitle = el("div", "font-size:12px;color:#bbb;margin-bottom:6px;flex:0 0 auto;", "📁 资产显示窗（点击插入）");
+        const assetTitle = el("div", "font-size:12px;color:var(--jz-text-dim);margin-bottom:6px;flex:0 0 auto;", "📁 资产显示窗（点击插入）");
         // 素材多时出现滚动条会占 ~17px 宽度，把 3 列挤成 2 列：scrollbar-gutter:stable 让滚动条占固定 gutter 不压缩内容宽度，
         // 配 284px 列宽（284-2边框-8内边距-17滚动条=257px ≥ 3列所需 246px），有无滚动条都稳定 3 列。
-        const assetScroll = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:4px;box-sizing:border-box;");
+        const assetScroll = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:4px;box-sizing:border-box;");
         const assetBox = el("div", "min-height:30px;");
         assetScroll.appendChild(assetBox);
         assetCol.append(assetTitle, assetScroll);
@@ -2843,22 +2843,22 @@ function openTextZoomEditor(title, getText, onSave, node) {
 }
 
 function makeSectionTitle(text) {
-    return el("div", "margin:14px 0 4px;font-size:14px;font-weight:600;color:var(--fg-color,#eee);border-bottom:1px solid var(--border-color,#444);padding-bottom:4px;", text);
+    return el("div", "margin:14px 0 4px;font-size:14px;font-weight:600;color:var(--fg-color,var(--jz-text-strong));border-bottom:1px solid var(--border-color,var(--jz-border));padding-bottom:4px;", text);
 }
 
 function makeCountRow(labelText, kind, value, onChange) {
     const row = el("div", "display:flex;align-items:center;gap:6px;");
-    row.append(el("span", "font-size:12px;color:var(--fg-color,#ddd);white-space:nowrap;", labelText));
-    const dec = el("button", "width:26px;height:26px;background:var(--comfy-input-bg,#2a2a2a);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#555);border-radius:5px;font-size:12px;line-height:1;cursor:pointer;", "◀");
+    row.append(el("span", "font-size:12px;color:var(--fg-color,var(--jz-text));white-space:nowrap;", labelText));
+    const dec = el("button", "width:26px;height:26px;background:var(--comfy-input-bg,var(--jz-bg-raise));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:5px;font-size:12px;line-height:1;cursor:pointer;", "◀");
     dec.title = "减少数量";
-    const inp = el("input", "width:44px;text-align:center;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:4px 0;font-size:13px;");
+    const inp = el("input", "width:44px;text-align:center;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:4px 0;font-size:13px;");
     inp.type = "number";
     inp.min = "0";
     inp.max = "64";
     inp.step = "1";
     inp.value = value;
     inp.className = "jzl-count-input";
-    const inc = el("button", "width:26px;height:26px;background:var(--comfy-input-bg,#2a2a2a);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#555);border-radius:5px;font-size:12px;line-height:1;cursor:pointer;", "▶");
+    const inc = el("button", "width:26px;height:26px;background:var(--comfy-input-bg,var(--jz-bg-raise));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:5px;font-size:12px;line-height:1;cursor:pointer;", "▶");
     inc.title = "增加数量";
     const apply = (n) => {
         n = Math.max(0, Math.min(64, Math.floor(n)));
@@ -2878,7 +2878,7 @@ function showFullImage(path) {
     const img = document.createElement("img");
     img.src = api.apiURL(`/jzl/asset_full?path=${encodeURIComponent(path)}`);
     img.style.cssText = "max-width:94vw;max-height:94vh;object-fit:contain;border-radius:4px;box-shadow:0 10px 40px rgba(0,0,0,0.6);";
-    img.onerror = () => { img.remove(); overlay.append(el("div", "color:#999;font-size:14px;", "原图加载失败")); };
+    img.onerror = () => { img.remove(); overlay.append(el("div", "color:var(--jz-text-dim);font-size:14px;", "原图加载失败")); };
     overlay.appendChild(img);
     overlay.addEventListener("click", () => overlay.remove());
     document.body.appendChild(overlay);
@@ -2893,7 +2893,7 @@ function showVideoPreview(path) {
     v.autoplay = true;
     v.playsInline = true;
     v.style.cssText = "max-width:94vw;max-height:94vh;object-fit:contain;border-radius:4px;background:#000;outline:none;box-shadow:0 10px 40px rgba(0,0,0,0.6);";
-    v.onerror = () => { v.remove(); overlay.append(el("div", "color:#999;font-size:14px;", "视频加载失败")); };
+    v.onerror = () => { v.remove(); overlay.append(el("div", "color:var(--jz-text-dim);font-size:14px;", "视频加载失败")); };
     overlay.appendChild(v);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
@@ -2959,11 +2959,11 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     // 图片在「角色/场景/道具」分区里渲染时，类型已由分区决定 → 不再重复显示类型下拉（仅「其他」分区保留，便于改回三类）
     const showType = !(opts && opts.showType === false);
     const isRole = isImage && String(item?.type || "") === "角色";
-    const row = el("div", "display:flex;align-items:stretch;gap:8px;margin:5px 0;padding:6px 8px;background:var(--comfy-menu-bg,#232323);border:1px solid var(--border-color,#3a3a3a);border-radius:6px;");
+    const row = el("div", "display:flex;align-items:stretch;gap:8px;margin:5px 0;padding:6px 8px;background:var(--comfy-menu-bg,#232323);border:1px solid var(--border-color,var(--jz-border));border-radius:6px;");
 
     // ── 预览区（固定在每张卡片最前面；图片放大以便一眼看清角色/场景/道具）──
     const thumbPx = isImage ? 78 : 56;
-    const thumb = el("div", `flex:0 0 ${thumbPx}px;width:${thumbPx}px;height:${thumbPx}px;border-radius:5px;border:1px solid var(--border-color,#444);background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:22px;`);
+    const thumb = el("div", `flex:0 0 ${thumbPx}px;width:${thumbPx}px;height:${thumbPx}px;border-radius:5px;border:1px solid var(--border-color,var(--jz-border));background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:22px;`);
     let imgEl = null;
     let refreshAudio = null;  // 音频试听刷新（kind==="audio" 时赋值）
     let refreshVideo = null;  // 视频已选反馈（kind==="video" 时赋值）
@@ -2991,7 +2991,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
         });
     } else if (kind === "audio") {
         // 音频：空槽黑底🎧；已选蓝底 + ▶/⏸ 试听
-        const playBtn = el("button", "width:100%;height:100%;border:none;background:transparent;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0;", "🎧");
+        const playBtn = el("button", "width:100%;height:100%;border:none;background:transparent;color:var(--jz-text);font-size:20px;cursor:pointer;line-height:1;padding:0;", "🎧");
         thumb.appendChild(playBtn);
         refreshAudio = () => {
             const p = (item.path || "").trim();
@@ -3063,7 +3063,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     chk.addEventListener("change", () => { item.enabled = chk.checked; onEdit(); refreshAllFn(); });
 
     // 类型下拉（仅在「其他（自定义）」分区显示；各子分类由分区固定类型）
-    const typeSel = el("select", "flex:0 0 58px;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:5px 2px;font-size:12px;");
+    const typeSel = el("select", "flex:0 0 58px;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:5px 2px;font-size:12px;");
     for (const t of (ASSET_TYPES_BY_KIND[kind] || ASSET_TYPES)) {
         const o = el("option", "", t);
         if (t === item.type) o.selected = true;
@@ -3071,7 +3071,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     }
 
     // 字母编号（A-Z）：同一类型已被其他素材占用的字母置灰，防止同类同编号
-    const letterSel = el("select", "flex:0 0 42px;width:42px;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:4px 1px;font-size:12px;text-align:center;cursor:pointer;");
+    const letterSel = el("select", "flex:0 0 42px;width:42px;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:4px 1px;font-size:12px;text-align:center;cursor:pointer;");
     letterSel.title = "编号（26 字母 A-Z，同一类型内唯一）";
     const usedLetters = () => {
         const used = new Set();
@@ -3096,7 +3096,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
             letterSel.append(o);
         }
     };
-    const slotTag = el("span", "font-size:11px;color:#ffd166;white-space:nowrap;flex:0 0 auto;min-width:42px;text-align:center;font-weight:600;", "");
+    const slotTag = el("span", "font-size:11px;color:var(--jz-warn);white-space:nowrap;flex:0 0 auto;min-width:42px;text-align:center;font-weight:600;", "");
     const renderSlot = () => {
         const st = slotTypeOf(kind, item?.type || "");
         const L = (item?.letter || "").trim().toUpperCase();
@@ -3110,7 +3110,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     renderSlot();
 
     // 名称输入（「角色音色」的名称由绑定角色决定 → 不显示名称框，见下方 characterSel）
-    const nameInp = el("input", "flex:1 1 120px;width:0;min-width:80px;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px;font-size:12px;");
+    const nameInp = el("input", "flex:1 1 120px;width:0;min-width:80px;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px;font-size:12px;");
     nameInp.type = "text";
     nameInp.placeholder = isRole ? "角色名（如：孙悟空）" : (kind === "image" ? "名称（如：龟仙屋）" : "名称（如：孙悟空）");
     nameInp.value = item.name || "";
@@ -3135,7 +3135,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     }
 
     // 详细描述输入（路径只由「上传素材」按钮设置，不再显示路径输入框）
-    const descInp = el("input", "flex:1 1 120px;width:0;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ccc);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px;font-size:11px;");
+    const descInp = el("input", "flex:1 1 120px;width:0;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px;font-size:11px;");
     descInp.type = "text";
     descInp.placeholder = isImage ? "图片详细描述（如：黑色刺猬头、橙色龟仙流武道服…）" : "详细描述";
     descInp.value = item.description || "";
@@ -3147,7 +3147,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     let characterSel = null;
     let syncCharacterSel = null;
     if (kind === "audio" && String(item.type || "") === "角色音色") {
-        characterSel = el("select", "flex:0 1 132px;min-width:92px;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:5px 2px;font-size:12px;");
+        characterSel = el("select", "flex:0 1 132px;min-width:92px;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:5px 2px;font-size:12px;");
         characterSel.title = "指定该音色属于哪个角色（选项来自「图片 · 角色」里的角色名；角色改名会联动）";
         syncCharacterSel = () => {
             const names = roleNameList(opts?.assets);
@@ -3186,7 +3186,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     }
 
     // 上传 / 替换：有素材显示「替换素材」，无素材显示「上传素材」
-    const pickBtn = el("button", "flex:0 0 auto;background:#2a4a6a;color:#cfe3f7;border:1px solid #5b9bd5;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;", "上传素材");
+    const pickBtn = el("button", "flex:0 0 auto;background:var(--jz-accent-bg);color:var(--jz-on-accent);border:1px solid #5b9bd5;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;", "上传素材");
     const refreshPickLabel = () => {
         const has = !!String(item.path || "").trim();
         pickBtn.textContent = has ? "替换素材" : "上传素材";
@@ -3209,7 +3209,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
     refreshPickLabel();
 
     // 删除槽位：每张卡片都可删（排序已支持任意顺序，无需限制在末位）
-    const delBtn = el("button", "flex:0 0 auto;background:transparent;color:#e08a8a;border:1px solid #844;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;", "删除槽位");
+    const delBtn = el("button", "flex:0 0 auto;background:transparent;color:var(--jz-error);border:1px solid #844;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;", "删除槽位");
     delBtn.title = "删除该槽位";
     delBtn.addEventListener("click", onDelete);
 
@@ -3241,7 +3241,7 @@ function makeAssetCard(kind, index, item, list, onEdit, onDelete, isLast, refres
         e.preventDefault();
         e.stopPropagation();
         try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
-        thumb.style.borderColor = "#5ecf8a";
+        thumb.style.borderColor = "var(--jz-ok)";
     });
     thumb.addEventListener("dragleave", () => { thumb.style.borderColor = ""; });
     thumb.addEventListener("drop", async (e) => {
@@ -3431,7 +3431,7 @@ function renderAssetSection(c, kind, list, title, subType, opts) {
             box.append(card);
         });
         const _addLabel = subType ? `+ 添加${subType}` : `+ 添加${KIND_LABEL[kind]}`;
-        const addBtn = el("button", "margin-top:4px;width:100%;padding:6px;background:#2a3a4a;color:#9fc3e8;border:1px dashed #5b9bd5;border-radius:6px;font-size:12px;cursor:pointer;", _addLabel);
+        const addBtn = el("button", "margin-top:4px;width:100%;padding:6px;background:var(--jz-tint-info);color:var(--jz-info);border:1px dashed #5b9bd5;border-radius:6px;font-size:12px;cursor:pointer;", _addLabel);
         addBtn.classList.add("jzl-asset-add");
         addBtn.addEventListener("click", () => {
             const _t0 = subType || (ASSET_TYPES_BY_KIND[kind] || ASSET_TYPES)[0];
@@ -3466,14 +3466,14 @@ function ensureManagerStyle() {
         ".jzl-count-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}",
         ".jzl-count-input{-moz-appearance:textfield;appearance:textfield}",
         // 弹窗原生控件（对齐 ComfyUI 输入框主题）
-        ".jzl-input{box-sizing:border-box;background:var(--comfy-input-bg,#2a2a2a);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 10px;font-size:13px;outline:none;}",
-        ".jzl-input:hover{background:var(--comfy-input-bg-hover,#3a3a3a);}",
+        ".jzl-input{box-sizing:border-box;background:var(--comfy-input-bg,var(--jz-bg-raise));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px 10px;font-size:13px;outline:none;}",
+        ".jzl-input:hover{background:var(--comfy-input-bg-hover,var(--jz-border));}",
         ".jzl-input:focus{border-color:#5b9bd5;}",
-        ".jzl-input option{background:var(--comfy-menu-bg,#2a2a2a);}",
+        ".jzl-input option{background:var(--comfy-menu-bg,var(--jz-bg-raise));}",
         "[contenteditable][data-placeholder]:empty:before{content:attr(data-placeholder);color:#666;font-size:12px;}",
         "[contenteditable]:focus{outline:none;border-color:#5b9bd5;}",
-        ".jzl-asset-token{display:inline-flex;align-items:center;gap:2px;padding:0 3px;margin:0 1px;border-radius:3px;background:#2f3540;user-select:none;cursor:default;vertical-align:middle;}",
-        ".jzl-asset-token .jzl-asset-thumb{display:inline-block;width:20px;height:20px;object-fit:cover;border-radius:3px;border:1px solid #555;vertical-align:middle;}",
+        ".jzl-asset-token{display:inline-flex;align-items:center;gap:2px;padding:0 3px;margin:0 1px;border-radius:3px;background:var(--jz-panel-2);user-select:none;cursor:default;vertical-align:middle;}",
+        ".jzl-asset-token .jzl-asset-thumb{display:inline-block;width:20px;height:20px;object-fit:cover;border-radius:3px;border:1px solid var(--jz-border);vertical-align:middle;}",
         ".jzl-asset-token[data-jzl-kind='video']::before{content:'🎬';font-size:12px;}",
         ".jzl-asset-token[data-jzl-kind='audio']::before{content:'🎧';font-size:12px;}",
         // 弹窗内勾选框统一 18px 橙色（素材库卡片用内联样式绿色覆盖，不受影响）
@@ -3733,7 +3733,7 @@ function openMentionMenuAtCaret(node, ta, start, end, query) {
 
     const pos = caretCoords(ta);
     const menu = document.createElement("div");
-    menu.style.cssText = "position:fixed;z-index:10001;background:#1e1e1e;border:1px solid #444;border-radius:8px;max-height:340px;max-width:460px;overflow-y:auto;box-shadow:0 8px 20px rgba(0,0,0,0.5);padding:8px;";
+    menu.style.cssText = "position:fixed;z-index:10001;background:var(--jz-bg-soft);border:1px solid var(--jz-border);border-radius:8px;max-height:340px;max-width:460px;overflow-y:auto;box-shadow:0 8px 20px rgba(0,0,0,0.5);padding:8px;";
     menu.style.left = pos.x + "px";
     menu.style.top = (pos.y + 6) + "px";
 
@@ -3744,7 +3744,7 @@ function openMentionMenuAtCaret(node, ta, start, end, query) {
         const cell = document.createElement("div");
         cell.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;border-radius:6px;padding:4px;border:1px solid transparent;";
         const thumb = document.createElement("div");
-        thumb.style.cssText = "width:64px;height:64px;border-radius:5px;border:1px solid #444;background:#111;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:26px;";
+        thumb.style.cssText = "width:64px;height:64px;border-radius:5px;border:1px solid var(--jz-border);background:var(--jz-inset);display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:26px;";
         if (item.kind === "image") {
             const img = document.createElement("img");
             img.style.cssText = "width:100%;height:100%;object-fit:cover;";
@@ -3755,15 +3755,15 @@ function openMentionMenuAtCaret(node, ta, start, end, query) {
             thumb.textContent = item.kind === "video" ? "🎬" : "🎧";
         }
         const typeTag = document.createElement("span");
-        typeTag.style.cssText = "font-size:10px;color:#8ab8dd;line-height:1;";
+        typeTag.style.cssText = "font-size:10px;color:var(--jz-info);line-height:1;";
         typeTag.textContent = item.type || KIND_LABEL[item.kind] || "";
         const label = document.createElement("span");
-        label.style.cssText = "font-size:11px;color:#ddd;line-height:1.2;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;";
+        label.style.cssText = "font-size:11px;color:var(--jz-text);line-height:1.2;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;";
         label.textContent = item.slotLabel || item.name;
         cell.append(thumb, typeTag, label);
         cell.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
         cell.addEventListener("click", () => chooseMentionText(ta, item));
-        cell.addEventListener("mouseenter", () => { cell.style.border = "1px solid #5b9bd5"; cell.style.background = "#2a2a2a"; });
+        cell.addEventListener("mouseenter", () => { cell.style.border = "1px solid #5b9bd5"; cell.style.background = "var(--jz-bg-raise)"; });
         cell.addEventListener("mouseleave", () => { cell.style.border = "1px solid transparent"; cell.style.background = "transparent"; });
         grid.appendChild(cell);
     }
@@ -3795,19 +3795,19 @@ function showPromptElements(self) {
     overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;";
     overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) closePromptElements(); });
     const panel = document.createElement("div");
-    panel.style.cssText = "background:#1b1b1f;border:1px solid #444;border-radius:10px;padding:14px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);";
+    panel.style.cssText = "background:var(--jz-bg);border:1px solid var(--jz-border);border-radius:10px;padding:14px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);";
     const title = document.createElement("div");
     title.textContent = "➕ 提示词元素（插入到提示词光标处，自动另起一行）";
-    title.style.cssText = "color:#eee;font-size:14px;font-weight:600;margin-bottom:10px;";
+    title.style.cssText = "color:var(--jz-text-strong);font-size:14px;font-weight:600;margin-bottom:10px;";
     panel.appendChild(title);
     const grid = document.createElement("div");
     grid.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:6px;";
     for (const [label, tag, trailing] of H3_TAGS) {
         const b = document.createElement("button");
         b.textContent = label;
-        b.style.cssText = "padding:7px 6px;border:1px solid #555;border-radius:6px;background:#2a2a2e;color:#eee;cursor:pointer;font-size:12px;line-height:1;";
+        b.style.cssText = "padding:7px 6px;border:1px solid var(--jz-border);border-radius:6px;background:var(--jz-bg-raise);color:var(--jz-text-strong);cursor:pointer;font-size:12px;line-height:1;";
         b.addEventListener("mouseenter", () => { b.style.background = "#3a3a40"; });
-        b.addEventListener("mouseleave", () => { b.style.background = "#2a2a2e"; });
+        b.addEventListener("mouseleave", () => { b.style.background = "var(--jz-bg-raise)"; });
         b.addEventListener("click", () => { insertPromptElement(box, tag, trailing); closePromptElements(); });
         grid.appendChild(b);
     }
@@ -3822,7 +3822,7 @@ function showPromptElements(self) {
 function field(labelText, control) {
     // 原生感：无卡片背景，标签 + 控件对齐（对齐官方设置面板）
     const g = el("div", "display:flex;align-items:center;gap:12px;margin-bottom:10px;");
-    const lab = el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,#999);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", labelText);
+    const lab = el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", labelText);
     control.style.flex = "1 1 0";
     control.style.minWidth = "0";
     // 复选框/开关是 label 包裹，不加输入框样式；真正的输入控件才有 .jzl-input（等宽由 flex 保证）
@@ -3881,7 +3881,7 @@ function numberControl(value, opts, onChange) {
 }
 
 function checkboxControl(value, labelText, onChange) {
-    const w = el("label", "display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--fg-color,#ddd);");
+    const w = el("label", "display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--fg-color,var(--jz-text));");
     const c = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
     c.type = "checkbox";
     c.checked = !!value;
@@ -3897,7 +3897,7 @@ const SEED_CONTROL_LABEL = { randomize: "随机", fixed: "固定", increment: "�
 function seedControlRow(p, fieldKey = "seed", modeKey = "seed_control", labelText = "种子") {
     // 原生感：标签 + 数字输入 + control_after_generate 按钮（点击循环 随机/固定/增加/减少）
     const g = el("div", "display:flex;align-items:center;gap:12px;margin-bottom:10px;");
-    const lab = el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,#999);white-space:nowrap;", labelText);
+    const lab = el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));white-space:nowrap;", labelText);
     const i = el("input", "flex:1;min-width:0;");
     // 种子是 64 位整数（可达 9.2e18，> Number.MAX_SAFE_INTEGER）→ 用 text 存字符串，避免精度丢失/显示异常
     i.type = "text";
@@ -3910,7 +3910,7 @@ function seedControlRow(p, fieldKey = "seed", modeKey = "seed_control", labelTex
         p[fieldKey] = v === "" ? 0 : v;      // 以字符串保存（Python int() 可直接解析）
         i.value = String(p[fieldKey]);
     });
-    const ctrl = el("button", "flex:1 1 0;min-width:0;background:#b45309;color:#fff;border:1px solid #d97706;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap;text-align:center;");
+    const ctrl = el("button", "flex:1 1 0;min-width:0;background:var(--jz-btn-warn);color:var(--jz-on-accent);border:1px solid #d97706;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap;text-align:center;");
     const curKey = () => (SEED_CONTROL_LABEL[p[modeKey]] ? p[modeKey] : "randomize");
     const render = () => {
         ctrl.textContent = "🔁 " + SEED_CONTROL_LABEL[curKey()];
@@ -4073,12 +4073,12 @@ function buildRefIntro(assets) {
 function renderAssetsTools(c, s, build, node) {
     c.append(makeSectionTitle("素材库导入导出"));
     const row = el("div", "display:flex;align-items:center;gap:8px;margin:0 0 4px;");
-    const exp = el("button", "flex:1 1 0;background:#2a4a6a;color:#cfe3f7;border:1px solid #5b9bd5;border-radius:4px;padding:7px 10px;font-size:12px;cursor:pointer;white-space:nowrap;", "⬆️ 导出素材库");
-    const imp = el("button", "flex:1 1 0;background:#3a5a2a;color:#d7f0c8;border:1px solid #6b9b5b;border-radius:4px;padding:7px 10px;font-size:12px;cursor:pointer;white-space:nowrap;", "⬇️ 导入素材库");
-    const status = el("div", "font-size:11px;color:#9fd6a4;margin:0 0 10px;min-height:14px;white-space:pre-wrap;", "");
+    const exp = el("button", "flex:1 1 0;background:var(--jz-accent-bg);color:var(--jz-on-accent);border:1px solid #5b9bd5;border-radius:4px;padding:7px 10px;font-size:12px;cursor:pointer;white-space:nowrap;", "⬆️ 导出素材库");
+    const imp = el("button", "flex:1 1 0;background:var(--jz-tint-ok);color:var(--jz-ok);border:1px solid #6b9b5b;border-radius:4px;padding:7px 10px;font-size:12px;cursor:pointer;white-space:nowrap;", "⬇️ 导入素材库");
+    const status = el("div", "font-size:11px;color:var(--jz-ok);margin:0 0 10px;min-height:14px;white-space:pre-wrap;", "");
     const say = (msg, isErr) => {
         status.textContent = msg;
-        status.style.color = isErr ? "#e08a8a" : "#9fd6a4";
+        status.style.color = isErr ? "#e08a8a" : "var(--jz-ok)";
         try { notify(msg, isErr ? "error" : "success"); } catch (_) {}
     };
     exp.title = "把当前已添加的素材保存为 output/jzl/{故事名}/参考素材_{故事名}_{年月日时分秒}.txt（未填故事名则存 output/jzl/）";
@@ -4156,8 +4156,8 @@ function renderAssetsTools(c, s, build, node) {
 function renderAssetsPanel(c, s, mode) {
     const assets = s.assets;
     // 素材引用提示（生成路径固定 ref2va 多参考，无 fl2va 首尾帧/首帧路径）
-    c.append(el("div", "background:#2b3a4a;border:1px solid #5b9bd5;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#cfe3f7;", `素材引用上限：图片 ≤9 / 视频 ≤3 / 音频 ≤3（生成路径固定为「多参考生成音视频 REF2VA」：图片=身份参考、音频=音色/配乐/念白参考，音频严格使用上传的文件。没有首尾帧/首帧（fl2va）路径；视频未被引用时，视频与视频音轨端口自动关闭）`));
-    c.append(el("div", "background:#1f2a33;border:1px dashed #5b9bd5;border-radius:6px;padding:6px 12px;margin-bottom:8px;font-size:12px;color:#9fc3e8;", `🖱 可直接把图片/视频/音频文件拖拽到本面板上传，自动按文件名命名素材（也可点卡片「上传素材」）。`));
+    c.append(el("div", "background:var(--jz-tint-info);border:1px solid #5b9bd5;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--jz-info);", `素材引用上限：图片 ≤9 / 视频 ≤3 / 音频 ≤3（生成路径固定为「多参考生成音视频 REF2VA」：图片=身份参考、音频=音色/配乐/念白参考，音频严格使用上传的文件。没有首尾帧/首帧（fl2va）路径；视频未被引用时，视频与视频音轨端口自动关闭）`));
+    c.append(el("div", "background:var(--jz-panel-2);border:1px dashed #5b9bd5;border-radius:6px;padding:6px 12px;margin-bottom:8px;font-size:12px;color:var(--jz-info);", `🖱 可直接把图片/视频/音频文件拖拽到本面板上传，自动按文件名命名素材（也可点卡片「上传素材」）。`));
 
     // 🖼️ 图片大分类 → 「角色」「场景」「道具」三个小分类（各自独立卡片列表与编号；编号逻辑沿用原 A-Z 同类型唯一）。
     // 「角色」卡片额外带「音色」组（编号与音频区共用 A-Z）；三类都不显示类型下拉（类型由分区决定）。
@@ -4187,8 +4187,8 @@ function renderAssetsPanel(c, s, mode) {
     c.append(makeSectionTitle("📄 传给 LLM 的素材描述（只读，按勾选自动生成）"));
     const mkRef = (label, getVal) => {
         const row = el("div", "display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;");
-        const lab = el("div", "flex:0 0 72px;font-size:12px;color:var(--descrip-text,#999);padding-top:6px;", label);
-        const ta = el("textarea", "flex:1;min-width:0;resize:vertical;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ccc);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px;font-size:11px;line-height:1.5;");
+        const lab = el("div", "flex:0 0 72px;font-size:12px;color:var(--descrip-text,var(--jz-text-dim));padding-top:6px;", label);
+        const ta = el("textarea", "flex:1;min-width:0;resize:vertical;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px;font-size:11px;line-height:1.5;");
         ta.readOnly = true;
         const set = () => { const v = getVal(); ta.value = v; ta.rows = Math.max(2, Math.min(8, v.split("\n").length)); };
         set();
@@ -4231,12 +4231,12 @@ function renderPromptPanel(c, s, d, node) {
         enhCard.append(field("拆解后增强", checkboxControl(p.enabled === true,
             "拆解后再用 LLM 润色每个分段的 detailed_description（故事风格在这一步权重最高；耗时约翻倍）",
             v => { p.enabled = !!v; if (v) p.story_decompose = true; })));
-        enhCard.append(el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 8px;",
+        enhCard.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.7;margin:0 0 8px;",
             "关闭 = 仅拆解后直接生成（默认，最快）。\n"
             + "开启 = 拆解 → 增强 → 生成；故事风格只能在这一步真正决定成片质感。"));
         c.append(enhCard);
     } else {
-        c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 8px;white-space:pre-line;",
+        c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.7;margin:0 0 8px;white-space:pre-line;",
             _rmNow === "故事扩写模式"
                 ? "当前为「故事扩写模式」：只把故事扩写成正文，不做拆解与增强，本项不适用。"
                 : "当前为「穿透生成模式」：跳过全部 LLM 步骤，本项不适用。"));
@@ -4251,7 +4251,7 @@ function renderPromptPanel(c, s, d, node) {
         { val: "自由", label: "自由发挥扩写", tip: "在用户输入故事的基础上，按所选故事风格自由发挥扩写" },
     ];
     const mkExpandCb = (opt) => {
-        const lab = el("label", "display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+        const lab = el("label", "display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
         const rb = el("input", "width:16px;height:16px;accent-color:#f59e0b;margin-top:1px;cursor:pointer;");
         rb.type = "radio";
         rb.name = "jzl_expand_source";
@@ -4267,7 +4267,7 @@ function renderPromptPanel(c, s, d, node) {
     expandOpts.forEach(mkExpandCb);
     // 扩写字数（放「故事扩写设置」最底部，与上方两单选同属一个分区）
     const wordsRow = el("div", "display:flex;align-items:center;gap:12px;margin-top:2px;");
-    wordsRow.append(el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,#999);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "扩写字数（扩写模式）"));
+    wordsRow.append(el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", "扩写字数（扩写模式）"));
     wordsRow.append(numberControl(p.expand_words ?? 500, { min: 100, max: 3000, step: 50 }, v => { p.expand_words = Math.round(v); }));
     expandRow.append(wordsRow);
     c.append(expandRow);
@@ -4278,7 +4278,7 @@ function renderPromptPanel(c, s, d, node) {
     const backendRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;");
     const backendCbs = [];
     const mkBackendCb = (val, label) => {
-        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
         const c = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
         c.type = "checkbox";
         c.checked = (String(p.llm_backend || "").includes("api") ? "在线API [api]" : "本地模型 [local]") === val;
@@ -4399,7 +4399,7 @@ function checkboxGroup(options, value, onChange) {
 // ── 共用控件：多宫格方框勾选（选中橙色高亮，与节点内勾选框同色系）──
 // BOX_SEL / BOX_IDLE：选中 / 未选中的边框与底色
 const BOX_SEL = { border: "#f59e0b", bg: "#8a5208", fg: "#fff" };
-const BOX_IDLE = { border: "#555", bg: "#2a2a2a", fg: "#ddd" };
+const BOX_IDLE = { border: "var(--jz-border)", bg: "var(--jz-bg-raise)", fg: "var(--jz-text)" };
 function _boxPaint(b, on) {
     const c = on ? BOX_SEL : BOX_IDLE;
     b.style.borderColor = c.border;
@@ -4437,8 +4437,8 @@ function stepperControl(value, opts, onChange) {
     const dig = String(step).includes(".") ? String(step).split(".")[1].length : 0;
     const wrap = el("div", "display:flex;align-items:center;gap:6px;flex:1 1 0;min-width:0;");
     const mkBtn = (dir) => {
-        const b = el("button", "width:32px;height:30px;flex:0 0 auto;border-radius:5px;border:1px solid #555;"
-            + "background:#2a2a2a;color:#9fd6a4;font-size:13px;line-height:1;cursor:pointer;"
+        const b = el("button", "width:32px;height:30px;flex:0 0 auto;border-radius:5px;border:1px solid var(--jz-border);"
+            + "background:var(--jz-bg-raise);color:var(--jz-ok);font-size:13px;line-height:1;cursor:pointer;"
             + "display:flex;align-items:center;justify-content:center;");
         b.type = "button";
         b.textContent = dir < 0 ? "◀" : "▶";
@@ -4579,8 +4579,8 @@ async function jzlReadSkill(kind, id) {
 }
 
 function _jzlSmallBtn(text, title) {
-    const b = el("button", "flex:0 0 auto;padding:6px 10px;border-radius:5px;border:1px solid #555;"
-        + "background:#2a2a2a;color:#ddd;font-size:12px;cursor:pointer;white-space:nowrap;", text);
+    const b = el("button", "flex:0 0 auto;padding:6px 10px;border-radius:5px;border:1px solid var(--jz-border);"
+        + "background:var(--jz-bg-raise);color:var(--jz-text);font-size:12px;cursor:pointer;white-space:nowrap;", text);
     b.type = "button";
     if (title) b.title = title;
     b.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -4590,7 +4590,7 @@ function _jzlSmallBtn(text, title) {
 // ── 运行参数面板的视觉分组：让「分类 → 子选项」一眼可分 ──
 // 分类 = 卡片（浅底+描边）；子选项 = 卡片内带橙色左条的缩进区。
 function jzlPanelCard() {
-    return el("div", "background:rgba(255,255,255,.025);border:1px solid #3a3a3a;border-radius:8px;"
+    return el("div", "background:rgba(255,255,255,.025);border:1px solid var(--jz-border);border-radius:8px;"
         + "padding:12px 12px 4px;margin:0 0 14px;");
 }
 
@@ -4618,10 +4618,10 @@ function jzlSubPanel(labelText, hintText) {
     const box = el("div", "margin:10px 0 12px;padding:8px 12px 2px;border-left:3px solid #f59e0b;"
         + "background:rgba(245,158,11,.06);border-radius:0 6px 6px 0;");
     if (labelText) {
-        box.append(el("div", "font-size:12px;font-weight:600;color:#f0b64a;margin-bottom:6px;letter-spacing:.02em;", labelText));
+        box.append(el("div", "font-size:12px;font-weight:600;color:var(--jz-warn);margin-bottom:6px;letter-spacing:.02em;", labelText));
     }
     if (hintText) {
-        box.append(el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin-bottom:8px;white-space:pre-line;", hintText));
+        box.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.7;margin-bottom:8px;white-space:pre-line;", hintText));
     }
     return box;
 }
@@ -4673,9 +4673,9 @@ function skillSelector(kind, s, mark, opts) {
     const btnRow = el("div", "display:flex;align-items:center;gap:8px;margin:0 0 6px;");
     previewBtn = _jzlSmallBtn("👁 预览", "查看所选 skill 的完整内容（只读）");
     btnRow.append(importBtn, previewBtn);
-    hint = el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 6px;white-space:pre-line;");
+    hint = el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.7;margin:0 0 6px;white-space:pre-line;");
     preview = el("pre", "display:none;margin:0 0 8px;padding:8px 10px;max-height:220px;overflow:auto;"
-        + "background:var(--comfy-input-bg,#1d1d1d);border:1px solid var(--border-color,#444);border-radius:4px;"
+        + "background:var(--comfy-input-bg,var(--jz-bg));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;"
         + "font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;");
     customBox.append(field("选择 skill", sel), btnRow, hint, preview);
     wrap.append(row, customBox);
@@ -4785,7 +4785,7 @@ function passthroughSelector(s, mark) {
         sk.passthrough_mode = "free"; sync(); mark();
     }, "无任何约束：跳过格式校验，有分段块就按段数生成，没有就整段按 1 段生成");
     row.append(chipStrict, chipFree);
-    wrap.append(row, el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 8px;white-space:pre-line;",
+    wrap.append(row, el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.7;margin:0 0 8px;white-space:pre-line;",
         "严格对齐：必须含 [SHOT_START]…[SHOT_END] 与 ===H3_PROMPT===，否则报错终止。\n"
         + "自由模式：跳过格式校验；有分段块就按段数生成，没有就整段按 1 段生成。"));
     sync();
@@ -4815,7 +4815,7 @@ function renderGenSettingsPanel(c, s, node, d) {
     const modeCard = jzlPanelCard();
     const modeRow = el("div", "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;");
     const modeChips = [];
-    const modeHint = el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;margin:0 0 2px;");
+    const modeHint = el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.7;margin:0 0 2px;");
     const subBox = el("div", "");
     let subKind = null;
     const syncModeChips = () => {
@@ -4877,10 +4877,10 @@ function renderGenSettingsPanel(c, s, node, d) {
     }, "使用导入的故事风格 skill（下拉 / 导入 / 预览）");
     styleRow.append(chipStyleB, chipStyleC);
     // 生效范围注释（故事风格的实际作用点）
-    const styleNote = el("div", "font-size:12px;color:#c9a86a;line-height:1.7;margin:0 0 8px;white-space:pre-line;",
+    const styleNote = el("div", "font-size:12px;color:var(--jz-warn);line-height:1.7;margin:0 0 8px;white-space:pre-line;",
         "⚠️ 仅在开启「提示词增强」时才真正决定成片质感（增强把故事风格作为最高权重锚点，逐句落到画面）；"
         + "拆解阶段只作导演视角参考，故事扩写阶段作为扩写基调。");
-    const styleContent = el("div", "padding-left:10px;border-left:2px solid #3a3a3a;");
+    const styleContent = el("div", "padding-left:10px;border-left:2px solid var(--jz-border);");
     // 内置风格：名称 + 注释（勾选框在前）；未收录的风格只显示名称
     const styleOpts = comboOptions("story_style", []).map((v) => {
         const name = String(v);
@@ -4980,8 +4980,8 @@ function renderSwapVideoParamsPanel(c, s, node) {
     c.append(field("百万像素（MP）", stepperControl(Number(gp.megapixels ?? 0.4),
         { min: 0.1, max: 3.6, step: 0.1 }, v => { gp.megapixels = v; refreshRes(); touch(); })));
 
-    const resBox = el("div", "font-size:13px;color:#c9a86a;padding:6px 10px;text-align:center;"
-        + "background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);"
+    const resBox = el("div", "font-size:13px;color:var(--jz-warn);padding:6px 10px;text-align:center;"
+        + "background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));"
         + "border-radius:4px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;");
     resBox.title = "生成画布（32 对齐）。「跟随源片」= 执行时按源片宽高比 + 上面的 MP 预算实时计算";
     c.append(field("分辨率", resBox));
@@ -5000,7 +5000,7 @@ function renderSwapVideoParamsPanel(c, s, node) {
 
     c.append(field("每段时长", selectControl(SWAP_SEGMENT_OPTIONS, String(gp.segment || "固定5秒"),
         v => { gp.segment = v; showSegLen(); touch(); })));
-    const segHint = el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;", "");
+    const segHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;", "");
     c.append(segHint);
     const showSegLen = () => {
         const f = swapFrameLen(gp.segment || "固定5秒");
@@ -5012,14 +5012,14 @@ function renderSwapVideoParamsPanel(c, s, node) {
     c.append(makeSectionTitle("音频"));
     c.append(field("音频方式", selectControl(SWAP_AUDIO_OPTIONS, String(gp.audio_mode || SWAP_AUDIO_OPTIONS[0]),
         v => { gp.audio_mode = v; touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
         "保留原声 = 成片用源片原声（对白/音效不变，推荐；同时把原声作为 <Video 1> 音轨参考）。\n"
         + "使用生成音轨 = 用模型重新生成的声音（台词/节奏可能与原片不同）。静音 = 不要音轨。"));
 
     c.append(makeSectionTitle("参考与放大"));
     c.append(field("参考图放大", stepperControl(Number(gp.scale_factor ?? 1.0),
         { min: 1.0, max: 5.0, step: 0.1 }, v => { gp.scale_factor = v; })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
         "参考图面积 = 画布面积 × 倍率（1.0 = 同面积，2.0 = 面积翻倍）。脸不够像就加，越大越慢。\n"
         + "换人不生效时这是最有效的旋钮：先试 2.0~3.0。上限是短边 2048。"));
 
@@ -5035,8 +5035,8 @@ function renderSwapVideoParamsPanel(c, s, node) {
     const fSecScale = field("面积倍数", stepperControl(Number(gp.upscale_scale ?? 2.0),
         { min: 1.0, max: 4.0, step: 0.1 }, v => { gp.upscale_scale = v; touch(); }));
     c.append(fSecScale, fSecW, fSecH);
-    const secBox = el("div", "font-size:11px;color:#c9a86a;padding:5px 10px;"
-        + "background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);"
+    const secBox = el("div", "font-size:11px;color:var(--jz-warn);padding:5px 10px;"
+        + "background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));"
         + "border-radius:4px;font-variant-numeric:tabular-nums;");
     c.append(field("二采画布", secBox));
     const syncSecMode = () => {
@@ -5070,7 +5070,7 @@ function renderSwapVideoParamsPanel(c, s, node) {
     };
     syncSecMode();
     syncSecRef = syncSecMode;
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
         "面积倍数 = 二采像素面积 ÷ 一采像素面积。2.0 就是「面积翻倍」（参考工作流 0.5MP → 1.0MP）。\n"
         + "必须 > 1.0 才有提清晰度的意义；< 1.0 等于降级，会更糊。\n"
         + "想省时间：把「百万像素」降到 0.5，二采面积倍数保持 2.0 → 二采 1.0MP（参考工作流同款）。"));
@@ -5078,11 +5078,11 @@ function renderSwapVideoParamsPanel(c, s, node) {
     c.append(makeSectionTitle("安全阀"));
     c.append(field("最大段数", stepperControl(Number(gp.max_segments ?? 60),
         { min: 1, max: 200, step: 1 }, v => { gp.max_segments = Math.round(v); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "源片切出的段数超过它就直接报错（避免误接一部两小时的片子跑一晚上）。"));
     c.append(field("源片缓存阈值", stepperControl(Number(gp.source_cache_gb ?? 8),
         { min: 0, max: 512, step: 1 }, v => { gp.source_cache_gb = Math.round(v); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
         "源片超过这么多 GB 就转成 uint8 缓存，常驻内存降到 1/4（长片不容易爆内存）。\n"
         + "0 = 不转换。换算：GB ≈ 帧数 × 宽 × 高 × 12 / 1e9。"));
 }
@@ -5100,12 +5100,12 @@ function renderSwapSeamSection(c, s, node) {
         v => { seam.enabled = !!v; touch(); })));
     c.append(field("重叠帧数", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
         v => { seam.window = Number(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
         "上一段结尾的多少帧，既钉成本段开头、又在成片里丢掉（两头用同一段帧）。\n"
         + "22 帧 = 参考工作流同值。越大越稳、越慢；必须是 5/22/39/56 且小于每段帧数。"));
     c.append(field("参考帧数", stepperControl(Number(seam.ref_video_tail ?? 0),
         { min: 0, max: 600, step: 17 }, v => { seam.ref_video_tail = Math.max(0, Math.round(v)); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "给模型看多少帧源片当参考。0 = 整段都给（动作最准、最慢）；填 39~56 只看开头一小段，省显存。"));
     c.append(field("引导来源", selectControl(
         [{ value: "pixels", label: "像素尾帧（推荐）" },
@@ -5114,7 +5114,7 @@ function renderSwapSeamSection(c, s, node) {
             seam.guide_mode = v;
             touch();
         })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "衔接画面按像素传还是按 latent 传。像素会按本段分辨率重新编码，所以清晰。"));
     c.append(field("二采钉帧", checkboxControl(seam.pin_second !== false,
         "二采也按二采分辨率重新接一次；关掉只有一采接着，二采会糊",
@@ -5128,22 +5128,22 @@ function renderSwapSeamSection(c, s, node) {
         v => { col.enabled = !!v; touch(); })));
     c.append(field("补偿强度", stepperControl(Number(col.strength ?? 0.8),
         { min: 0.0, max: 1.0, step: 0.05 }, v => { col.strength = v; touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "只补一部分（0.8 = 补八成），留一点自然差异，避免整段被推成另一个色调。"));
     c.append(field("单通道上限", stepperControl(Number(col.max_offset ?? 16),
         { min: 0, max: 64, step: 1 }, v => { col.max_offset = Math.round(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "8bit 单位，默认 16。超过它就说明不是色彩漂移而是换了场景，硬拉会毁画面。"));
     c.append(field("差异阈值", stepperControl(Number(col.guard ?? 32),
         { min: 0, max: 128, step: 1 }, v => { col.guard = Math.round(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "三通道平均差超过它就直接跳过补偿（判定为场景/灯光真的变了，不该对齐）。"));
     c.append(field("亮度过渡帧", stepperControl(Number(col.ramp ?? 12),
         { min: 0, max: 24, step: 1 }, v => { col.ramp = Math.round(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
         "配色之后再补一层亮度渐变，把开头这么多帧朝上段末帧亮度过渡。0 = 关。"));
 
-    c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
         "帧账（严格不缺帧、不多帧）：\n"
         + "· 第 1 段：生成 = align(段长)，全部保留。\n"
         + "· 之后每段：生成 = align(段长 + 重叠)，丢掉开头「重叠」帧，补出来的余量从尾部丢掉 → 正好落盘 段长。\n"
@@ -5163,9 +5163,9 @@ function renderSwapPrefPanel(c, s, d, node) {
 }
 
 function renderSwapHelpPanel(c) {
-    const p = (txt, style) => c.append(el("p", style || "margin:6px 0;line-height:1.8;font-size:13px;color:var(--fg-color,#ddd);", txt));
-    const h = (txt) => c.append(el("div", "margin:14px 0 6px;font-size:14px;font-weight:700;color:#c9a86a;", txt));
-    c.append(el("div", "font-size:15px;font-weight:700;color:var(--fg-color,#eee);margin-bottom:6px;", "🎭 MiniMax-H3 人物替换 · 使用说明"));
+    const p = (txt, style) => c.append(el("p", style || "margin:6px 0;line-height:1.8;font-size:13px;color:var(--fg-color,var(--jz-text));", txt));
+    const h = (txt) => c.append(el("div", "margin:14px 0 6px;font-size:14px;font-weight:700;color:var(--jz-warn);", txt));
+    c.append(el("div", "font-size:15px;font-weight:700;color:var(--fg-color,var(--jz-text-strong));margin-bottom:6px;", "🎭 MiniMax-H3 人物替换 · 使用说明"));
     p("把一段已有视频里的演员换成你给的定妆图（不是局部换脸，而是逐段重生成：动作/机位/场景保留、人换掉）。长视频自动分段、自动衔接，成片时长恒等于源片。");
 
     h("① 接线");
@@ -5227,8 +5227,8 @@ function renderVideoParamsPanel(c, s, node) {
     c.append(field("百万像素（MP）", stepperControl(parseFloat(cur("megapixels", 0.4)) || 0.4,
         { min: 0.1, max: 3.6, step: 0.1 }, v => { set("megapixels", v); refreshRes(); })));
 
-    const resBox = el("div", "font-size:13px;color:#c9a86a;padding:6px 10px;text-align:center;"
-        + "background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);"
+    const resBox = el("div", "font-size:13px;color:var(--jz-warn);padding:6px 10px;text-align:center;"
+        + "background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));"
         + "border-radius:4px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;");
     resBox.title = "根据上面的「画幅比例」与「百万像素（MP）」计算出的生成分辨率（宽 × 高，32 对齐）";
     c.append(field("分辨率", resBox));
@@ -5254,7 +5254,7 @@ function renderVideoParamsPanel(c, s, node) {
     };
     c.append(field("生成视频数量", stepperControl(readVideoCount(_vcW),
         { min: 0, max: 60, step: 1 }, _setVC)));
-    c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+    c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
         "参数：0 = LLM 按剧情时间线长度，自动计算需要生成多少段视频。\n"
         + "参数：1~60 = 设置固定生成数量，最多支持一次生成60段视频！\n"
         + "🪄 穿透生成模式下忽略此设定：按提示词实际段数生成。"
@@ -5281,7 +5281,7 @@ function renderPrefPanel(c, s, d, node) {
     const modeRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;flex-wrap:wrap;");
     const modeCbs = [];
     const mkModeCb = (val, label) => {
-        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
         const cb = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
         cb.type = "checkbox";
         cb.checked = (String(p.sample_mode || "常规采样") === val);
@@ -5355,7 +5355,7 @@ function renderPrefPanel(c, s, d, node) {
     // 调度器=用 调度器+采样步数+降噪系数 生成 sigmas 二采；自定义=直接用下方输入的自定义 sigmas 序列（对齐 1190 ManualSigmas）
     const sigModeRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;");
     const mkSigRadio = (val, label) => {
-        const lab = el("label", "display:flex;align-items:center;gap:5px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+        const lab = el("label", "display:flex;align-items:center;gap:5px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
         const r = el("input", "accent-color:#f59e0b;cursor:pointer;");
         r.type = "radio"; r.name = "jzl_second_sigmas"; r.value = val;
         r.checked = (sec.sigmas_mode || "scheduler") === val;
@@ -5396,7 +5396,7 @@ function renderPrefPanel(c, s, d, node) {
     const tilingRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;flex-wrap:wrap;");
     const tilingCbs = [];
     const mkTilingCb = (val) => {
-        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
         const cb = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
         cb.type = "checkbox";
         cb.checked = (sec.tiling || "关闭") === val;
@@ -5420,7 +5420,7 @@ function renderPrefPanel(c, s, d, node) {
     }));
     normalBox.append(fTileTiles);
     normalBox.append(fTileOverlap);
-    const tilingHint = el("div", "font-size:11px;color:#c9a86a;line-height:1.6;margin:-2px 0 8px;", "");
+    const tilingHint = el("div", "font-size:11px;color:var(--jz-warn);line-height:1.6;margin:-2px 0 8px;", "");
     normalBox.append(tilingHint);
     const syncTiling = () => {
         const mode = sec.tiling || "关闭";
@@ -5438,7 +5438,7 @@ function renderPrefPanel(c, s, d, node) {
 
     // ── SelfLift 采样（内置副本，参数对齐「SelfLift Progressive Sampler (MiniMax H3)」节点）──
     slBox.append(makeSectionTitle("SelfLift 采样"));
-    slBox.append(field("采样器", el("div", "font-size:13px;color:var(--fg-color,#ddd);padding:6px 10px;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;", "euler（SelfLift 固定标准 Euler，NFE 数不变）")));
+    slBox.append(field("采样器", el("div", "font-size:13px;color:var(--fg-color,var(--jz-text));padding:6px 10px;background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;", "euler（SelfLift 固定标准 Euler，NFE 数不变）")));
     const slSchedSel = selectControl(OPTIONS.schedulers, p.scheduler || OPTIONS.schedulers[0], v => { p.scheduler = v; });
     slBox.append(field("调度器", slSchedSel));
     const slStepsStepper = stepperControl(Number(sl.steps ?? 8), { min: 2, max: 200, step: 1 }, v => {
@@ -5489,7 +5489,7 @@ function renderPrefPanel(c, s, d, node) {
         "放大完立即把放大模型从显存卸载，再进入高分辨率阶段", v => { sl.upscaler_unload = !!v; })));
     slBox.append(field("高分辨率分块", checkboxControl(!!sl.highres_tiling,
         "高分辨率（= 二采）阶段切块省显存（只保留首块音频；分块时跳过 TST 诊断）", v => { sl.highres_tiling = !!v; })));
-    const slHint = el("div", "font-size:11px;color:#c9a86a;line-height:1.6;margin:-2px 0 8px;white-space:pre-line;", "");
+    const slHint = el("div", "font-size:11px;color:var(--jz-warn);line-height:1.6;margin:-2px 0 8px;white-space:pre-line;", "");
     slBox.append(slHint);
     const syncSlHint = () => {
         const steps = Math.max(2, Math.round(Number(sl.steps ?? 8)));
@@ -5532,9 +5532,9 @@ function renderPrefPanel(c, s, d, node) {
     // ── 解码 ──
     c.append(makeSectionTitle("解码"));
     // 视频解码固定 XB-BOX 优化版（=原版+显存清理，与 1146 一致）；清理选项完整保留
-    c.append(field("视频解码", el("div", "font-size:13px;color:var(--fg-color,#ddd);padding:6px 10px;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;", "XB-BOX - VAE解码（原版优化）")));
+    c.append(field("视频解码", el("div", "font-size:13px;color:var(--fg-color,var(--jz-text));padding:6px 10px;background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;", "XB-BOX - VAE解码（原版优化）")));
     c.append(field("解码前清理", selectControl(OPTIONS.decodeCleanup, p.decode_cleanup || OPTIONS.decodeCleanup[0], v => { p.decode_cleanup = v; })));
-    c.append(field("音频解码", el("div", "font-size:13px;color:var(--fg-color,#ddd);padding:6px 10px;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;", "VAE解码（音频）")));
+    c.append(field("音频解码", el("div", "font-size:13px;color:var(--fg-color,var(--jz-text));padding:6px 10px;background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;", "VAE解码（音频）")));
 
     // ── ♾️ 无限时长衔接⚠实验性功能（仅「JZL - 🤖 MiniMax-H3无限时长」显示；短剧导演台已移除该功能）──
     // 后端读取 sample_decode.infinite = { enabled, window, audio_no_trim, settle, trim_mode, guide_source, second_guide }
@@ -5590,7 +5590,7 @@ function renderPrefPanel(c, s, d, node) {
         const _sg2Norm = (v) => { const s = String(v || ""); return (s === "second" || s.indexOf("二采") >= 0) ? SEC_GUIDES[1] : SEC_GUIDES[0]; };
         c.append(field("二采引导来源", selectControl(SEC_GUIDES, _sg2Norm(inf.second_guide),
             v => { inf.second_guide = (v === SEC_GUIDES[1]) ? "second" : "first"; })));
-        c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
+        c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
             "第 2 段起，把上一段【一采 latent】的尾部窗口钉进本段首帧（keyframe 行永不降噪、每步重注入）→ 画面/动作/色调跨段连续；每段仍用各自的新提示词 → 剧情持续推进。\n"
             + "· 窗口只支持 17m+5（5 / 22 / 39 / 56），22 = 官方 Motion Context 基线；段长恒为 17k+5，两者相减必是 17 的倍数 → 相位自动对齐。\n"
             + "· 【时长账】本节点每个数值都按「落盘时长」显示：**落盘时长 = 你设定的时长（× 段数）**。段 2+ 生成时会多出「窗口 + 过渡」帧的段首衔接跑道（默认 22+12 = 34 帧 ≈ 1.42 秒）——这段是承接上一段末帧的延续画面，成片里已经裁掉；LLM 会按此写剧本（第 2 段起 **时长** = 设定 + 跑道），所以设定时长不会被切内容。\n"
@@ -5637,20 +5637,20 @@ function renderSaveSettingsPanel(c, settings, node, d) {
         mkc("分段保存（默认）", save.mode !== "拼接保存", "每段生成完立即落盘，输出本次各段 mp4", (v) => { if (v) save.mode = "分段保存"; });
         mkc("拼接保存", save.mode === "拼接保存", "全部段生成后读盘 concat 合并为一个完整视频", (v) => { if (v) save.mode = "拼接保存"; });
         mkc("拼接保存后删除分段视频", !!save.auto_merge_delete, "拼接保存成功后自动删除各分段 mp4（需勾选拼接保存）", (v) => { save.auto_merge_delete = !!v; });
-        c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-2px 0 8px 172px;line-height:1.7;white-space:pre-line;",
+        c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:-2px 0 8px 172px;line-height:1.7;white-space:pre-line;",
             "Max 恒定：每段【调度→编码→采样→解码】完成立即 ffmpeg 落盘 output/jzl/{故事名}/ 并释放显存/内存（跑 N 段与 1 段占用不叠加）。\n默认分段保存；勾选拼接保存=全部生成后读盘 concat 合并；再勾选删除分段=合并成功即清理各分段 mp4（仅保留合并结果）。"));
-        const loc = el("div", "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--descrip-text,#999);margin:0 0 6px 172px;line-height:1.6;");
-        loc.append(el("span", "white-space:nowrap;color:var(--fg-color,#ccc);", "落盘位置："));
-        loc.append(el("code", "font-family:monospace;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;padding:3px 8px;color:#9fd6a4;user-select:all;", "output/jzl/{故事名}/"));
+        const loc = el("div", "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 6px 172px;line-height:1.6;");
+        loc.append(el("span", "white-space:nowrap;color:var(--fg-color,var(--jz-text));", "落盘位置："));
+        loc.append(el("code", "font-family:monospace;background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:3px 8px;color:var(--jz-ok);user-select:all;", "output/jzl/{故事名}/"));
         c.append(loc);
         return;
     }
     // 保存/合并位置固定为运行中 ComfyUI 的 output/jzl（运行时可推导，不写死盘符，不可修改，只读显示）
     const saveDir = (d && d.save_dir) || "output/jzl";
     const locRow = (label) => {
-        const row = el("div", "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--descrip-text,#999);margin:0 0 6px 172px;line-height:1.6;");
-        row.append(el("span", "white-space:nowrap;color:var(--fg-color,#ccc);", label));
-        row.append(el("code", "font-family:monospace;background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);border-radius:4px;padding:3px 8px;color:#9fd6a4;user-select:all;", saveDir));
+        const row = el("div", "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 6px 172px;line-height:1.6;");
+        row.append(el("span", "white-space:nowrap;color:var(--fg-color,var(--jz-text));", label));
+        row.append(el("code", "font-family:monospace;background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:3px 8px;color:var(--jz-ok);user-select:all;", saveDir));
         return row;
     };
 
@@ -5658,7 +5658,7 @@ function renderSaveSettingsPanel(c, settings, node, d) {
     c.append(makeSectionTitle("保存设置"));
     c.append(field("保存模式", selectControl(["分段保存", "拼接保存"], save.mode,
         (v) => { save.mode = v; })));
-    c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 6px 172px;line-height:1.6;",
+    c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 6px 172px;line-height:1.6;",
         "分段保存=按顺序批量输出每段图像/音频（接「视频保存分配→VHS」）；拼接保存=全部生成后拼接成一段再输出。此选项只影响下游 VHS 保存方式，保留原有逻辑。"));
 
     // 分段视频自动保存（ffmpeg 逐段落盘，位置固定 output/jzl）
@@ -5693,10 +5693,10 @@ function renderSaveSettingsPanel(c, settings, node, d) {
 // ── 📖 节点使用说明面板 ────────────────────────────────
 // 使用说明内置回退 HTML（OpenPose 式内嵌：后端 /jzl/usage_md 不可用时也能显示；完整文档见 docs/USAGE.md）
 const USAGE_FALLBACK_HTML = `
-<div style="font-size:13px;line-height:1.7;color:var(--fg-color,#ddd);">
-<h3 style="margin:0 0 8px;font-size:16px;font-weight:700;color:var(--fg-color,#eee);border-bottom:1px solid var(--border-color,#444);padding-bottom:4px;">MiniMax-H3 生成管理器 · 使用说明</h3>
+<div style="font-size:13px;line-height:1.7;color:var(--fg-color,var(--jz-text));">
+<h3 style="margin:0 0 8px;font-size:16px;font-weight:700;color:var(--fg-color,var(--jz-text-strong));border-bottom:1px solid var(--border-color,var(--jz-border));padding-bottom:4px;">MiniMax-H3 生成管理器 · 使用说明</h3>
 <p style="margin:6px 0;">一个节点完成 <b>剧本分段 → 参考调度 → 编码 → 采样 → 解码</b> 全流程；支持 ffmpeg 逐段落盘 / 自动合并。</p>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">一、快速上手</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">一、快速上手</h4>
 <ol style="padding-left:20px;margin:4px 0;">
 <li>添加节点 <b>JZL/MiniMax → JZL - 🤖 MiniMax-H3短剧导演台Pro</b></li>
 <li>接好 <b>主模型 / CLIP / 视觉VAE / 音频VAE</b>（含视频或音频参考时必须接「音频VAE」）</li>
@@ -5704,7 +5704,7 @@ const USAGE_FALLBACK_HTML = `
 <li>设定参数后运行（「生成视频数量」默认「<b>剧情决定</b>」= LLM 按剧情时间线长度 ÷ 每段时长自动定段数）</li>
 </ol>
 <p style="margin:4px 0;">不接模型也能运行：只做剧本分段 + 调度，不采样解码。</p>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">二、运行模式</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">二、运行模式</h4>
 <ul style="padding-left:20px;margin:4px 0;">
 <li><b>🛠️ 故事拆解模式</b>：已有满意的故事，直接拆段生成视频（不改剧情、不新增对白）</li>
 <li><b>📚 故事扩写模式</b>：故事太短，先扩写成丰满正文（纯文本，不生成视频）</li>
@@ -5715,7 +5715,7 @@ const USAGE_FALLBACK_HTML = `
 <p style="margin:4px 0;">⚠️ 拆解 / 扩写吃<b>自然语言故事</b>；含已拆解标签（===H3_PROMPT===、[SHOT_START]、subject_definitions:、### Video_001 等）会报错终止，请改用 🪄 穿透生成模式。</p>
 <p style="margin:4px 0;">⚠️ 穿透 / 重拍只接受<b>拆解产物</b>：需含 [SHOT_START]…[SHOT_END] 且每段含 ===H3_PROMPT=== 六段正文，格式不对直接终止；段内 <b>时长：N</b>（英文 <b>Duration：N</b>）决定该段时长，缺失时回退节点「每段视频时长」。</p>
 <p style="margin:4px 0;">🔒 <b>穿透生成段数自动对齐</b>：一律按提示词里实际的 [SHOT_START] 段数生成，<b>「生成视频数量」设定被忽略</b>（不再因两者不一致而终止 / 多生成空占位段），上限 60 段。</p>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">三、素材与参考调度</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">三、素材与参考调度</h4>
 <ul style="padding-left:20px;margin:4px 0;">
 <li>上限：图片 ≤9 / 视频 ≤3 / 音频 ≤3，总参考 ≤12（官方上限）</li>
 <li>素材分区：图片 → 角色 / 场景 / 道具；音频 → 角色音色 / 背景配乐 / 念白</li>
@@ -5724,28 +5724,28 @@ const USAGE_FALLBACK_HTML = `
 <li>用 @素材名 引用，或由调度指令（类型:槽位名）自动匹配</li>
 <li>生成路径固定为<b>多参考（REF2VA）</b>：图片 = 身份参考、音频 = 音色/配乐/念白参考（严格使用你上传的音频文件）；<b>不存在首尾帧 / 首帧（fl2va）路径</b>。视频未被引用时，视频与视频音轨端口自动关闭（避免音频误入音轨通道）</li>
 </ul>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">四、界面按钮</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">四、界面按钮</h4>
 <p style="margin:4px 0;">🎛️ 运行参数设置 ｜ 🎨 视频参数设置 ｜ 📁 参考素材管理 ｜ 🤖 大语言模型配置 ｜ 🎭 采样解码设置 ｜ 🎬 生成视频管理 ｜ ➕ 常用提示词元素 ｜ 🎯 镜头参数预设 ｜ 🎯 参考元素切换 ｜ 📖 节点使用说明</p>
-<p style="margin:4px 0;color:#999;">「🎛️ 运行参数设置」「🎨 视频参数设置」为「🎬 短剧导演台」专用：把运行模式 / 故事风格 / 故事名称、画幅 / 像素 / 时长 / 段数收进面板，节点表面更清爽。</p>
+<p style="margin:4px 0;color:var(--jz-text-dim);">「🎛️ 运行参数设置」「🎨 视频参数设置」为「🎬 短剧导演台」专用：把运行模式 / 故事风格 / 故事名称、画幅 / 像素 / 时长 / 段数收进面板，节点表面更清爽。</p>
 <ul style="padding-left:20px;margin:4px 0;">
 <li><b>保存模式</b>：分段保存（逐段输出接 VHS）/ 拼接保存（合并为一段再输出），仅影响下游 VHS</li>
 <li><b>分段视频自动保存</b>：每段跑完立即 ffmpeg 落盘 mp4，不依赖下游 VHS，中途崩溃不丢已生成段落</li>
 <li><b>分段视频自动合并</b>：把落盘的各段按顺序拼成完整视频（未开自动保存时临时落盘，合并后清理）</li>
 </ul>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">五、采样与解码</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">五、采样与解码</h4>
 <ul style="padding-left:20px;margin:4px 0;">
 <li>采样：res_multistep / euler 等 K 采样器，调度器 simple / karras 等，步数 / CFG / 降噪 / 种子可调</li>
 <li>解码：视频 XB-BOX - VAE解码（原版优化）；音频 VAE解码（音频）</li>
 <li><b>解码前清理</b> 卸载显存模型：每段解码前把采样模型退回内存、腾显存给 VAE 解码（对齐 XB-BOX；代价是下一段要重载模型，分段越多越慢）</li>
 <li>逐段顺序生成：每段「采样 → 解码 → 写入总线 →（可选落盘）」完成后才进入下一段</li>
 </ul>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">六、输出</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">六、输出</h4>
 <ul style="padding-left:20px;margin:4px 0;">
 <li><b>图像</b> IMAGE 列表：每段视频帧（分段保存）或拼接后一段（拼接保存）</li>
 <li><b>音频</b> AUDIO 列表：每段音频（与图像一一对应）</li>
 <li><b>已处理剧本</b> STRING：全部 LLM 处理后的文本</li>
 </ul>
-<h4 style="margin:10px 0 4px;color:var(--fg-color,#eee);">七、常见问题</h4>
+<h4 style="margin:10px 0 4px;color:var(--fg-color,var(--jz-text-strong));">七、常见问题</h4>
 <ul style="padding-left:20px;margin:4px 0;">
 <li>没生成视频？检查 CLIP / VAE / model 是否接好；含视频或音频参考还需接 audio_vae</li>
 <li>⭐ 报 too many values to unpack (expected 3) / 提示「本段未落盘任何视频」？多为<b>视觉 / 音频 VAE 接反</b>，按提示换口即可</li>
@@ -5757,7 +5757,7 @@ const USAGE_FALLBACK_HTML = `
 `;
 
 function renderHelpPanel(c) {
-    const box = el("div", "font-size:13px;line-height:1.7;color:var(--fg-color,#ddd);");
+    const box = el("div", "font-size:13px;line-height:1.7;color:var(--fg-color,var(--jz-text));");
     c.append(box);
     api.fetchApi("/jzl/usage_md")
         .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
@@ -5765,29 +5765,29 @@ function renderHelpPanel(c) {
         .catch(() => { box.innerHTML = USAGE_FALLBACK_HTML; });  // API 不可用时显示内置说明
 
     // 底部：支持与打赏 + 其他仓库 + 联系交流
-    const qrWrap = el("div", "margin-top:18px;border-top:1px solid var(--border-color,#444);padding-top:14px;");
-    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,#eee);margin-bottom:10px;", "💰 支持与打赏"));
-    qrWrap.append(el("div", "font-size:15px;font-weight:700;color:#f5a623;margin-bottom:12px;line-height:1.8;white-space:pre-line;",
+    const qrWrap = el("div", "margin-top:18px;border-top:1px solid var(--border-color,var(--jz-border));padding-top:14px;");
+    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,var(--jz-text-strong));margin-bottom:10px;", "💰 支持与打赏"));
+    qrWrap.append(el("div", "font-size:15px;font-weight:700;color:var(--jz-warn);margin-bottom:12px;line-height:1.8;white-space:pre-line;",
         "本项目使用付费 AI 工具进行开发、调试和测试维护。\n如果这个工具对你有用，帮助到了你，欢迎打赏支持，你的支持将加速开发进度。"));
     const qrRow = el("div", "display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;");
     const qrFiles = [["DS01.png", "微信"], ["DS02.png", "支付宝"]];
     qrFiles.forEach(([f, label]) => {
         const cell = el("div", "flex:1;min-width:200px;text-align:center;");
-        const img = el("img", "width:180px;height:180px;object-fit:contain;background:#fff;border:1px solid var(--border-color,#444);border-radius:8px;");
+        const img = el("img", "width:180px;height:180px;object-fit:contain;background:#fff;border:1px solid var(--border-color,var(--jz-border));border-radius:8px;");
         img.alt = label;
         img.src = api.apiURL(`/jzl/usage_qr/${f}`);
         img.onerror = () => { img.style.display = "none"; };
-        const ph = el("div", "font-size:13px;font-weight:600;color:var(--fg-color,#ddd);margin-top:6px;", label);
+        const ph = el("div", "font-size:13px;font-weight:600;color:var(--fg-color,var(--jz-text));margin-top:6px;", label);
         cell.append(img, ph);
         qrRow.append(cell);
     });
     qrWrap.append(qrRow);
 
     // 我的 ComfyUI 节点仓库
-    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,#eee);margin:16px 0 6px;", "我的 ComfyUI 节点仓库"));
+    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,var(--jz-text-strong));margin:16px 0 6px;", "我的 ComfyUI 节点仓库"));
     const repoRow = el("div", "display:flex;gap:10px;flex-wrap:wrap;");
     const mkRepo = (label, url) => {
-        const a = el("a", "display:inline-block;background:#2a4a6a;color:#cfe3f7;border:1px solid #5b9bd5;border-radius:6px;padding:7px 14px;font-size:12px;text-decoration:none;cursor:pointer;", label);
+        const a = el("a", "display:inline-block;background:var(--jz-accent-bg);color:var(--jz-on-accent);border:1px solid #5b9bd5;border-radius:6px;padding:7px 14px;font-size:12px;text-decoration:none;cursor:pointer;", label);
         a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer";
         a.addEventListener("mousedown", (e) => e.stopPropagation());
         return a;
@@ -5799,7 +5799,7 @@ function renderHelpPanel(c) {
     qrWrap.append(repoRow);
 
     // 模型与工作流下载
-    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,#eee);margin:16px 0 6px;", "模型与工作流下载"));
+    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,var(--jz-text-strong));margin:16px 0 6px;", "模型与工作流下载"));
     const dlRow = el("div", "display:flex;gap:10px;flex-wrap:wrap;");
     dlRow.append(
         mkRepo("🟢机制罗的模型总仓库", "https://pan.quark.cn/s/6ec0a5f56d08"),
@@ -5808,11 +5808,11 @@ function renderHelpPanel(c) {
     qrWrap.append(dlRow);
 
     // 联系与交流
-    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,#eee);margin:16px 0 6px;", "📮 联系与交流"));
+    qrWrap.append(el("div", "font-size:13px;font-weight:600;color:var(--fg-color,var(--jz-text-strong));margin:16px 0 6px;", "📮 联系与交流"));
     const bili = mkRepo("B站主页：space.bilibili.com/302329373", "https://space.bilibili.com/302329373");
     bili.style.background = "#2a3a5a";
     qrWrap.append(bili);
-    const qqRow = el("div", "display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--descrip-text,#999);line-height:1.8;margin-top:4px;");
+    const qqRow = el("div", "display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--descrip-text,var(--jz-text-dim));line-height:1.8;margin-top:4px;");
     qqRow.append(el("span", "", "⚡️充电股东群：136812541"));
     qqRow.append(el("span", "", "🤖QQ交流群1：231033995"));
     qqRow.append(el("span", "", "🤖QQ交流群2：56798547"));
@@ -5853,16 +5853,16 @@ function renderVideoManagerPanel(c, node, settings, d) {
         const nameRow = field("输出名称", nameInp);
         nameRow.title = "换人成片与各分段都落在 output/jzl/{输出名称}/";
         c.append(nameRow);
-        c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.6;",
+        c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.6;",
             "落盘目录：output/jzl/{输出名称}/。「生成视频查看器」读同名文件夹即可看到本批结果。"));
     }
     // ── 保存模式：默认「分段保存」，可勾选「拼接保存」「拼接保存后删除分段视频」──
     if (!settings.save) settings.save = { mode: "分段保存", auto_save: false, auto_merge: false, auto_merge_delete: false };
     const save = settings.save;
     const saveBox = el("div", "display:flex;align-items:center;gap:10px;margin:0 0 4px;flex-wrap:wrap;");
-    saveBox.append(el("span", "font-size:12px;color:var(--fg-color,#ccc);white-space:nowrap;", "保存模式"));
+    saveBox.append(el("span", "font-size:12px;color:var(--fg-color,var(--jz-text));white-space:nowrap;", "保存模式"));
     const mkCb = (text, title) => {
-        const lab = el("label", "display:flex;align-items:center;gap:4px;font-size:12px;color:var(--fg-color,#ddd);white-space:nowrap;cursor:pointer;");
+        const lab = el("label", "display:flex;align-items:center;gap:4px;font-size:12px;color:var(--fg-color,var(--jz-text));white-space:nowrap;cursor:pointer;");
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.style.cssText = "width:15px;height:15px;accent-color:#f59e0b;cursor:pointer;";
@@ -5890,23 +5890,23 @@ function renderVideoManagerPanel(c, node, settings, d) {
     syncDel();
     saveBox.append(seg.lab, mer.lab, del.lab);
     c.append(saveBox);
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:0 0 10px 56px;line-height:1.6;",
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 10px 56px;line-height:1.6;",
         "Max 恒定：每段【调度→编码→采样→解码】完成立即 ffmpeg 落盘 output/jzl/{故事名}/ 并释放显存/内存（跑 N 段与 1 段占用不叠加）。分段保存为必选项（恒保留本批各段）；勾选拼接保存=生成后另把本批分段读盘 concat 合并为一个完整视频；再勾选删除分段=合并成功后清理本批各分段 mp4。"));
 
     // ── 📥 加载视频：自动识别（跟随节点故事名）/ 选择已识别文件夹，6 列宫格 ──
     const top = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;");
-    top.append(el("span", "font-size:13px;font-weight:600;color:var(--fg-color,#eee);white-space:nowrap;", "📥 加载视频"));
+    top.append(el("span", "font-size:13px;font-weight:600;color:var(--fg-color,var(--jz-text-strong));white-space:nowrap;", "📥 加载视频"));
     const sel = document.createElement("select");
-    sel.style.cssText = "min-width:200px;max-width:360px;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 8px;font-size:12px;";
+    sel.style.cssText = "min-width:200px;max-width:360px;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px 8px;font-size:12px;";
     sel.title = "自动识别=跟随节点「故事名称」自动对齐加载；或选择已识别到的故事文件夹";
     sel.addEventListener("mousedown", (e) => e.stopPropagation());
     sel.addEventListener("change", () => refresh && refresh());
-    const rf = el("button", "background:#2a4a6a;color:#cfe3f7;border:1px solid #5b9bd5;border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer;", "🔄 刷新目录");
+    const rf = el("button", "background:var(--jz-accent-bg);color:var(--jz-on-accent);border:1px solid #5b9bd5;border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer;", "🔄 刷新目录");
     rf.title = "刷新视频列表（按当前加载的故事文件夹）";
     rf.addEventListener("mousedown", (e) => e.stopPropagation());
     rf.addEventListener("click", () => { say("正在刷新…"); refresh && refresh(); });
     top.append(sel, rf);
-    top.append(el("span", "font-size:11px;color:var(--descrip-text,#999);", "目录：output/jzl/{故事名}/（每行 6 列）"));
+    top.append(el("span", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));", "目录：output/jzl/{故事名}/（每行 6 列）"));
     c.append(top);
     // 6 列宫格（行数按视频数量自动换行，行高自适应）
     const grid = el("div", "display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;align-content:start;min-height:120px;");
@@ -5917,7 +5917,7 @@ function renderVideoManagerPanel(c, node, settings, d) {
         const sn = autoMode ? getStory() : String(sel.value || "").trim();
         grid.innerHTML = "";
         if (!sn) {
-            grid.append(el("div", "font-size:12px;color:#888;padding:8px;grid-column:1/-1;", autoMode ? "自动识别：请在节点「故事名称」填写故事名，将自动对齐加载该故事的视频" : "请从上方下拉选择已识别到的故事文件夹，或先跑一次「Max」生成"));
+            grid.append(el("div", "font-size:12px;color:var(--jz-text-dim);padding:8px;grid-column:1/-1;", autoMode ? "自动识别：请在节点「故事名称」填写故事名，将自动对齐加载该故事的视频" : "请从上方下拉选择已识别到的故事文件夹，或先跑一次「Max」生成"));
             return;
         }
         try {
@@ -5925,24 +5925,24 @@ function renderVideoManagerPanel(c, node, settings, d) {
             const data = await resp.json().catch(() => ({}));
             const vids = (data && data.ok && data.videos) || [];
             if (!vids.length) {
-                grid.append(el("div", "font-size:12px;color:#888;padding:8px;grid-column:1/-1;", `output/jzl/${(data && data.story) || sn}/ 下暂无 mp4（运行一次「Max」生成后即会即时落盘）。`));
+                grid.append(el("div", "font-size:12px;color:var(--jz-text-dim);padding:8px;grid-column:1/-1;", `output/jzl/${(data && data.story) || sn}/ 下暂无 mp4（运行一次「Max」生成后即会即时落盘）。`));
                 return;
             }
             vids.forEach((v) => {
-                const card = el("div", "cursor:pointer;border-radius:6px;border:1px solid #333;background:#111;overflow:hidden;");
+                const card = el("div", "cursor:pointer;border-radius:6px;border:1px solid var(--jz-border);background:var(--jz-inset);overflow:hidden;");
                 card.title = `${v.name}\n（点击预览播放）`;
                 const im = document.createElement("img");
                 im.style.cssText = "width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000;";
                 im.src = api.apiURL(`/jzl/video_thumb?path=${encodeURIComponent(v.path)}`);
                 im.onerror = () => { im.remove(); const ic = el("div", "width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;font-size:24px;background:#000;", "🎬"); card.insertBefore(ic, card.firstChild); };
-                const lb = el("div", "font-size:10px;color:#cdd8e2;text-align:center;padding:4px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", v.name);
+                const lb = el("div", "font-size:10px;color:var(--jz-info);text-align:center;padding:4px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", v.name);
                 card.append(im, lb);
                 card.addEventListener("mousedown", (e) => e.stopPropagation());
                 card.addEventListener("click", () => { if (v.path) showVideoPreview(v.path); });
                 grid.append(card);
             });
         } catch (e) {
-            grid.append(el("div", "font-size:12px;color:#e08a8a;padding:8px;grid-column:1/-1;", `加载失败：${(e && e.message) || e}`));
+            grid.append(el("div", "font-size:12px;color:var(--jz-error);padding:8px;grid-column:1/-1;", `加载失败：${(e && e.message) || e}`));
         }
     };
 
@@ -5991,7 +5991,7 @@ function mdToHtml(md) {
     for (const raw of lines) {
         const t = raw.trim();
         if (t.startsWith("```")) {
-            if (inCode) { html += "<pre style='background:var(--comfy-input-bg,#1d1d1d);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;line-height:1.5;'>" + esc(codeBuf.join("\n")) + "</pre>\n"; codeBuf = []; inCode = false; }
+            if (inCode) { html += "<pre style='background:var(--comfy-input-bg,var(--jz-bg));padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;line-height:1.5;'>" + esc(codeBuf.join("\n")) + "</pre>\n"; codeBuf = []; inCode = false; }
             else { closeUl(); inCode = true; }
             continue;
         }
@@ -6000,7 +6000,7 @@ function mdToHtml(md) {
         if (/^#{1,6}\s/.test(t)) {
             closeUl();
             const lvl = t.match(/^#+/)[0].length;
-            html += `<h${lvl} style="margin:14px 0 6px;font-size:${lvl === 1 ? 18 : 15}px;font-weight:700;color:var(--fg-color,#eee);border-bottom:1px solid var(--border-color,#444);padding-bottom:3px;">${inline(t.replace(/^#+\s*/, ""))}</h${lvl}>\n`;
+            html += `<h${lvl} style="margin:14px 0 6px;font-size:${lvl === 1 ? 18 : 15}px;font-weight:700;color:var(--fg-color,var(--jz-text-strong));border-bottom:1px solid var(--border-color,var(--jz-border));padding-bottom:3px;">${inline(t.replace(/^#+\s*/, ""))}</h${lvl}>\n`;
             continue;
         }
         if (/^[-*]\s/.test(t)) {
@@ -6011,7 +6011,7 @@ function mdToHtml(md) {
         closeUl();
         html += `<p style="margin:6px 0;">${inline(t)}</p>\n`;
     }
-    if (inCode) html += "<pre style='background:var(--comfy-input-bg,#1d1d1d);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;line-height:1.5;'>" + esc(codeBuf.join("\n")) + "</pre>\n";
+    if (inCode) html += "<pre style='background:var(--comfy-input-bg,var(--jz-bg));padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;line-height:1.5;'>" + esc(codeBuf.join("\n")) + "</pre>\n";
     closeUl();
     return html;
 }
@@ -6024,7 +6024,7 @@ function buildModal(node, data, panelId) {
 
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:9999;display:flex;align-items:center;justify-content:center;overflow:auto;");
     // 固定为最大高度：切换面板时窗口尺寸不跳动；内容不足时底部留空（panelBox 仍是 flex:1）
-    const dialog = el("section", "background:#1c1c1e;border:1px solid #333;border-radius:8px;width:820px;"
+    const dialog = el("section", "background:var(--jz-bg);border:1px solid var(--jz-border);border-radius:8px;width:820px;"
         + "height:90vh;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.6);flex:0 0 auto;");
     dialog.className = "jzl-modal";
     dialog.setAttribute("role", "dialog");
@@ -6032,9 +6032,9 @@ function buildModal(node, data, panelId) {
     dialog.setAttribute("aria-label", title);
 
     // 头部
-    const header = el("div", "padding:20px;border-bottom:1px solid var(--border-color,#444);");
-    header.append(el("div", "font-size:18px;font-weight:700;color:var(--fg-color,#eee);", title));
-    header.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin-top:5px;", "根据本地环境配置参数，保存后重新执行节点生效。"));
+    const header = el("div", "padding:20px;border-bottom:1px solid var(--border-color,var(--jz-border));");
+    header.append(el("div", "font-size:18px;font-weight:700;color:var(--fg-color,var(--jz-text-strong));", title));
+    header.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin-top:5px;", "根据本地环境配置参数，保存后重新执行节点生效。"));
     dialog.append(header);
 
     // 单面板内容：flex:1 + min-height:0 → 始终占满 dialog 剩余高度，面板之间切换不改变窗口大小
@@ -6108,11 +6108,11 @@ function buildModal(node, data, panelId) {
 
     // 底部
     const error = el("div", "color:#e55;font-size:12px;margin:0 20px;min-height:16px;");
-    const footer = el("div", "padding:15px 20px;border-top:1px solid var(--border-color,#444);display:flex;justify-content:flex-end;gap:10px;background:#18181a;border-bottom-left-radius:8px;border-bottom-right-radius:8px;");
-    const cancelBtn = el("button", "background:transparent;border:1px solid var(--border-color,#555);color:#fff;border-radius:4px;padding:8px 20px;font-size:14px;cursor:pointer;", "取消");
-    const saveBtn = el("button", "background:#2d5a88;color:#fff;border:none;border-radius:4px;padding:8px 20px;font-size:14px;font-weight:600;cursor:pointer;", "💾 保存");
+    const footer = el("div", "padding:15px 20px;border-top:1px solid var(--border-color,var(--jz-border));display:flex;justify-content:flex-end;gap:10px;background:var(--jz-inset);border-bottom-left-radius:8px;border-bottom-right-radius:8px;");
+    const cancelBtn = el("button", "background:transparent;border:1px solid var(--border-color,var(--jz-border));color:var(--jz-text);border-radius:4px;padding:8px 20px;font-size:14px;cursor:pointer;", "取消");
+    const saveBtn = el("button", "background:var(--jz-btn-primary);color:var(--jz-on-accent);border:none;border-radius:4px;padding:8px 20px;font-size:14px;font-weight:600;cursor:pointer;", "💾 保存");
     // 自动保存：统一移到弹窗底部，与「取消/保存」同行并靠左（样式与其他勾选框一致）
-    const autoSaveRow = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,#999);cursor:pointer;");
+    const autoSaveRow = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
     const autoSaveCb = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
     autoSaveCb.type = "checkbox";
     autoSaveCb.checked = settings.auto_save !== false;
@@ -6128,7 +6128,7 @@ function buildModal(node, data, panelId) {
     footer.append(footerLeft, cancelBtn, saveBtn);
     // 「清除」按钮（仅参考素材管理面板显示）：一键清空所有素材，需二次弹窗确认
     if (panelId === "assets") {
-        const clearBtn = el("button", "background:#7a2a2a;color:#ffd0d0;border:1px solid #a44;border-radius:4px;padding:8px 18px;font-size:14px;font-weight:600;cursor:pointer;", "🗑 清除");
+        const clearBtn = el("button", "background:var(--jz-tint-error);color:var(--jz-error);border:1px solid #a44;border-radius:4px;padding:8px 18px;font-size:14px;font-weight:600;cursor:pointer;", "🗑 清除");
         clearBtn.title = "一键清除所有已添加的素材（图片/视频/音频），需二次确认";
         clearBtn.addEventListener("click", () => {
             confirmClearAssets(async () => {
@@ -6434,19 +6434,19 @@ function setupSwapNode(self) {
         btn.textContent = b.label;
         btn.style.cssText = ["width:100%;", `height:${btnH}px;`, "box-sizing:border-box;",
             "display:flex;", "align-items:center;", "justify-content:center;",
-            "border-radius:6px;", "border:2px solid #5b9bd5;", "background:#3a3a3a;",
-            "color:#eee;", "font-size:14px;", "cursor:pointer;", "white-space:nowrap;",
+            "border-radius:6px;", "border:2px solid #5b9bd5;", "background:var(--jz-border);",
+            "color:var(--jz-text-strong);", "font-size:14px;", "cursor:pointer;", "white-space:nowrap;",
             "overflow:hidden;", "text-overflow:ellipsis;"].join("");
         btn.addEventListener("mousedown", (e) => e.stopPropagation());
         btn.addEventListener("mouseenter", () => { btn.style.background = "#4a4a4a"; });
-        btn.addEventListener("mouseleave", () => { btn.style.background = "#3a3a3a"; });
+        btn.addEventListener("mouseleave", () => { btn.style.background = "var(--jz-border)"; });
         btn.addEventListener("click", () => openModal(self, b.panel));
         grid.appendChild(btn);
     }
     container.appendChild(grid);
 
     // 两行方案信息（只读）：第 1 行＝画布/段长/衔接；第 2 行＝音频/二采/采样/输出名称
-    const infoRow = el("div", "flex:0 0 auto;font-size:11px;color:#c9a86a;line-height:1.55;white-space:pre-line;"
+    const infoRow = el("div", "flex:0 0 auto;font-size:11px;color:var(--jz-warn);line-height:1.55;white-space:pre-line;"
         + "overflow:hidden;min-height:28px;word-break:break-all;", "");
     infoRow.title = "当前方案（只读）：画布 / 每段帧数 / 分段衔接 / 音频 / 二采 / 采样步数 / 输出名称 —— 在四个按钮面板里修改";
     infoRow.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -6455,7 +6455,7 @@ function setupSwapNode(self) {
 
     // ── 提示词（DOM textarea，flex:1 占满剩余高度；隐藏原生 prompt widget 由这里代理）──
     // 与导演台同一套做法：原生 widget 的渲染高度跟着节点乱跳，改成自己的 textarea 才能「跟着节点变高」。
-    const promptLabel = el("div", "flex:0 0 auto;font-size:12px;color:#bbb;", "📝 提示词");
+    const promptLabel = el("div", "flex:0 0 auto;font-size:12px;color:var(--jz-text-dim);", "📝 提示词");
     promptLabel.title = "换人提示词。占位符：{seg} 本段序号 / {total} 总段数 / {start} 起始帧 / {frames} 本段帧数";
     promptLabel.addEventListener("mousedown", (e) => e.stopPropagation());
     container.appendChild(promptLabel);
@@ -6468,7 +6468,7 @@ function setupSwapNode(self) {
     promptTa.placeholder = "用 ===H3_PROMPT=== 结构写：subject_definitions 里定义 <Subject 1> = <Picture 1>，"
         + "retention_analysis 写明「长相/服装换 <Picture 1>、动作/场景保留 <Video 1>」…";
     promptTa.style.cssText = "width:100%;height:100%;box-sizing:border-box;resize:none;"
-        + "background:#2a2a2a;color:#ddd;border:1px solid #444;border-radius:4px;"
+        + "background:var(--jz-bg-raise);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;"
         + "padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;overflow-y:auto;white-space:pre-wrap;";
     promptTa.addEventListener("mousedown", (e) => e.stopPropagation());
     promptWrap.appendChild(promptTa);
@@ -6552,7 +6552,7 @@ function setupSwapNode(self) {
         const sd = s.sample_decode || {};
         const seam = sd.seam || {};
         const sec = sd.second || {};
-        const dv = (x) => `<span style="color:#9fd6a4">${x}</span>`;
+        const dv = (x) => `<span style="color:var(--jz-ok)">${x}</span>`;
         const ar = String(gp.aspect_ratio || "跟随源片（推荐）");
         let canvasTxt = "跟随源片";
         if (!ar.startsWith("跟随源片")) {
@@ -6769,14 +6769,14 @@ app.registerExtension({
                     "width:100%;", `height:${btnH}px;`, "box-sizing:border-box;",
                     "display:flex;", "align-items:center;", "justify-content:center;",
                     "border-radius:6px;", "border:2px solid #5b9bd5;",
-                    "background:#3a3a3a;", "color:#eee;", `font-size:${btnFont}px;`,
+                    "background:var(--jz-border);", "color:var(--jz-text-strong);", `font-size:${btnFont}px;`,
                     "cursor:pointer;", "white-space:nowrap;", "overflow:hidden;", "text-overflow:ellipsis;",
                 ].join("");
                 if (b.widget === "btn_align") { btn.dataset.alignBtn = "1"; self.__btnAlign = btn; }
                 if (b.span) btn.style.gridColumn = `span ${b.span}`;   // 生成设定 / 视频参数：各占半排
                 btn.addEventListener("mousedown", (e) => e.stopPropagation());
                 btn.addEventListener("mouseenter", () => { if (btn.dataset.alignBtn) self.__alignBtnBg?.(true); else btn.style.background = "#4a4a4a"; });
-                btn.addEventListener("mouseleave", () => { if (btn.dataset.alignBtn) self.__alignBtnBg?.(false); else btn.style.background = "#3a3a3a"; });
+                btn.addEventListener("mouseleave", () => { if (btn.dataset.alignBtn) self.__alignBtnBg?.(false); else btn.style.background = "var(--jz-border)"; });
                 btn.addEventListener("click", () => {
                     if (b.panel === "prompt_elements") { showPromptElements(self); return; }
                     if (b.panel === "align") { toggleAlignPrompt(self); return; }
@@ -6790,13 +6790,13 @@ app.registerExtension({
             if (isShortDrama) {
                 // 🎬 短剧导演台：把「生成设定」三项（运行模式/风格/故事名）与「生成详情」显示在节点上
                 // （这些参数在节点表面的原生 widget 已隐藏，改由面板设置、这里只读展示）
-                const genRow = el("div", "flex:0 0 auto;font-size:11px;color:#9fb8d6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:14px;", "");
+                const genRow = el("div", "flex:0 0 auto;font-size:11px;color:var(--jz-info);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:14px;", "");
                 genRow.title = "生成设定（运行模式 / 故事风格 / 故事名称）—— 在「🎛️ 运行参数设置」面板里修改";
                 genRow.addEventListener("mousedown", (e) => e.stopPropagation());
                 container.appendChild(genRow);
                 self.__jzlGenRow = genRow;
 
-                const detailRow = el("div", "flex:0 0 auto;font-size:11px;color:#c9a86a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:14px;", "");
+                const detailRow = el("div", "flex:0 0 auto;font-size:11px;color:var(--jz-warn);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:14px;", "");
                 detailRow.title = "生成详情（分辨率 / 每段帧数 / 段数 / 成片总长），只读显示";
                 detailRow.addEventListener("mousedown", (e) => e.stopPropagation());
                 container.appendChild(detailRow);
@@ -6804,8 +6804,8 @@ app.registerExtension({
             }
 
             // 生成信息状态行（实时显示，纯只读；值用绿色高亮；参数保存后自动同步）
-            const _jzlValColor = "#9fd6a4";  // 结果值高亮色（区别于标签）
-            infoRow = el("div", "flex:0 0 auto;font-size:11px;color:#c9a86a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:14px;", "");
+            const _jzlValColor = "var(--jz-ok)";  // 结果值高亮色（区别于标签）
+            infoRow = el("div", "flex:0 0 auto;font-size:11px;color:var(--jz-warn);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:14px;", "");
             infoRow.title = "当前生成配置（LLM语言/后端/增强 + 采样步数/二采/采样种子），只读显示";
             infoRow.addEventListener("mousedown", (e) => e.stopPropagation());
             container.appendChild(infoRow);
@@ -6856,9 +6856,9 @@ app.registerExtension({
 
             // 提示词：内部编辑窗口（DOM 富文本 @ 着色）。可接外部：用节点顶部「提示词·接线」输入框（同 CLIP Text Encode 的左上圆点）连上游文本，连线后以上游为准。
             // 📝 提示词标签行：左侧标签/状态，右端放「复制 / 放大编辑」按钮（在框外，不遮挡正文）
-            const promptLabel = el("div", "flex:0 0 auto;display:flex;align-items:center;gap:8px;font-size:12px;color:#bbb;", "📝 提示词（用 @ 引用素材）");
+            const promptLabel = el("div", "flex:0 0 auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--jz-text-dim);", "📝 提示词（用 @ 引用素材）");
             const alignStatus = el("span", "font-size:11px;margin-left:8px;", "");
-            const extStatus = el("span", "font-size:11px;margin-left:8px;color:#8a9fb8;white-space:nowrap;", "⇶ 可接上游文本");
+            const extStatus = el("span", "font-size:11px;margin-left:8px;color:var(--jz-info);white-space:nowrap;", "⇶ 可接上游文本");
             extStatus.title = "提示词接线：把上游 STRING 文本节点输出拖到节点顶部「提示词·接线」输入框（左上角官方圆点，同 CLIP Text Encode）；连线后运行以上游文本为提示词（未接时用本框内容）";
             // 🎬 短剧导演台已移除「提示词·接线」，不再显示接线角标
             if (isShortDrama) promptLabel.append(alignStatus);
@@ -6869,7 +6869,7 @@ app.registerExtension({
             promptBox.spellcheck = false;
             promptBox.dataset.placeholder = "输入故事/剧本提示词，用 @ 引用素材…";
             promptBox.innerText = ipWidget?.value ?? "";
-            promptBox.style.cssText = "width:100%;flex:1 1 auto;min-height:60px;box-sizing:border-box;background:#2a2a2a;color:#ddd;border:1px solid #444;border-radius:4px;padding:6px 8px;font-size:12px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;";
+            promptBox.style.cssText = "width:100%;flex:1 1 auto;min-height:60px;box-sizing:border-box;background:var(--jz-bg-raise);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;padding:6px 8px;font-size:12px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;";
             promptBox.addEventListener("mousedown", (e) => e.stopPropagation());
             // 右上角悬浮：复制全部文本 / 放大编辑
             const promptWrap = el("div", "position:relative;flex:1 1 auto;display:flex;flex-direction:column;min-height:60px;");
@@ -6880,9 +6880,9 @@ app.registerExtension({
             promptWrap.appendChild(promptBox);
             // 复制 / 放大编辑：放到标签行右端（框外右上角），不再悬浮在框内遮挡正文
             const pActions = el("div", "display:flex;gap:4px;margin-left:auto;z-index:6;");
-            const pCopy = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "📋");
+            const pCopy = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid var(--jz-border);background:var(--jz-float);color:var(--jz-text);font-size:12px;cursor:pointer;line-height:1;padding:0;", "📋");
             pCopy.title = "复制全部文本";
-            const pZoom = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid #555;background:rgba(30,30,30,.92);color:#ccc;font-size:12px;cursor:pointer;line-height:1;padding:0;", "⛶");
+            const pZoom = el("button", "width:22px;height:22px;border-radius:4px;border:1px solid var(--jz-border);background:var(--jz-float);color:var(--jz-text);font-size:12px;cursor:pointer;line-height:1;padding:0;", "⛶");
             pZoom.title = "放大编辑（打开大界面）";
             pActions.append(pCopy, pZoom);
             promptLabel.appendChild(pActions);
@@ -6910,21 +6910,21 @@ app.registerExtension({
                     const _t = _on ? "⇶ 外部提示词已接入（输入框已锁定）" : "⇶ 可接上游文本";
                     if (extStatus.textContent !== _t) {
                         extStatus.textContent = _t;
-                        extStatus.style.color = _on ? "#6fce8a" : "#8a9fb8";
+                        extStatus.style.color = _on ? "#6fce8a" : "var(--jz-info)";
                     }
                     // 接入外部提示词 → 节点内大提示词框锁定不可编辑（以上游文本为准）；断开「提示词·接线」后恢复
                     if (promptBox.isContentEditable === _on) {
                         if (_on) {
                             promptBox.contentEditable = "false";
                             promptBox.style.background = "#202020";
-                            promptBox.style.color = "#8a8a8a";
+                            promptBox.style.color = "var(--jz-text-dim)";
                             promptBox.style.cursor = "not-allowed";
                             promptBox.title = "已接入外部提示词：本框锁定不可编辑（以上游文本为准）；断开「提示词·接线」后可恢复";
                             try { promptBox.blur(); } catch (_b) {}
                         } else {
                             promptBox.contentEditable = "true";
-                            promptBox.style.background = "#2a2a2a";
-                            promptBox.style.color = "#ddd";
+                            promptBox.style.background = "var(--jz-bg-raise)";
+                            promptBox.style.color = "var(--jz-text)";
                             promptBox.style.cursor = "";
                             promptBox.title = "";
                         }
@@ -6947,7 +6947,7 @@ app.registerExtension({
                 const b = self.__btnAlign;
                 if (!b) return;
                 const ref = self.__jzlAlignMode !== "text";
-                b.style.background = ref ? (hover ? "#e8930c" : "#d97706") : (hover ? "#4a4a4a" : "#3a3a3a");
+                b.style.background = ref ? (hover ? "#e8930c" : "#d97706") : (hover ? "#4a4a4a" : "var(--jz-border)");
                 b.style.borderColor = ref ? "#f59e0b" : "#5b9bd5";
             };
             const updateAlignStatus = () => {
@@ -7040,7 +7040,7 @@ app.registerExtension({
 
             // 资产显示窗（缩略图墙，点击插入 @引用；自动换行，多行时节点同步增高）
             // 高度上限 180px：超出后**本窗自己滚动**（避免素材一多就把整个节点顶高、也不给节点加滚动条）
-            const windowTitle = el("div", "flex:0 0 auto;font-size:12px;color:#bbb;margin-top:2px;", "📁 资产显示窗（点击插入）");
+            const windowTitle = el("div", "flex:0 0 auto;font-size:12px;color:var(--jz-text-dim);margin-top:2px;", "📁 资产显示窗（点击插入）");
             const windowBox = el("div", "min-height:30px;max-height:180px;overflow-y:auto;overflow-x:hidden;flex:0 0 auto;scrollbar-width:thin;");
             enableWheelScroll(windowBox);   // Nodes 2.0：滚轮归本窗
             const resizeNodeForContent = () => {
@@ -7627,19 +7627,19 @@ function openFilePreview(rel, name, ext) {
         const q = `/jzl/fs_download?path=${encodeURIComponent(rel)}${inline ? "&inline=1" : ""}`;
         return (api && api.apiURL) ? api.apiURL(q) : q;
     };
-    const mkBtn = (label, bg, fg) => el("button", `height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "#3a3a3a"};color:${fg || "#eee"};font-size:12px;cursor:pointer;`, label);
+    const mkBtn = (label, bg, fg) => el("button", `height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "var(--jz-border)"};color:${fg || "var(--jz-text-strong)"};font-size:12px;cursor:pointer;`, label);
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:100001;display:flex;align-items:center;justify-content:center;overflow:auto;");
     overlay.classList.add("jzl-fspreview");
-    const box = el("div", "max-width:94vw;max-height:92vh;background:#1c1c1e;border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:10px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.6);");
+    const box = el("div", "max-width:94vw;max-height:92vh;background:var(--jz-bg);border:1px solid var(--jz-border);border-radius:8px;display:flex;flex-direction:column;padding:10px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.6);");
     const head = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;");
-    head.appendChild(el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#eee;", name));
-    const dl = mkBtn("⬇️ 下载", "#2a4a6a", "#cfe3f7");
+    head.appendChild(el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--jz-text-strong);", name));
+    const dl = mkBtn("⬇️ 下载", "var(--jz-accent-bg)", "#cfe3f7");
     dl.addEventListener("click", () => window.open(_u(false), "_blank"));
     const close = mkBtn("关闭");
     close.addEventListener("click", () => overlay.remove());
     head.append(dl, close);
     box.appendChild(head);
-    const body = el("div", "flex:1 1 auto;min-height:0;max-height:84vh;overflow:auto;display:flex;align-items:center;justify-content:center;background:#111;border-radius:6px;padding:6px;box-sizing:border-box;");
+    const body = el("div", "flex:1 1 auto;min-height:0;max-height:84vh;overflow:auto;display:flex;align-items:center;justify-content:center;background:var(--jz-inset);border-radius:6px;padding:6px;box-sizing:border-box;");
     box.appendChild(body);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -7672,7 +7672,7 @@ function openFilePreview(rel, name, ext) {
     } else if (txtExt.includes(ext)) {
         body.style.alignItems = "flex-start";
         body.style.justifyContent = "flex-start";
-        const pre = el("pre", "margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;color:#ddd;width:100%;");
+        const pre = el("pre", "margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;color:var(--jz-text);width:100%;");
         pre.textContent = "加载中…";
         body.appendChild(pre);
         api.fetchApi(`/jzl/fs_read?path=${encodeURIComponent(rel)}`)
@@ -7697,36 +7697,36 @@ function openOutputBrowser(startRel) {
     let cur = String(startRel || "").replace(/^\/+|\/+$/g, "");
     let parent = "";
     const picked = new Set();   // 勾选的文件（rel）→ 批量打包下载；切目录后保留
-    const mkBtn = (label, bg, fg) => el("button", `flex:0 0 auto;height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "#3a3a3a"};color:${fg || "#eee"};font-size:12px;cursor:pointer;`, label);
+    const mkBtn = (label, bg, fg) => el("button", `flex:0 0 auto;height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "var(--jz-border)"};color:${fg || "var(--jz-text-strong)"};font-size:12px;cursor:pointer;`, label);
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100000;display:flex;align-items:center;justify-content:center;overflow:auto;");
     overlay.classList.add("jzl-fsbrowser");
-    const box = el("div", "width:880px;max-width:94vw;max-height:92vh;background:var(--comfy-menu-bg,#242424);border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
+    const box = el("div", "width:880px;max-width:94vw;max-height:92vh;background:var(--comfy-menu-bg,#242424);border:1px solid var(--jz-border);border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
     const head = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;");
-    head.appendChild(el("span", "font-size:14px;font-weight:600;color:#eee;white-space:nowrap;", "📁 输出目录"));
-    const pathBox = el("span", "flex:1 1 140px;min-width:0;font-size:12px;color:#9fd6a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "");
+    head.appendChild(el("span", "font-size:14px;font-weight:600;color:var(--jz-text-strong);white-space:nowrap;", "📁 输出目录"));
+    const pathBox = el("span", "flex:1 1 140px;min-width:0;font-size:12px;color:var(--jz-ok);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "");
     const upBtn = mkBtn("⬆️ 上级");
     const refreshBtn2 = mkBtn("🔄 刷新");
-    const sysBtn = mkBtn("🖥️ 资源管理器", "#2a4a6a", "#cfe3f7");
+    const sysBtn = mkBtn("🖥️ 资源管理器", "var(--jz-accent-bg)", "#cfe3f7");
     sysBtn.title = "在服务器本机用系统文件管理器打开（仅桌面环境；云机/无桌面会提示，请直接用下方列表浏览）";
     const closeBtn = mkBtn("关闭");
     head.append(pathBox, upBtn, refreshBtn2, sysBtn, closeBtn);
     // 批量下载条（勾选框在同一排右侧）：勾选文件 → 打包成一个 zip 下载（云机不用装任何东西）
-    const batchRow = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;padding:6px 8px;border:1px solid #3a4a5a;border-radius:5px;background:#1d2530;");
+    const batchRow = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;padding:6px 8px;border:1px solid #3a4a5a;border-radius:5px;background:var(--jz-panel-2);");
     const selAllCb = document.createElement("input");
     selAllCb.type = "checkbox";
     selAllCb.style.cssText = "flex:0 0 auto;width:14px;height:14px;cursor:pointer;accent-color:#5b9bd5;";
     selAllCb.title = "全选 / 取消全选（本目录所有文件）";
-    const selLabel = el("span", "flex:0 0 auto;font-size:12px;color:#cfe3f7;cursor:pointer;", "全选本目录");
-    const countLabel = el("span", "flex:1 1 auto;min-width:0;font-size:12px;color:#9fd6a4;", "已选 0 个文件");
+    const selLabel = el("span", "flex:0 0 auto;font-size:12px;color:var(--jz-info);cursor:pointer;", "全选本目录");
+    const countLabel = el("span", "flex:1 1 auto;min-width:0;font-size:12px;color:var(--jz-ok);", "已选 0 个文件");
     const clearBtn = mkBtn("✖️ 清空");
     const zipBtn = mkBtn("⬇️ 批量下载（打包 zip）", "#2f6b46", "#dff5e6");
     zipBtn.title = "把勾选的文件打包成一个 zip 下载（视频不重复压缩，只做拷贝）";
     batchRow.append(selAllCb, selLabel, countLabel, clearBtn, zipBtn);
     box.appendChild(head);
     box.appendChild(batchRow);
-    const list = el("div", "flex:1 1 auto;overflow-y:auto;min-height:140px;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;");
+    const list = el("div", "flex:1 1 auto;overflow-y:auto;min-height:140px;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:6px;");
     box.appendChild(list);
-    box.appendChild(el("div", "font-size:11px;color:#888;margin-top:6px;white-space:pre-wrap;", "勾选文件后可「批量下载」成一个 zip；文本文件（.txt/.json/.md/.csv/.srt/.log）可在线「编辑」并保存；点文件名可预览。云机无需系统文件管理器。"));
+    box.appendChild(el("div", "font-size:11px;color:var(--jz-text-dim);margin-top:6px;white-space:pre-wrap;", "勾选文件后可「批量下载」成一个 zip；文本文件（.txt/.json/.md/.csv/.srt/.log）可在线「编辑」并保存；点文件名可预览。云机无需系统文件管理器。"));
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
@@ -7790,8 +7790,8 @@ function openOutputBrowser(startRel) {
             const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;cursor:pointer;");
             row.addEventListener("mouseenter", () => { row.style.background = "#242424"; });
             row.addEventListener("mouseleave", () => { row.style.background = ""; });
-            row.append(el("span", "flex:0 0 auto;font-size:13px;color:#ffd98a;", "📁"),
-                el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#ddd;", dd.name),
+            row.append(el("span", "flex:0 0 auto;font-size:13px;color:var(--jz-warn);", "📁"),
+                el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--jz-text);", dd.name),
                 el("span", "flex:0 0 auto;font-size:11px;color:#666;", fmtTime(dd.mtime)));
             row.addEventListener("click", () => { cur = dd.rel; load(); });
             list.appendChild(row);
@@ -7811,15 +7811,15 @@ function openOutputBrowser(startRel) {
             });
             rowChecks.set(ff.rel, cb);
             const icon = ff.ext === "mp4" ? "🎬" : (["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ff.ext) ? "🖼️" : (["txt", "json", "md", "csv", "srt", "log"].includes(ff.ext) ? "📄" : "📦"));
-            const nameEl = el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#ddd;cursor:pointer;", ff.name);
+            const nameEl = el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--jz-text);cursor:pointer;", ff.name);
             nameEl.title = "点击预览（图片/视频/音频/文本）";
             nameEl.addEventListener("click", () => openFilePreview(ff.rel, ff.name, ff.ext));
             row.append(cb,
                 el("span", "flex:0 0 auto;font-size:13px;", icon),
                 nameEl,
-                el("span", "flex:0 0 auto;font-size:11px;color:#888;", fmtSize(ff.size)),
+                el("span", "flex:0 0 auto;font-size:11px;color:var(--jz-text-dim);", fmtSize(ff.size)),
                 el("span", "flex:0 0 auto;font-size:11px;color:#666;", fmtTime(ff.mtime)));
-            const dl = mkBtn("⬇️ 下载", "#2a4a6a", "#cfe3f7");
+            const dl = mkBtn("⬇️ 下载", "var(--jz-accent-bg)", "#cfe3f7");
             dl.addEventListener("click", () => { const u = `/jzl/fs_download?path=${encodeURIComponent(ff.rel)}`; window.open((api && api.apiURL) ? api.apiURL(u) : u, "_blank"); });
             row.appendChild(dl);
             if (["txt", "json", "md", "csv", "srt", "log"].includes(ff.ext)) {
@@ -7854,7 +7854,7 @@ function openOutputBrowser(startRel) {
             list.appendChild(row);
         }
         if (!(data.dirs || []).length && !(data.files || []).length) {
-            list.appendChild(el("div", "font-size:12px;color:#888;padding:8px;", "（空目录）"));
+            list.appendChild(el("div", "font-size:12px;color:var(--jz-text-dim);padding:8px;", "（空目录）"));
         }
         syncSel();
     };
@@ -7906,31 +7906,31 @@ function setupVideoViewerNode(self) {
     const ctrlRow = el("div", "display:flex;align-items:center;gap:6px;flex:0 0 auto;");
     const storySel = document.createElement("select");
     storySel.title = "故事文件夹：自动识别=跟随「短剧导演台Max」的故事名称同名文件夹；或手动选择 output/jzl 下已有故事";
-    storySel.style.cssText = "flex:0 1 130px;min-width:0;background:#1d1d1d;color:#ddd;border:1px solid #444;border-radius:4px;padding:4px 3px;font-size:12px;";
+    storySel.style.cssText = "flex:0 1 130px;min-width:0;background:var(--jz-bg);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;padding:4px 3px;font-size:12px;";
     storySel.addEventListener("mousedown", (e) => e.stopPropagation());
     storySel.addEventListener("change", () => refresh());
     const AUTO_VAL = "__auto__";   // storySel 首项「✨ 自动识别」
-    const refreshBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;", "🔄 刷新目录");
+    const refreshBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:12px;cursor:pointer;", "🔄 刷新目录");
     refreshBtn.title = "重新同步「短剧导演台Max」的故事名并读取视频/剧本";
     refreshBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     refreshBtn.addEventListener("click", () => { refresh().then(() => { try { notify("🔄 已同步（视频 + 最后一次" + (self.__viewerSource || "剧本") + "）", "success"); } catch (_) {} }); });
-    const copyBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;", "📋 复制剧本");
+    const copyBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);font-size:12px;cursor:pointer;", "📋 复制剧本");
     copyBtn.title = "复制当前已处理剧本全文";
-    const viewBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;", "📖 编辑剧本");
+    const viewBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:12px;cursor:pointer;", "📖 编辑剧本");
     viewBtn.title = "放大编辑当前已处理剧本（可改后保存）";
-    const dirBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:12px;cursor:pointer;", "📁 输出目录");
+    const dirBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #8a6d3b;background:var(--jz-tint-warn);color:var(--jz-warn);font-size:12px;cursor:pointer;", "📁 输出目录");
     dirBtn.title = "打开当前故事的输出目录（output/jzl/{故事名}）：浏览 / 下载 / 删除 / 在线编辑文本（云机同样可用）";
-    const storyName = el("span", "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#9fd6a4;", "");
+    const storyName = el("span", "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--jz-ok);", "");
     storyName.title = "当前加载的故事文件夹（自动识别=跟随「短剧导演台Max」的故事名称同名文件夹）";
     ctrlRow.append(storySel, storyName, refreshBtn, copyBtn, viewBtn, dirBtn);
     container.appendChild(ctrlRow);
     // 状态行（剧本字数 / 提示）
-    const scriptStat = el("div", "font-size:11px;color:#888;flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:14px;", "");
+    const scriptStat = el("div", "font-size:11px;color:var(--jz-text-dim);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:14px;", "");
     container.appendChild(scriptStat);
     const updateScriptStat = () => {
         const t = self.__viewerScript || "";
-        if (t.trim()) { scriptStat.textContent = `📄 已处理剧本 ${t.length} 字${self.__viewerSource ? "（" + self.__viewerSource + "）" : ""}`; scriptStat.style.color = "#9fd6a4"; }
-        else { scriptStat.textContent = "尚未获取剧本：先跑一次「短剧导演台Max」，再点「🔄 刷新目录」自动读取（开启增强读已增强剧本，否则读故事拆解）"; scriptStat.style.color = "#888"; }
+        if (t.trim()) { scriptStat.textContent = `📄 已处理剧本 ${t.length} 字${self.__viewerSource ? "（" + self.__viewerSource + "）" : ""}`; scriptStat.style.color = "var(--jz-ok)"; }
+        else { scriptStat.textContent = "尚未获取剧本：先跑一次「短剧导演台Max」，再点「🔄 刷新目录」自动读取（开启增强读已增强剧本，否则读故事拆解）"; scriptStat.style.color = "var(--jz-text-dim)"; }
     };
     self.__viewerUpdate = updateScriptStat;
 
@@ -7975,7 +7975,7 @@ function setupVideoViewerNode(self) {
     });
 
     // 视频宫格（2 列，右侧留滚动条位，随节点拉大卡片自适应放大）
-    const scroll = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;box-sizing:border-box;");
+    const scroll = el("div", "flex:1 1 auto;overflow-y:auto;min-height:0;scrollbar-gutter:stable;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:6px;box-sizing:border-box;");
     enableWheelScroll(scroll);   // Nodes 2.0：滚轮归本窗（否则会缩放画布）
     const grid = el("div", "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start;");
     scroll.appendChild(grid);
@@ -8010,7 +8010,7 @@ function setupVideoViewerNode(self) {
         storyName.title = sn ? `已加载：output/jzl/${sn}/` : "自动识别：未找到「短剧导演台Max」（图中无 Max 或未填故事名称）";
         grid.innerHTML = "";
         if (!sn) {
-            grid.append(el("div", "font-size:12px;color:#888;padding:6px;", autoMode ? "自动识别：未找到「短剧导演台Max」的故事名称（图中无 Max，或 Max 的「故事名称」为空）" : "暂无故事：从上方下拉选择已识别到的文件夹，或先跑一次「Max」生成"));
+            grid.append(el("div", "font-size:12px;color:var(--jz-text-dim);padding:6px;", autoMode ? "自动识别：未找到「短剧导演台Max」的故事名称（图中无 Max，或 Max 的「故事名称」为空）" : "暂无故事：从上方下拉选择已识别到的文件夹，或先跑一次「Max」生成"));
             updateScriptStat();
             return;
         }
@@ -8024,16 +8024,16 @@ function setupVideoViewerNode(self) {
             const sdata = await sr.json().catch(() => ({}));
             const vids = (data && data.ok && data.videos) || [];
             if (!vids.length) {
-                grid.append(el("div", "font-size:12px;color:#888;padding:6px;", `output/jzl/${sn}/ 暂无 mp4（跑一次「Max」后即会即时落盘）`));
+                grid.append(el("div", "font-size:12px;color:var(--jz-text-dim);padding:6px;", `output/jzl/${sn}/ 暂无 mp4（跑一次「Max」后即会即时落盘）`));
             } else {
                 vids.forEach((v) => {
-                    const card = el("div", "cursor:pointer;border-radius:6px;border:1px solid #333;background:#111;overflow:hidden;");
+                    const card = el("div", "cursor:pointer;border-radius:6px;border:1px solid var(--jz-border);background:var(--jz-inset);overflow:hidden;");
                     card.title = `${v.name}\n（点击预览播放）`;
                     const im = document.createElement("img");
                     im.style.cssText = "width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000;";
                     im.src = api.apiURL(`/jzl/video_thumb?path=${encodeURIComponent(v.path)}`);
                     im.onerror = () => { im.remove(); const ic = el("div", "width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;font-size:30px;background:#000;", "🎬"); card.insertBefore(ic, card.firstChild); };
-                    const lb = el("div", "font-size:11px;color:#cdd8e2;text-align:center;padding:4px 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", v.name);
+                    const lb = el("div", "font-size:11px;color:var(--jz-info);text-align:center;padding:4px 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", v.name);
                     card.append(im, lb);
                     card.addEventListener("mousedown", (e) => e.stopPropagation());
                     card.addEventListener("click", () => { if (v.path) showVideoPreview(v.path); });
@@ -8148,23 +8148,23 @@ function openScriptPicker(story, currentRel, onPick) {
     document.querySelectorAll(".jzl-scriptpicker").forEach((m) => m.remove());
     const SCRIPT_EXT = ["txt", "md"];
     let cur = String(story || "").replace(/^\/+|\/+$/g, "");
-    const mkBtn = (label, bg, fg) => el("button", `flex:0 0 auto;height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "#3a3a3a"};color:${fg || "#eee"};font-size:12px;cursor:pointer;`, label);
+    const mkBtn = (label, bg, fg) => el("button", `flex:0 0 auto;height:26px;padding:0 10px;border-radius:5px;border:1px solid #5b9bd5;background:${bg || "var(--jz-border)"};color:${fg || "var(--jz-text-strong)"};font-size:12px;cursor:pointer;`, label);
     const fmtTime = (t) => { try { const d = new Date((Number(t) || 0) * 1000); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; } catch (_) { return ""; } };
     const overlay = el("div", "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100002;display:flex;align-items:center;justify-content:center;overflow:auto;");
     overlay.classList.add("jzl-scriptpicker");
-    const box = el("div", "width:760px;max-width:94vw;max-height:88vh;background:var(--comfy-menu-bg,#242424);border:1px solid #555;border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
+    const box = el("div", "width:760px;max-width:94vw;max-height:88vh;background:var(--comfy-menu-bg,#242424);border:1px solid var(--jz-border);border-radius:8px;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;box-shadow:0 8px 40px rgba(0,0,0,.5);");
     const head = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;");
-    head.appendChild(el("span", "font-size:14px;font-weight:600;color:#eee;white-space:nowrap;", "📝 选择剧本"));
-    const pathBox = el("span", "flex:1 1 160px;min-width:0;font-size:12px;color:#9fd6a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "");
+    head.appendChild(el("span", "font-size:14px;font-weight:600;color:var(--jz-text-strong);white-space:nowrap;", "📝 选择剧本"));
+    const pathBox = el("span", "flex:1 1 160px;min-width:0;font-size:12px;color:var(--jz-ok);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", "");
     const upBtn = mkBtn("⬆️ 上级");
-    const latestBtn = mkBtn("✨ 最新生成（优先增强）", "#2a4a6a", "#cfe3f7");
+    const latestBtn = mkBtn("✨ 最新生成（优先增强）", "var(--jz-accent-bg)", "#cfe3f7");
     latestBtn.title = "自动读取该故事编号最大批次：优先「已增强剧本」，未增强则「故事拆解」";
     const closeBtn = mkBtn("关闭");
     head.append(pathBox, upBtn, latestBtn, closeBtn);
     box.appendChild(head);
-    const list = el("div", "flex:1 1 auto;overflow-y:auto;min-height:160px;max-height:70vh;border:1px solid #333;border-radius:5px;background:#1a1a1a;padding:6px;");
+    const list = el("div", "flex:1 1 auto;overflow-y:auto;min-height:160px;max-height:70vh;border:1px solid var(--jz-border);border-radius:5px;background:var(--jz-bg);padding:6px;");
     box.appendChild(list);
-    box.appendChild(el("div", "font-size:11px;color:#888;margin-top:6px;white-space:pre-wrap;", "📂 点文件夹进入子目录；📄 点剧本文件即载入下方显示窗（仅列 .txt/.md）。"));
+    box.appendChild(el("div", "font-size:11px;color:var(--jz-text-dim);margin-top:6px;white-space:pre-wrap;", "📂 点文件夹进入子目录；📄 点剧本文件即载入下方显示窗（仅列 .txt/.md）。"));
     overlay.appendChild(box);
     document.body.appendChild(overlay);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
@@ -8176,8 +8176,8 @@ function openScriptPicker(story, currentRel, onPick) {
     });
 
     const mkRow = (icon, name, meta, onClick, color) => {
-        const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:4px;cursor:pointer;font-size:12px;color:" + (color || "#ddd") + ";");
-        row.addEventListener("mouseenter", () => { row.style.background = "#2a2a2a"; });
+        const row = el("div", "display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:4px;cursor:pointer;font-size:12px;color:" + (color || "var(--jz-text)") + ";");
+        row.addEventListener("mouseenter", () => { row.style.background = "var(--jz-bg-raise)"; });
         row.addEventListener("mouseleave", () => { row.style.background = ""; });
         row.append(el("span", "flex:0 0 auto;", icon),
                    el("span", "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", name),
@@ -8204,14 +8204,14 @@ function openScriptPicker(story, currentRel, onPick) {
             .filter((f) => SCRIPT_EXT.includes(String(f.ext || "").toLowerCase()))
             .sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0));   // 最新修改优先
         if (!dirs.length && !files.length) {
-            list.append(el("div", "font-size:12px;color:#888;padding:8px;", "此目录下没有子文件夹或剧本文档（.txt/.md）"));
+            list.append(el("div", "font-size:12px;color:var(--jz-text-dim);padding:8px;", "此目录下没有子文件夹或剧本文档（.txt/.md）"));
         }
         dirs.forEach((d) => list.append(mkRow("📂", d.name, fmtTime(d.mtime), () => load(d.rel), "#cfe3f7")));
         files.forEach((f) => {
             const isCur = String(f.rel) === String(currentRel || "");
             list.append(mkRow("📄", f.name, (isCur ? "✅ 当前  " : "") + fmtTime(f.mtime),
                               () => { onPick({ rel: f.rel, name: f.name }); overlay.remove(); },
-                              isCur ? "#9fd6a4" : "#ddd"));
+                              isCur ? "#9fd6a4" : "var(--jz-text)"));
         });
     };
     load(cur);
@@ -8249,43 +8249,43 @@ function setupScriptViewerNode(self) {
     const ctrlRow = el("div", "display:flex;align-items:center;gap:6px;flex:0 0 auto;");
     const storySel = document.createElement("select");
     storySel.title = "故事文件夹：自动识别=跟随「导演台」的故事名称同名文件夹；或手动选择 output/jzl 下已有故事";
-    storySel.style.cssText = "flex:0 1 130px;min-width:0;background:#1d1d1d;color:#ddd;border:1px solid #444;border-radius:4px;padding:4px 3px;font-size:12px;";
+    storySel.style.cssText = "flex:0 1 130px;min-width:0;background:var(--jz-bg);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;padding:4px 3px;font-size:12px;";
     storySel.addEventListener("mousedown", (e) => e.stopPropagation());
     storySel.addEventListener("change", () => refresh());
     const AUTO_VAL = "__auto__";
-    const refreshBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;", "🔄 刷新目录");
+    const refreshBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:12px;cursor:pointer;", "🔄 刷新目录");
     refreshBtn.title = "重新同步导演台的故事名并读取最新剧本（优先已增强，否则故事拆解；已手动选择剧本时重读该文件）";
     refreshBtn.addEventListener("mousedown", (e) => e.stopPropagation());
     refreshBtn.addEventListener("click", () => { refresh().then(() => { try { notify("🔄 已同步（" + (self.__scriptSource || "剧本") + "）", "success"); } catch (_) {} }); });
-    const copyBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#3a3a3a;color:#eee;font-size:12px;cursor:pointer;", "📋 复制剧本");
+    const copyBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-border);color:var(--jz-text-strong);font-size:12px;cursor:pointer;", "📋 复制剧本");
     copyBtn.title = "复制当前显示的剧本全文";
-    const viewBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:#2a4a6a;color:#cfe3f7;font-size:12px;cursor:pointer;", "📖 编辑剧本");
+    const viewBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #5b9bd5;background:var(--jz-accent-bg);color:var(--jz-on-accent);font-size:12px;cursor:pointer;", "📖 编辑剧本");
     viewBtn.title = "放大编辑当前剧本（可改后保存；已指定文件时同时写回磁盘）";
-    const pickBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #8a6d3b;background:#5a4a2a;color:#ffd98a;font-size:12px;cursor:pointer;", "📝 选择剧本");
+    const pickBtn = el("button", "flex:0 0 auto;height:26px;padding:0 8px;border-radius:5px;border:1px solid #8a6d3b;background:var(--jz-tint-warn);color:var(--jz-warn);font-size:12px;cursor:pointer;", "📝 选择剧本");
     pickBtn.title = "在 output/jzl/{故事名} 下挑选剧本文档（支持进入子文件夹；也可选「最新生成（优先增强）」）";
-    const storyName = el("span", "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#9fd6a4;", "");
+    const storyName = el("span", "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--jz-ok);", "");
     ctrlRow.append(storySel, storyName, refreshBtn, copyBtn, viewBtn, pickBtn);
     container.appendChild(ctrlRow);
 
     // 状态行：来源 + 字数
-    const stat = el("div", "font-size:11px;color:#888;flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:14px;", "");
+    const stat = el("div", "font-size:11px;color:var(--jz-text-dim);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:14px;", "");
     container.appendChild(stat);
     const updateStat = () => {
         const t = self.__scriptText || "";
         if (t.trim()) {
             stat.textContent = `📝 ${self.__scriptSource || "剧本"}｜${t.length} 字${self.__scriptPick ? "（已指定文件）" : ""}`;
-            stat.style.color = "#9fd6a4";
+            stat.style.color = "var(--jz-ok)";
         } else {
             stat.textContent = "尚未获取剧本：先跑一次导演台，或点「📝 选择剧本」手动挑选";
-            stat.style.color = "#888";
+            stat.style.color = "var(--jz-text-dim)";
         }
     };
     self.__scriptUpdateStat = updateStat;
 
     // 显示窗：只读全文（等宽、可滚动、随节点拉大）
-    const scroll = el("div", "flex:1 1 auto;min-height:0;overflow:auto;border:1px solid #333;border-radius:6px;background:#141414;padding:8px;box-sizing:border-box;");
+    const scroll = el("div", "flex:1 1 auto;min-height:0;overflow:auto;border:1px solid var(--jz-border);border-radius:6px;background:var(--jz-inset);padding:8px;box-sizing:border-box;");
     enableWheelScroll(scroll);   // Nodes 2.0：滚轮归本窗（否则会缩放画布）
-    const pre = el("pre", "margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.65;color:#ddd;font-family:Consolas,Menlo,monospace;");
+    const pre = el("pre", "margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.65;color:var(--jz-text);font-family:Consolas,Menlo,monospace;");
     scroll.appendChild(pre);
     container.appendChild(scroll);
     const renderText = () => {

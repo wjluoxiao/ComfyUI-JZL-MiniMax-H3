@@ -57,7 +57,7 @@ function makeRow(labelText, control) {
     const row = document.createElement("div");
     row.style.cssText = "display:flex;align-items:center;gap:10px;margin:7px 0;";
     const label = document.createElement("span");
-    label.style.cssText = "flex:0 0 88px;color:var(--fg-color,#ddd);font-size:13px;white-space:nowrap;";
+    label.style.cssText = "flex:0 0 88px;color:var(--fg-color,var(--jz-text));font-size:13px;white-space:nowrap;";
     label.textContent = labelText;
     row.append(label, control);
     return row;
@@ -68,8 +68,8 @@ function makeInput(type, value, placeholder) {
     el.type = type;
     el.value = value ?? "";
     el.placeholder = placeholder || "";
-    el.style.cssText = "flex:1;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);" +
-        "border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 8px;font-size:13px;width:0;";
+    el.style.cssText = "flex:1;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));" +
+        "border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px 8px;font-size:13px;width:0;";
     el.spellcheck = false;
     el.autocomplete = "off";
     return el;
@@ -77,8 +77,8 @@ function makeInput(type, value, placeholder) {
 
 function makeSelect(options, value) {
     const sel = document.createElement("select");
-    sel.style.cssText = "flex:1;background:var(--comfy-input-bg,#1d1d1d);color:var(--fg-color,#ddd);" +
-        "border:1px solid var(--border-color,#444);border-radius:4px;padding:6px 8px;font-size:13px;width:0;";
+    sel.style.cssText = "flex:1;background:var(--comfy-input-bg,var(--jz-bg));color:var(--fg-color,var(--jz-text));" +
+        "border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px 8px;font-size:13px;width:0;";
     options.forEach((opt) => {
         const o = document.createElement("option");
         o.value = opt;
@@ -93,9 +93,9 @@ function makeButton(text, primary) {
     const btn = document.createElement("button");
     btn.type = primary ? "submit" : "button";
     btn.textContent = text;
-    btn.style.cssText = "background:var(--comfy-button-bg,#333);color:var(--fg-color,#eee);" +
-        "border:1px solid var(--border-color,#555);border-radius:4px;padding:6px 16px;cursor:pointer;font-size:13px;" +
-        (primary ? "background:#3a7ca5;border-color:#3a7ca5;color:#fff;" : "");
+    btn.style.cssText = "background:var(--comfy-button-bg,var(--jz-border));color:var(--fg-color,var(--jz-text-strong));" +
+        "border:1px solid var(--border-color,var(--jz-border));border-radius:4px;padding:6px 16px;cursor:pointer;font-size:13px;" +
+        (primary ? "background:#3a7ca5;border-color:#3a7ca5;color:var(--jz-on-accent);" : "");
     return btn;
 }
 
@@ -105,15 +105,15 @@ function makeSwitch(initialChecked) {
     toggle.role = "switch";
     toggle.checked = Boolean(initialChecked);
     toggle.style.cssText = "position:relative;width:40px;height:22px;border-radius:11px;" +
-        "border:1px solid var(--border-color,#555);background:var(--comfy-input-bg,#333);" +
+        "border:1px solid var(--border-color,var(--jz-border));background:var(--comfy-input-bg,var(--jz-border));" +
         "cursor:pointer;flex:0 0 auto;padding:0;";
     const thumb = document.createElement("span");
     thumb.style.cssText = "position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;" +
-        "background:#888;transition:left .15s,background .15s;";
+        "background:var(--jz-text-dim);transition:left .15s,background .15s;";
     const render = () => {
         toggle.setAttribute("aria-checked", toggle.checked ? "true" : "false");
         thumb.style.left = toggle.checked ? "20px" : "2px";
-        thumb.style.background = toggle.checked ? "#4caf50" : "#888";
+        thumb.style.background = toggle.checked ? "#4caf50" : "var(--jz-text-dim)";
     };
     toggle.append(thumb);
     toggle.addEventListener("click", () => { toggle.checked = !toggle.checked; render(); });
@@ -138,8 +138,8 @@ async function openSettings(node) {
     overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;" +
         "display:flex;align-items:center;justify-content:center;";
     const dialog = document.createElement("section");
-    dialog.style.cssText = "background:var(--comfy-menu-bg,#202020);border:1px solid var(--border-color,#444);" +
-        "border-radius:8px;padding:18px 20px;width:min(580px,92vw);max-height:88vh;overflow:auto;color:var(--fg-color,#ddd);";
+    dialog.style.cssText = "background:var(--comfy-menu-bg,#202020);border:1px solid var(--border-color,var(--jz-border));" +
+        "border-radius:8px;padding:18px 20px;width:min(580px,92vw);max-height:88vh;overflow:auto;color:var(--fg-color,var(--jz-text));";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
     dialog.setAttribute("aria-label", "LLM-API 设置");
@@ -149,7 +149,7 @@ async function openSettings(node) {
     title.style.cssText = "font-size:16px;font-weight:600;margin-bottom:4px;";
     const subtitle = document.createElement("div");
     subtitle.textContent = "配置保存在本地（ComfyUI user 目录），不会写入工作流。";
-    subtitle.style.cssText = "font-size:12px;color:var(--fg-color,#888);margin-bottom:12px;";
+    subtitle.style.cssText = "font-size:12px;color:var(--fg-color,var(--jz-text-dim));margin-bottom:12px;";
 
     const provider = makeSelect(PROVIDERS, cache.provider);
     const model = makeInput("text", cache.model, "模型名：deepseek-v4-flash / deepseek-v4-pro / gpt-5.5-pro / qwen3.6-max ...");
@@ -164,11 +164,11 @@ async function openSettings(node) {
     const thinkingLabel = document.createElement("div");
     thinkingLabel.style.cssText = "display:flex;align-items:center;gap:10px;margin:7px 0;";
     const thinkingText = document.createElement("span");
-    thinkingText.style.cssText = "flex:0 0 88px;color:var(--fg-color,#ddd);font-size:13px;white-space:nowrap;";
+    thinkingText.style.cssText = "flex:0 0 88px;color:var(--fg-color,var(--jz-text));font-size:13px;white-space:nowrap;";
     thinkingText.textContent = "思考模式";
     const thinking = makeSwitch(cache.thinking === "enabled");
     const thinkingHint = document.createElement("span");
-    thinkingHint.style.cssText = "flex:1;color:var(--fg-color,#888);font-size:12px;";
+    thinkingHint.style.cssText = "flex:1;color:var(--fg-color,var(--jz-text-dim));font-size:12px;";
     thinkingHint.textContent = "DeepSeek V4 开启=先思考再回答（更稳但更慢更费 token），关闭=更快更省";
     thinkingLabel.append(thinkingText, thinking, thinkingHint);
 

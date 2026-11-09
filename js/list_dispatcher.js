@@ -48,10 +48,10 @@ function setupDynamicOutputs(node) {
             try { if (dw.options) dw.options.read_only = true; } catch (_) {}
             if (dw.inputEl) {
                 dw.inputEl.readOnly = true;
-                dw.inputEl.style.backgroundColor = "#2a2a2a";
-                dw.inputEl.style.color = "#bbbbbb";
+                dw.inputEl.style.backgroundColor = "var(--jz-bg-raise)";
+                dw.inputEl.style.color = "var(--jz-text-dim)";
                 dw.inputEl.style.fontSize = "12px";
-                dw.inputEl.style.border = "1px solid #444";
+                dw.inputEl.style.border = "1px solid var(--jz-border)";
             }
             displays.push(dw);
         }
