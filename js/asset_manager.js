@@ -24,6 +24,8 @@ const SHORTDRAMA_NODE_TYPE = "JZL_MiniMaxAssetManagerShortDrama";
 // 🎭 人物替换：长视频换人（源片逐段 ref2va 重生成）。选项全部收进三个按钮面板：
 //    🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理
 const SWAP_NODE_TYPE = "JZL_MiniMaxCharacterSwap";
+// manager_settings 结构版本：用来让「一次性迁移」只跑一次（否则用户手动关掉的选项会被反复改回来）
+const SWAP_SETTINGS_SCHEMA = 2;
 const VIEWER_NODE_TYPE = "JZL_MiniMaxVideoViewer";
 const SCRIPT_VIEWER_NODE_TYPE = "JZL_MiniMaxScriptViewer";
 
@@ -2116,6 +2118,27 @@ async function archiveAssets(node, settings) {
     return false;
 }
 
+// 🎭 人物替换专用默认值：在共享 defaultSettings() 之上覆盖（只影响本节点）。
+// 依据参考工作流：二采必开、二采用显式 sigmas（0.909375 起，几乎重跑整条 schedule）。
+function swapDefaults() {
+    const d = defaultSettings();
+    d._schema = SWAP_SETTINGS_SCHEMA;
+    const gp = d.gen_params;
+    gp.megapixels = 1.0;
+    gp.second_mode = "放大倍数";
+    gp.upscale_scale = 2.0;
+    const sd = d.sample_decode;
+    Object.assign(sd.second, {
+        enabled: true,
+        sampler: "euler", scheduler: "simple",
+        sigmas_mode: "custom",
+        custom_sigmas: "0.909375, 0.725, 0.421875, 0.0000",
+    });
+    sd.seam.window = 22;
+    delete sd.seam.settle;
+    return d;
+}
+
 async function loadManager(node) {
     // 节点独立配置：优先读工作流内保存的 manager_settings；空则全新默认（不继承其他节点/全局）。
     // 先 await loadLists 再读 widget：configure 在 onNodeCreated 之后才恢复 manager_settings 值，
@@ -2127,11 +2150,12 @@ async function loadManager(node) {
     if (raw && typeof raw === "string" && raw.trim()) {
         try { const s = JSON.parse(raw); if (s && typeof s === "object") settings = s; } catch (_) {}
     }
-    settings = settings || defaultSettings();
+    const isSwapNode = node?.type === SWAP_NODE_TYPE;
+    settings = settings || (isSwapNode ? swapDefaults() : defaultSettings());
     // 递归补齐缺失键：面板里读的是「?? 默认值」，若对象里根本没这个键，保存时也写不进去 →
     // 后端只能回退，出现「面板显示 8 步、后端按 4 步跑」这类静默错配（selflift.steps 就踩过）。
-    fillDefaults(settings, defaultSettings());
-    if (migrateLegacyDefaults(settings)) {
+    fillDefaults(settings, isSwapNode ? swapDefaults() : defaultSettings());
+    if (migrateLegacyDefaults(settings, isSwapNode)) {
         try { await saveManager(node, settings); } catch (_) {}  // 迁移后立即落盘，避免刷新又变回旧值
     }
     // 资产归档：把源文件绝对路径素材复制到 input/jzl 并统一为相对路径（原文件删除不影响）
@@ -2141,7 +2165,7 @@ async function loadManager(node) {
 
 // 旧默认值 → 新默认值的一次性迁移。返回是否发生了改动。
 // 只改写「与我们上一版内置默认完全相同」的字段（说明用户从未手动改过），避免覆盖用户自己的配置。
-function migrateLegacyDefaults(s) {
+function migrateLegacyDefaults(s, isSwap) {
     let changed = false;
     // ① 旧默认 API 值
     const LEGACY = [
@@ -2173,6 +2197,40 @@ function migrateLegacyDefaults(s) {
     const en = s.enhance;
     if (en && typeof en === "object" && en.story_decompose === false) {
         en.story_decompose = true;
+        changed = true;
+    }
+    // ⑤ 🎭 人物替换的配置升级：只做**一次**（用 _schema 打标记）。
+    //    绝不能每次加载都跑：否则用户手动关掉二采 / 改回 scheduler，下次打开又被强行改回去，
+    //    表现为「保存了无效」。版本号已是最新时整段跳过。
+    if (isSwap && Number(s._schema || 0) < SWAP_SETTINGS_SCHEMA) {
+        const sd = s.sample_decode;
+        const seam = sd?.seam;
+        if (seam && typeof seam === "object") {
+            if (seam.settle !== undefined) { delete seam.settle; changed = true; }
+            // 老的「5 帧窗口 + 12 帧过渡」→ 「22 帧重叠」
+            if (Number(seam.window) === 5) { seam.window = 22; changed = true; }
+            if (!seam.guide_mode) { seam.guide_mode = "pixels"; changed = true; }
+        }
+        const gp = s.gen_params;
+        if (gp && typeof gp === "object") {
+            // 二采从「固定分辨率」改为「面积倍数 x2」，与参考工作流（0.5MP → 1.0MP）同量级
+            if (String(gp.second_mode || "") === "目标分辨率" && Number(gp.upscale_scale) === 1.0) {
+                gp.second_mode = "放大倍数";
+                gp.upscale_scale = 2.0;
+                changed = true;
+            }
+        }
+        // 二采的「开关」绝不动：那是用户的明确意图（强行打开 = 关不掉，就是之前那个 bug）。
+        // 只升级「参数语义」：老默认 scheduler + denoise 0.3 等于几乎不重绘，换脸会被抹平。
+        const sec = sd?.second;
+        if (sec && typeof sec === "object") {
+            if (String(sec.sigmas_mode || "scheduler") === "scheduler" && Number(sec.denoise) <= 0.35) {
+                sec.sigmas_mode = "custom";
+                sec.custom_sigmas = "0.909375, 0.725, 0.421875, 0.0000";
+                changed = true;
+            }
+        }
+        s._schema = SWAP_SETTINGS_SCHEMA;
         changed = true;
     }
     return changed;
@@ -2249,9 +2307,11 @@ function pruneSwapSettings(v) {
     const sec = sd.second || {};
     return {
         auto_save: v.auto_save !== false,
+        // 配置结构版本：必须保留，否则「一次性迁移」每次都会被当成老配置重跑
+        _schema: Number(v._schema || 0),
         gen_params: pick(v.gen_params, ["segment", "aspect_ratio", "megapixels",
             "scale_factor", "upscale_scale", "second_mode", "second_width", "second_height",
-            "audio_mode", "max_segments"]),
+            "audio_mode", "max_segments", "source_cache_gb"]),
         sample_decode: Object.assign(
             pick(sd, ["sample_mode", "sampler", "scheduler", "steps", "cfg", "denoise",
                 "seed", "seed_mode", "decode_cleanup"]),
@@ -2259,8 +2319,11 @@ function pruneSwapSettings(v) {
                 // 与短剧导演台同一套键：SelfLift 采样参数整组保留
                 selflift: pick(sl, ["steps", "transition_step", "lowres_scale", "rho", "w_min", "w_max",
                     "upscaler_model", "upscaler_unload", "highres_tiling"]),
-                seam: pick(sd.seam, ["enabled", "window", "settle", "ref_video_tail",
-                    "guide_mode", "pin_second", "append_prev_video"]),
+                seam: Object.assign(
+                    pick(sd.seam, ["enabled", "window", "ref_video_tail",
+                        "guide_mode", "pin_second"]),
+                    { color: pick(sd.seam && sd.seam.color,
+                        ["enabled", "strength", "max_offset", "guard", "ramp"]) }),
                 second: pick(sec, ["enabled", "sampler", "scheduler", "sigmas_mode", "custom_sigmas",
                     "steps", "denoise", "precision", "upscaler_model", "device", "enable_chunking",
                     "tiling", "tiling_tiles", "tiling_overlap"]),
@@ -3939,6 +4002,8 @@ function defaultSettings() {
             // 🎭 人物替换专用（其它导演台不读这些键，互不影响）
             segment: "固定5秒", audio_mode: "保留原声（推荐）", max_segments: 60,
             second_mode: "目标分辨率", second_width: 1280, second_height: 704,
+            // 源片超过这个 GB 就转 uint8 缓存（0 = 不转）
+            source_cache_gb: 8,
         },
         sample_decode: {
             sampler: "res_multistep", scheduler: "simple", steps: 4, cfg: 1.0,
@@ -3957,11 +4022,13 @@ function defaultSettings() {
                 trim_mode: "像素域裁切（推荐）", guide_source: "一采latent尾部（推荐）",
                 second_guide: "first", luma_match: true,
             },
-            // 🎭 人物替换的分段衔接（与「无限时长衔接」同一套窗口/过渡语义，但接的是「上一段生成结果」）
-            seam: { enabled: true, window: 22, settle: 12, ref_video_tail: 0,
-                    // pixels = 上段解码像素按本采画布重编码（官方 AddGuide 同款，不糊）
-                    // latent = 上段一采 latent 尾部（旧实现，二采会被插值糊掉）
-                    guide_mode: "pixels", pin_second: true, append_prev_video: false },
+            // 🎭 人物替换的分段衔接：重叠 22 帧既是钉帧窗口、也是成片丢头量（没有「过渡帧数」）
+            seam: { enabled: true, window: 22, ref_video_tail: 0,
+                    // pixels = 上段解码像素按本采画布重编码（清晰）
+                    // latent = 上段一采 latent 尾部（旧实现，二采会糊）
+                    guide_mode: "pixels", pin_second: true,
+                    // 段间配色：逐通道常量补偿 + 亮度渐变
+                    color: { enabled: true, strength: 0.8, max_offset: 16, guard: 32, ramp: 12 } },
             second: {
                 enabled: false,
                 upscaler_model: "",
@@ -4886,15 +4953,10 @@ function jzlCalcResolution(aspectRatio, megapixels) {
 const SWAP_SEGMENT_OPTIONS = Array.from({ length: 17 }, (_, i) => `固定${i + 4}秒`);
 const SWAP_AUDIO_OPTIONS = ["保留原声（推荐）", "使用生成音轨", "静音"];
 const SWAP_WINDOW_OPTIONS = [
-    { value: 5, label: "5 帧（≈0.21s，最省）" },
+    { value: 5, label: "5 帧（≈0.21s，最少）" },
     { value: 22, label: "22 帧（≈0.92s，推荐）" },
     { value: 39, label: "39 帧（≈1.63s）" },
-    { value: 56, label: "56 帧（≈2.33s，最稳最慢）" },
-];
-const SWAP_SETTLE_OPTIONS = [
-    { value: 12, label: "12 帧（推荐）" },
-    { value: 29, label: "29 帧（衔接仍卡时用）" },
-    { value: 46, label: "46 帧（最顽固时用）" },
+    { value: 56, label: "56 帧（≈2.33s，最多）" },
 ];
 
 function swapFrameLen(segmentText) {
@@ -4931,7 +4993,9 @@ function renderSwapVideoParamsPanel(c, s, node) {
             const [W, H] = jzlCalcResolution(ar, Number(gp.megapixels ?? 0.4));
             resBox.textContent = `${W} × ${H}`;
         }
+        if (syncSecRef) syncSecRef();
     };
+    let syncSecRef = null;
     refreshRes();
 
     c.append(field("每段时长", selectControl(SWAP_SEGMENT_OPTIONS, String(gp.segment || "固定5秒"),
@@ -4961,31 +5025,66 @@ function renderSwapVideoParamsPanel(c, s, node) {
 
     c.append(makeSectionTitle("二采放大"));
     c.append(field("二采放大方式", selectControl(
-        [{ value: "目标分辨率", label: "目标分辨率（推荐，1280×704）" },
-         { value: "放大倍数", label: "放大倍数（按一采画布乘倍数）" }],
-        String(gp.second_mode || "目标分辨率"), v => { gp.second_mode = v; syncSecMode(); touch(); })));
+        [{ value: "放大倍数", label: "面积倍数（推荐，宽高比自动跟随一采）" },
+         { value: "目标分辨率", label: "目标分辨率（固定宽×高，竖屏慎用）" }],
+        String(gp.second_mode || "放大倍数"), v => { gp.second_mode = v; syncSecMode(); touch(); })));
     const fSecW = field("二采目标宽度", stepperControl(Number(gp.second_width ?? 1280),
         { min: 32, max: 4096, step: 32 }, v => { gp.second_width = Math.round(v); touch(); }));
     const fSecH = field("二采目标高度", stepperControl(Number(gp.second_height ?? 704),
         { min: 32, max: 4096, step: 32 }, v => { gp.second_height = Math.round(v); touch(); }));
-    const fSecScale = field("二采latent放大", stepperControl(Number(gp.upscale_scale ?? 1.0),
-        { min: 1.0, max: 4.0, step: 0.05 }, v => { gp.upscale_scale = v; touch(); }));
-    c.append(fSecW, fSecH, fSecScale);
+    const fSecScale = field("面积倍数", stepperControl(Number(gp.upscale_scale ?? 2.0),
+        { min: 1.0, max: 4.0, step: 0.1 }, v => { gp.upscale_scale = v; touch(); }));
+    c.append(fSecScale, fSecW, fSecH);
+    const secBox = el("div", "font-size:11px;color:#c9a86a;padding:5px 10px;"
+        + "background:var(--comfy-input-bg,#2a2a2a);border:1px solid var(--border-color,#444);"
+        + "border-radius:4px;font-variant-numeric:tabular-nums;");
+    c.append(field("二采画布", secBox));
     const syncSecMode = () => {
-        const isTgt = String(gp.second_mode || "目标分辨率") === "目标分辨率";
+        const isTgt = String(gp.second_mode || "放大倍数") === "目标分辨率";
         fSecW.style.display = isTgt ? "flex" : "none";
         fSecH.style.display = isTgt ? "flex" : "none";
         fSecScale.style.display = isTgt ? "none" : "flex";
+        // 预览二采画布：面积倍数模式按一采画布 × sqrt(倍数)，比例永远不变
+        try {
+            const ar = String(gp.aspect_ratio || "跟随源片（推荐）");
+            const mp = Number(gp.megapixels ?? 1.0) || 1.0;
+            if (isTgt) {
+                const tw = Math.round(Number(gp.second_width ?? 1280) / 32) * 32;
+                const th = Math.round(Number(gp.second_height ?? 704) / 32) * 32;
+                secBox.textContent = `${tw} × ${th}（固定尺寸，比例可能被改）`;
+            } else if (ar.startsWith("跟随源片")) {
+                secBox.textContent = `一采面积 × ${Number(gp.upscale_scale ?? 2.0).toFixed(2)}`
+                    + `（宽高比跟随源片，执行时计算）`;
+            } else {
+                const [W, H] = jzlCalcResolution(ar, mp);
+                const s = Math.sqrt(Math.max(1, Number(gp.upscale_scale ?? 2.0)));
+                const tw = Math.round(W * s / 32) * 32;
+                const th = Math.round(H * s / 32) * 32;
+                const a = (tw * th) / Math.max(1, W * H);
+                secBox.textContent = `${tw} × ${th}　（面积 ${a.toFixed(2)}x）`
+                    + (a < 1 ? "　⚠️ 比一采小，只会更糊" : "");
+            }
+        } catch (_) {
+            secBox.textContent = "执行时计算";
+        }
     };
     syncSecMode();
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
-        "换人脸是小目标，建议 1280×704。二采目标比一采画布还小只会更糊（节点会提示）。"));
+    syncSecRef = syncSecMode;
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "面积倍数 = 二采像素面积 ÷ 一采像素面积。2.0 就是「面积翻倍」（参考工作流 0.5MP → 1.0MP）。\n"
+        + "必须 > 1.0 才有提清晰度的意义；< 1.0 等于降级，会更糊。\n"
+        + "想省时间：把「百万像素」降到 0.5，二采面积倍数保持 2.0 → 二采 1.0MP（参考工作流同款）。"));
 
     c.append(makeSectionTitle("安全阀"));
     c.append(field("最大段数", stepperControl(Number(gp.max_segments ?? 60),
         { min: 1, max: 200, step: 1 }, v => { gp.max_segments = Math.round(v); })));
     c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
         "源片切出的段数超过它就直接报错（避免误接一部两小时的片子跑一晚上）。"));
+    c.append(field("源片缓存阈值", stepperControl(Number(gp.source_cache_gb ?? 8),
+        { min: 0, max: 512, step: 1 }, v => { gp.source_cache_gb = Math.round(v); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "源片超过这么多 GB 就转成 uint8 缓存，常驻内存降到 1/4（长片不容易爆内存）。\n"
+        + "0 = 不转换。换算：GB ≈ 帧数 × 宽 × 高 × 12 / 1e9。"));
 }
 
 function renderSwapSeamSection(c, s, node) {
@@ -4999,27 +5098,20 @@ function renderSwapSeamSection(c, s, node) {
     c.append(field("启用衔接", checkboxControl(seam.enabled !== false,
         "开：第 2 段起先接住上一段的结尾画面再往下生成，段与段之间不跳。关：每段单独生成",
         v => { seam.enabled = !!v; touch(); })));
-    c.append(field("衔接帧数", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
+    c.append(field("重叠帧数", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
         v => { seam.window = Number(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
-        "接住上一段结尾的多少帧当本段开场。越大越稳、越慢；22 帧（约 0.9 秒）最稳。"));
-    c.append(field("过渡帧数", selectControl(SWAP_SETTLE_OPTIONS, Number(seam.settle ?? 12),
-        v => { seam.settle = Number(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
-        "接住之后再多生成几帧让模型启动，这几帧不进成片。加大它专治接缝「卡一下」。"));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "上一段结尾的多少帧，既钉成本段开头、又在成片里丢掉（两头用同一段帧）。\n"
+        + "22 帧 = 参考工作流同值。越大越稳、越慢；必须是 5/22/39/56 且小于每段帧数。"));
     c.append(field("参考帧数", stepperControl(Number(seam.ref_video_tail ?? 0),
         { min: 0, max: 600, step: 17 }, v => { seam.ref_video_tail = Math.max(0, Math.round(v)); })));
     c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
         "给模型看多少帧源片当参考。0 = 整段都给（动作最准、最慢）；填 39~56 只看开头一小段，省显存。"));
-    const appendPrevCb = checkboxControl(!!seam.append_prev_video,
-        "把上一段结尾也拼进参考视频，让模型看到「已经生成成什么样」",
-        v => { seam.append_prev_video = !!v; });
     c.append(field("引导来源", selectControl(
         [{ value: "pixels", label: "像素尾帧（推荐）" },
          { value: "latent", label: "latent 尾帧（旧，二采会糊）" }],
         String(seam.guide_mode || "pixels"), v => {
             seam.guide_mode = v;
-            appendPrevCb.style.opacity = (v === "pixels") ? "1" : "0.45";
             touch();
         })));
     c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
@@ -5027,13 +5119,36 @@ function renderSwapSeamSection(c, s, node) {
     c.append(field("二采钉帧", checkboxControl(seam.pin_second !== false,
         "二采也按二采分辨率重新接一次；关掉只有一采接着，二采会糊",
         v => { seam.pin_second = !!v; touch(); })));
-    appendPrevCb.title = "把上一段结尾也拼进参考视频，让模型看到「已经生成成什么样」";
-    c.append(field("拼接参考", appendPrevCb));
-    appendPrevCb.style.opacity = (String(seam.guide_mode || "pixels") === "pixels") ? "1" : "0.45";
+
+    // ── 段间配色（逐通道常量补偿 + 亮度渐变）──
+    const col = seam.color || (seam.color = {});
+    c.append(makeSectionTitle("段间配色"));
+    c.append(field("启用配色", checkboxControl(col.enabled !== false,
+        "用「上段结尾均值 vs 本段开头均值」算一个逐通道固定偏移，整段加上去 → 段与段之间不串色",
+        v => { col.enabled = !!v; touch(); })));
+    c.append(field("补偿强度", stepperControl(Number(col.strength ?? 0.8),
+        { min: 0.0, max: 1.0, step: 0.05 }, v => { col.strength = v; touch(); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "只补一部分（0.8 = 补八成），留一点自然差异，避免整段被推成另一个色调。"));
+    c.append(field("单通道上限", stepperControl(Number(col.max_offset ?? 16),
+        { min: 0, max: 64, step: 1 }, v => { col.max_offset = Math.round(v); touch(); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "8bit 单位，默认 16。超过它就说明不是色彩漂移而是换了场景，硬拉会毁画面。"));
+    c.append(field("差异阈值", stepperControl(Number(col.guard ?? 32),
+        { min: 0, max: 128, step: 1 }, v => { col.guard = Math.round(v); touch(); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "三通道平均差超过它就直接跳过补偿（判定为场景/灯光真的变了，不该对齐）。"));
+    c.append(field("亮度过渡帧", stepperControl(Number(col.ramp ?? 12),
+        { min: 0, max: 24, step: 1 }, v => { col.ramp = Math.round(v); touch(); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,#999);margin:-4px 0 10px 172px;line-height:1.7;",
+        "配色之后再补一层亮度渐变，把开头这么多帧朝上段末帧亮度过渡。0 = 关。"));
+
     c.append(el("div", "font-size:12px;color:var(--descrip-text,#999);margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
-        "衔接帧数 + 过渡帧数 = 每段前面要多生成的长度（这一段不进成片）。\n"
-        + "例：22 + 12 = 34 帧 → 5 秒的段实际生成 158 帧，成片仍然只取 124 帧。\n"
-        + "衔接取的是「上段结尾往前 34 帧」起的那 22 帧，所以和本段参考视频对得上，不会跳帧。\n"
+        "帧账（严格不缺帧、不多帧）：\n"
+        + "· 第 1 段：生成 = align(段长)，全部保留。\n"
+        + "· 之后每段：生成 = align(段长 + 重叠)，丢掉开头「重叠」帧，补出来的余量从尾部丢掉 → 正好落盘 段长。\n"
+        + "· 例：124 + 22 → align = 158 → 丢 22 = 136 → 尾丢 12 → 落盘 124。\n"
+        + "钉住的正是被丢掉的那 22 帧，所以模型输出的第 1 帧直接接在钉住内容的下一帧 → 接缝平顺。\n"
         + "⚠️ 衔接画面会压住定妆图：模型会顺着「上一段的脸」往下演。若发现越往后越不像 <Picture 1>，"
         + "先把「启用衔接」关掉对比一次 —— 这说明问题在换人本身（参考图/放大倍数/提示词），不在衔接。"));
 }
@@ -5063,7 +5178,7 @@ function renderSwapHelpPanel(c) {
     h("② 四个按钮");
     p("🎨 视频参数设置：画幅/像素、每段时长、音频方式、参考图放大、二采放大、最大段数");
     p("🎭 采样解码设置：与「短剧导演台」100% 相同（采样分类/种子/一采/二采/SelfLift/解码），"
-        + "末尾多一段本节点独有的「分段衔接」：衔接帧数 / 过渡帧数 / 参考帧数");
+        + "末尾多一段本节点独有的「分段衔接」：重叠帧数 / 参考帧数");
     p("🎬 生成视频管理：输出名称（output/jzl/{名称}/）、保存方式、本批视频宫格预览");
     p("📖 节点使用说明：本页");
     p("保存后重新执行节点生效（「自动保存」开着时改完即存）。提示词固定在最底部的大输入框里。");
@@ -5079,19 +5194,19 @@ function renderSwapHelpPanel(c) {
         + "单张半身照的换人成功率明显更低；图里只有一个人、脸要清晰。");
     p("🔍 想确认「是换人不行还是衔接不行」：把「每段视频时长」调到比源片还长 → 整段只生成 1 段，"
         + "此时完全没有衔接。1 段都换不掉 = 问题在参考图/放大倍数/提示词；1 段能换、多段越往后越不像 = "
-        + "衔接把上一段的脸带偏了（关衔接或减少衔接帧数对比）。");
+        + "衔接把上一段的脸带偏了（关衔接或把重叠帧数降到 5 对比）。");
 
     h("④ 为什么接缝比「无限时长」稳");
     p("无限时长没有真值，段 2+ 只能靠上段尾帧往下编 → 会缓慢漂移；换人有逐帧真值：每段都重新对位同一段源片（<Video 1>），"
         + "跑道那几十帧的源片正好是上一段已产出的内容 → 同一条时间轴、不累积误差。衔接只负责「画面不跳」。");
 
-    h("④ 调参经验");
-    p("脸不像 → 参考图放大 1.5~2.0、百万像素 0.6~1.0、二采倍数 1.5");
-    p("接缝跳一下 → 衔接帧数加到 39；还不行把过渡帧数加到 29；或每段时长改 8 秒（接缝更少）");
+    h("⑤ 调参经验");
+    p("脸不像 → 参考图放大 1.5~2.0、百万像素 0.6~1.0、二采面积倍数 1.5~2.0");
+    p("接缝跳一下 → 重叠帧数加到 39；或每段时长改 8 秒（接缝更少）");
     p("动作对不上 → 参考帧数设 0、采样步数 8~10");
     p("太慢 / 爆显存 → 参考帧数 39~56、段长 8~10 秒、二采先只跑一采看效果");
 
-    h("⑤ 已知取舍");
+    h("⑥ 已知取舍");
     p("H3 是整帧重生成：背景/道具会被重画（招牌字、路人、光线可能变）。要「只换人不换景」需要掩码回流后处理（后续版本）。");
     p("换人后口型由模型重新生成，与原台词不保证逐字对位 —— 所以默认「保留原声」只换画面。");
     p("成本：每段都带整段参考视频时约等于同长度再算一遍（≈2×），可用「参考帧数」压到 1.2~1.3×。");
@@ -6123,6 +6238,8 @@ if (!app.__jzlReshootGraphPatched) {
 
 // 🎭 人物替换的默认提示词（与后端 nodes_character_swap.DEFAULT_PROMPT 保持一致）
 // 模型按 ===H3_PROMPT=== 结构理解提示词；只写一句「把人物换成 <Picture 1>」会被参考视频压过去。
+// retention_analysis 用三种保留动词（fully_preserved / attribute_transfer / partially_preserved），
+// 这是模型训练时见过的写法，比全部写 fully_preserved 更能区分「换谁」和「保留什么」。
 const SWAP_DEFAULT_PROMPT = [
     "[SHOT_START]",
     "",
@@ -6132,14 +6249,14 @@ const SWAP_DEFAULT_PROMPT = [
         + "全部以 <Picture 1> 为准；<Picture 1> 只是参考图，不作为画面内容出现。",
     "",
     "summary:",
-    "[reference generation + audio reference] 目标视频沿用 <Video 1> 的同一段表演，"
-        + "把 <Video 1> 里的人物替换为 <Subject 1>。",
+    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里的人换成 "
+        + "<Subject 1>，其余一律沿用 <Video 1>。",
     "",
     "retention_analysis:",
-    "<Subject 1> (出现在 [Shot 1]): fully_preserved - 长相、发型、服装、配饰、配色取自 <Picture 1>，"
-        + "不保留 <Video 1> 中原人物的长相与服装。",
-    "<Video 1>: fully_preserved - 动作、表情、口型、走位、时机、机位、景别、景深、镜头运动、"
-        + "场景、道具、背景、光线方向与整体色调。",
+    "<Picture 1>: fully_preserved —— 身份与外观（长相、发型、服装、配饰、配色）。",
+    "<Video 1>: attribute_transfer —— 动作、表情、口型、走位、时机、机位、景别、景深、镜头运动；",
+    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调；",
+    "            partially_preserved —— 画面里的人物被 <Subject 1> 取代，位置与遮挡关系不变。",
     "",
     "detailed_description:",
     "<Subject 1> 以 <Video 1> 中人物的同一姿态、同一动作节奏、同一表情完成整段表演，口型开合与停顿"
@@ -6445,15 +6562,15 @@ function setupSwapNode(self) {
             canvasTxt = `跟随源片·${Number(gp.megapixels ?? 0.4).toFixed(2)}MP`;
         }
         const f = swapFrameLen(gp.segment || "固定5秒");
-        const up = Number(gp.upscale_scale ?? 1.0);
+        const up = Number(gp.upscale_scale ?? 2.0);
         const isSL = String(sd.sample_mode || "常规采样") === "SelfLift采样";
-        const secTgt = String(gp.second_mode || "目标分辨率") === "目标分辨率";
+        const secTgt = String(gp.second_mode || "放大倍数") === "目标分辨率";
         const secOn = sec.enabled !== false;
         const secTxt = isSL ? "跳过(SelfLift)"
             : (!secOn ? "关闭"
                 : (secTgt ? `${gp.second_width ?? 1280}×${gp.second_height ?? 704}`
-                          : `×${up.toFixed(2)}`));
-        const seamTxt = seam.enabled === false ? "关闭" : `窗口${seam.window ?? 22}+过渡${seam.settle ?? 12}`;
+                          : `面积×${up.toFixed(2)}`));
+        const seamTxt = seam.enabled === false ? "关闭" : `重叠${seam.window ?? 22}帧`;
         const guideTxt = String(seam.guide_mode || "pixels") === "latent" ? "latent(旧)" : "像素";
         const pinTxt = seam.pin_second === false ? "1采" : "1采+2采";
         const audioTxt = String(gp.audio_mode || "保留原声（推荐）").replace("（推荐）", "");
