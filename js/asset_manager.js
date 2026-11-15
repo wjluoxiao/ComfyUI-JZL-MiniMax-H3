@@ -14,6 +14,18 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// 🖼️ 扩展根 URL：从本脚本自身位置推导，不把文件夹名写死
+//    （这样仓库/目录改名后，兜底图标依然能加载；失败再退回旧默认路径）
+const JZL_EXT_BASE = (() => {
+    try {
+        const script_dir = new URL(".", import.meta.url);        // .../extensions/<目录名>/js/
+        return new URL("..", script_dir).href.replace(/\/+$/, ""); // .../extensions/<目录名>
+    } catch (e) {
+        return "/extensions/ComfyUI-JZL-MiniMax-H3";
+    }
+})();
+const JZL_ICON_URL = `${JZL_EXT_BASE}/icon.png`;
+
 const NODE_TYPE = "JZL_MiniMaxAssetManager";
 const MINI_NODE_TYPE = "JZL_MiniMaxAssetManagerMini";
 const MAX_NODE_TYPE = "JZL_MiniMaxAssetManagerMax";
@@ -906,8 +918,8 @@ function openMentionMenu(editable, start, end, query, node) {
         if (item.kind === "image") {
             const img = document.createElement("img");
             img.style.cssText = "width:100%;height:100%;object-fit:cover;";
-            img.src = item.path ? `${ASSET_PREVIEW_ENDPOINT}?path=${encodeURIComponent(item.path)}` : "/extensions/ComfyUI-JZL-MiniMax-H3/icon.png";
-            img.onerror = () => { img.src = "/extensions/ComfyUI-JZL-MiniMax-H3/icon.png"; };
+            img.src = item.path ? `${ASSET_PREVIEW_ENDPOINT}?path=${encodeURIComponent(item.path)}` : JZL_ICON_URL;
+            img.onerror = () => { img.src = JZL_ICON_URL; };
             thumb.appendChild(img);
         } else {
             thumb.textContent = item.kind === "video" ? "🎬" : "🎧";
@@ -979,8 +991,8 @@ function makeAssetToken(token, item) {
     if (item.kind === "image") {
         const img = document.createElement("img");
         img.className = "jzl-asset-thumb";
-        img.src = item.path ? `${ASSET_PREVIEW_ENDPOINT}?path=${encodeURIComponent(item.path)}` : "/extensions/ComfyUI-JZL-MiniMax-H3/icon.png";
-        img.onerror = () => { img.src = "/extensions/ComfyUI-JZL-MiniMax-H3/icon.png"; };
+        img.src = item.path ? `${ASSET_PREVIEW_ENDPOINT}?path=${encodeURIComponent(item.path)}` : JZL_ICON_URL;
+        img.onerror = () => { img.src = JZL_ICON_URL; };
         span.appendChild(img);
     }
     const text = document.createElement("span");
@@ -3749,7 +3761,7 @@ function openMentionMenuAtCaret(node, ta, start, end, query) {
             const img = document.createElement("img");
             img.style.cssText = "width:100%;height:100%;object-fit:cover;";
             img.src = item.path ? `${ASSET_PREVIEW_ENDPOINT}?path=${encodeURIComponent(item.path)}` : "";
-            img.onerror = () => { img.src = "/extensions/ComfyUI-JZL-MiniMax-H3/icon.png"; };
+            img.onerror = () => { img.src = JZL_ICON_URL; };
             thumb.appendChild(img);
         } else {
             thumb.textContent = item.kind === "video" ? "🎬" : "🎧";
