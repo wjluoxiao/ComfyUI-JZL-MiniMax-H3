@@ -7531,9 +7531,24 @@ app.registerExtension({
 
             // 节点 resize 时触发重绘，让 DOM widget（输入框）跟随高度
             let _resizeTimer = null;
+            let _jzlClampW = false;
             const prevOnResize = self.onResize;
             self.onResize = function (...args) {
                 const rr = prevOnResize?.apply(this, args);
+                // 最小宽度「拖拽中同步钳制」：直接改 size[0]（不调 setSize，避免 onResize 递归）。
+                // 以前只在下面 200ms 防抖里拉回 → 拖拽时 LiteGraph 完全不拦，能把节点拖到很窄（内容挤成一团），
+                // 松手后才弹回 600，观感是「先变小再反弹」。
+                if (!_jzlClampW) {
+                    try {
+                        const w = Number(self.size?.[0]) || 0;
+                        if (w > 0 && w < 600 - 0.5) {
+                            _jzlClampW = true;
+                            try { self.size[0] = 600; } catch (_) {}
+                            _jzlClampW = false;
+                            self.setDirtyCanvas?.(true, true);
+                        }
+                    } catch (_) { _jzlClampW = false; }
+                }
                 try {
                     syncDomWidth();  // 节点尺寸一变立即把 overlay 宽度钉为节点宽度（防挤压）
                     self.setDirtyCanvas?.(true, true);
@@ -7541,7 +7556,7 @@ app.registerExtension({
                     // 并重算节点高度，保证换行后的多行素材全部显示、节点自动增高（修复调窄后第三行被吞）
                     clearTimeout(_resizeTimer);
                     _resizeTimer = setTimeout(() => {
-                        lockMinWidth();  // 拖拽后锁定最小宽度 600（拖不窄）
+                        lockMinWidth();  // 兜底（正常情况上面 onResize 已同步钳住）
                         renderAssetWindow(windowBox, self.__promptBox, self);  // 内部会调 windowBox.__onResize 重算高度
                         self.__updateAlignStatus?.();
                         self.setDirtyCanvas?.(true, true);
