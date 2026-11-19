@@ -6,6 +6,7 @@ MiniMax H3 视频生成节点（基于 ComfyUI V3 `io.Schema` 机制）。
 
 | 节点 | node_id | 说明 |
 |------|---------|------|
+| 📥 MiniMax 素材加载 | `JZL_MiniMaxH3MediaLoader` | 原「素材库」子工作流收成一个节点：3×3 参考图 + 3 音频（可切开始时间/时长）+ 3 视频（强制帧率/跳过帧数/输出宽高/帧数上限），每槽位带编号与开关，直接输出 `JZL_REF2VA_BUS`（与「ref2va参考总线（打包）」同款，可接「解包」节点） |
 | 🎬 MiniMax H3 参考编码 | `JZL_MiniMaxH3ReferenceToVideo` | ref2va 参考条件编码，100% 复刻官方 `MiniMaxH3ReferenceToVideo` |
 | 🎭 MiniMax-H3 人物替换 | `JZL_MiniMaxCharacterSwap` | 长视频换人：源片自动切段，每段以源片段为 `<Video 1>`、定妆图为 `<Picture N>` 走 ref2va 重生成；段间钉帧 + 跑道裁切 ⇒ 成片时长 = 源片时长、段界无缝（详见 [docs/USAGE.md](docs/USAGE.md#七人物替换长视频换人)） |
 

@@ -113,6 +113,7 @@ _JZL_IMPORT_GROUPS = (
         (".nodes_h3_editor", ("JZL_MiniMaxH3PromptEditor",)),
         (".nodes_ref_bus", ("JZL_MiniMaxH3RefBusOut", "JZL_MiniMaxH3RefBusIn")),
         (".nodes_ref2va_bus", ("JZL_MiniMaxH3Ref2vaBusOut", "JZL_MiniMaxH3Ref2vaBusIn")),
+        (".nodes_h3_media_loader", ("JZL_MiniMaxH3MediaLoader",)),
     )),
 )
 
@@ -267,6 +268,7 @@ _JZL_NODE_TABLE = (
     ("JZL_MiniMaxH3RefBusIn", "JZL - 🔗 MiniMax H3 参考总线（解包）"),
     ("JZL_MiniMaxH3Ref2vaBusOut", "JZL - 🔗 MiniMax H3 ref2va参考总线（打包）"),
     ("JZL_MiniMaxH3Ref2vaBusIn", "JZL - 🔗 MiniMax H3 ref2va参考总线（解包）"),
+    ("JZL_MiniMaxH3MediaLoader", "JZL - 📥 MiniMax 素材加载"),
     ("JZL_MiniMaxPromptEnhancer", "JZL - ✨ 提示词增强"),
     ("JZL_MiniMaxAssetManager", "JZL - 🤖 MiniMax-H3短剧导演台Pro"),
     ("JZL_MiniMaxAssetManagerMax", "JZL - 🤖 MiniMax-H3短剧导演台Max"),
@@ -515,6 +517,44 @@ async def jzl_video_preview(request):
         return web.FileResponse(path)
     except Exception as exc:
         return web.json_response({"error": f"视频读取失败：{exc}"}, status=500)
+
+
+@PromptServer.instance.routes.get("/jzl/asset_video_thumb")
+async def jzl_asset_video_thumb(request):
+    """素材预览：返回视频首帧缩略图（JPEG，长边 512）。
+
+    浏览器解不了 HEVC/H.265 等编码时（<video> 报 DEMUXER_ERROR_NO_SUPPORTED_STREAMS），
+    前端用首帧兜底显示，保证「素材加载」节点的预览窗不会空白。
+    PyAV 解码（ComfyUI 自带），不依赖系统 ffmpeg。
+    """
+    path = (request.query.get("path") or "").strip()
+    if not path:
+        return web.json_response({"error": "缺少 path"}, status=400)
+    path = _resolve_asset_path(path)
+    if not path:
+        return web.json_response({"error": "文件不存在"}, status=404)
+    try:
+        import io
+
+        import av
+        from PIL import Image
+        with av.open(path) as container:
+            if not container.streams.video:
+                return web.json_response({"error": "没有视频流"}, status=404)
+            stream = container.streams.video[0]
+            img = None
+            for frame in container.decode(stream):
+                img = Image.fromarray(frame.reformat(format="rgb24").to_ndarray())
+                break
+        if img is None:
+            return web.json_response({"error": "抽帧失败"}, status=500)
+        img.thumbnail((512, 512), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=82)
+        return web.Response(body=buf.getvalue(), content_type="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=300"})
+    except Exception as exc:
+        return web.json_response({"error": f"缩略图失败：{exc}"}, status=500)
 
 
 @PromptServer.instance.routes.get("/jzl/generated_videos")

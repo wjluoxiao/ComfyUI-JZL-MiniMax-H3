@@ -551,7 +551,7 @@
   "JZL_MiniMaxMusicCaption": {
     "display_name": "JZL - 🎵 MiniMax Music3 提示词预设",
     "inputs": {
-      "配方": { "name": "✨配方（切换即套用预设）" },
+      "配方": { "name": "✨配方" },
       "音乐风格": { "name": "音乐风格" },
       "风格融合": { "name": "风格融合" },
       "速度": { "name": "速度(BPM)" },
@@ -582,7 +582,7 @@
     "display_name": "JZL - 🎵 MiniMax Music3 提示词预设（双人）",
     "inputs": {
 
-      "配方": { "name": "✨配方（切换即套用预设）" },
+      "配方": { "name": "✨配方" },
       "音乐风格": { "name": "音乐风格" },
       "风格融合": { "name": "风格融合" },
       "速度": { "name": "速度(BPM)" },
@@ -642,6 +642,15 @@
     "display_name": "JZL - 🔗 MiniMax H3 参考总线（解包）",
     "inputs": {
       "bus": { "name": "🔗 参考总线" }
+    }
+  },
+  "JZL_MiniMaxH3MediaLoader": {
+    "display_name": "JZL - 📥 MiniMax 素材加载",
+    "inputs": {
+      "media_settings": { "name": "素材配置（9 图 / 3 音频 / 3 视频）" }
+    },
+    "outputs": {
+      "0": { "name": "🔗 ref2va参考总线" }
     }
   }
 }
