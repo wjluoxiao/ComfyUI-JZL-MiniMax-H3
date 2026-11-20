@@ -304,6 +304,15 @@
       "1": { "name": "分段视频" }
     }
   },
+  "JZL_MiniMaxSkillLoader": {
+    "display_name": "JZL - ✨ MiniMax-skill加载",
+    "inputs": {
+      "skill_file": { "name": "技能文件" }
+    },
+    "outputs": {
+      "0": { "name": "系统提示词" }
+    }
+  },
   "JZL_MiniMaxAssetManagerShortDrama": {
     "display_name": "JZL - 🤖 MiniMax-H3短剧导演台",
     "inputs": {

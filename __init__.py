@@ -93,6 +93,7 @@ _JZL_IMPORT_GROUPS = (
                           "JZL_MiniMaxPreset", "JZL_MiniMaxRef2vaPreset",
                           "JZL_MiniMaxH3Preference", "JZL_MiniMaxAPISettings",
                           "_read_api_settings", "_write_api_settings")),
+        (".nodes_skill", ("JZL_MiniMaxSkillLoader",)),
         (".nodes_prompt_enhancer", ("JZL_MiniMaxPromptEnhancer",)),
     )),
     ("导演台/资产管理", False, (
@@ -258,6 +259,7 @@ _JZL_NODE_TABLE = (
     ("JZL_MiniMax_ScriptProcessor", "JZL - 🎬 剧本与镜头处理器"),
     ("JZL_MiniMaxPreset", "JZL - ✨ MiniMax-fl2va提示词预设"),
     ("JZL_MiniMaxRef2vaPreset", "JZL - ✨ MiniMax-ref2va提示词预设"),
+    ("JZL_MiniMaxSkillLoader", "JZL - ✨ MiniMax-skill加载"),
     ("JZL_MiniMaxH3Preference", "JZL - 🎯 MiniMax H3 偏好设置"),
     ("JZL_MiniMaxAPISettings", "JZL - 🌐 LLM-API 设置"),
     ("JZL_MiniMaxMusicCaption", "JZL - 🎵 MiniMax Music3 提示词预设"),

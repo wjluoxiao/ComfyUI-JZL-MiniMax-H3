@@ -698,6 +698,15 @@
       "1": { "name": "Segment Files" }
     }
   },
+  "JZL_MiniMaxSkillLoader": {
+    "display_name": "JZL - ✨ MiniMax Skill Loader",
+    "inputs": {
+      "skill_file": { "name": "Skill File" }
+    },
+    "outputs": {
+      "0": { "name": "System Prompt" }
+    }
+  },
   "JZL_MiniMaxVideoViewer": {
     "display_name": "JZL - 🎬 Generated Video Viewer",
     "inputs": {

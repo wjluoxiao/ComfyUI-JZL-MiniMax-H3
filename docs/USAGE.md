@@ -412,6 +412,10 @@ offset = clamp((上段结尾均值 − 本段开头均值) × 补偿强度, ±�
 - 动作对不上：**参考帧数** 设 0，并把「采样步数」提到 8~10；
 - 太慢：**参考帧数** 设 39~56、段长 8~10 秒、二采关掉只跑一采看效果。
 
+### MiniMax skill 加载
+
+`JZL - ✨ MiniMax-skill加载` 优先从 `Z:\AI_work\ComfyUI\custom_nodes\ComfyUI-JZL-MiniMax-H3\skills\jzl\` 读取 `.md` 或 `.txt` 文件；该目录不可用时回退到插件内置的 `skills/jzl/`。节点输出完整文本，将「系统提示词」接到 `XB-llama - 💬 指令推理` 的 `system_prompt` 输入即可。默认提供「人物替换.md」「动作迁移.md」「数字人.md」三套原创 skill；修改已有文件后重新运行会读取新内容，新增文件需要重启 ComfyUI 刷新下拉列表。
+
 ---
 
 ## 八、常见问题
