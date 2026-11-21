@@ -4220,7 +4220,19 @@ function renderAssetsPanel(c, s, mode) {
 }
 
 function renderAutoSave(c, s) {
-    // 自动保存已移至弹窗底部，与「取消/保存」按钮同行（见 buildModal footer）
+    // 自动保存已移至弹窗底部，与「取消/保存」按钮同行走（见 buildModal footer）
+}
+
+// 下拉值校验：存储值不在选项里时（如模型文件被删除/改名），select 没有任何 option 被选中，
+// 浏览器会「显示第一个选项」但 value 仍是旧值 → 面板显示 A、后端收到 B（"选了 Q4 却报 Q8 不存在"）。
+// 这里统一修正为「所见即所得」：返回实际生效值，并标记原值缺失。
+function jzlReconcileChoice(value, options, fallback) {
+    const opts = (options || []).map((o) => String((o && typeof o === "object") ? (o.value ?? "") : o));
+    const v = String(value ?? "").trim();
+    if (v && opts.includes(v)) return { value: v, missing: false, old: v };
+    const fb = String(fallback ?? "");
+    const pick = opts.includes(fb) ? fb : (opts[0] || "");
+    return { value: pick, missing: !!v, old: v };
 }
 
 function renderPromptPanel(c, s, d, node) {
@@ -4322,9 +4334,30 @@ function renderPromptPanel(c, s, d, node) {
     // 关键修复：下拉默认显示第一个模型，但 llm.model 仍为空 → 之前点保存会存成空串触发「未选择本地 LLM 模型」。
     // 打开面板时把「所见即所得」同步进存储：不切换直接保存也会持久化当前显示的模型。
     if (!llm.model && llmModels.length && !llmModels[0].startsWith("（")) llm.model = llmModels[0];
-    localBox.append(field("模型", selectControl(llmModels, llm.model || llmModels[0], v => { llm.model = v; })));
-    localBox.append(field("视觉模块 mmproj", selectControl(mmprojModels, llm.mmproj || "None", v => { llm.mmproj = v; })));
-    localBox.append(field("Chat Handler", selectControl(chatHandlers, llm.chat_handler || "None", v => { llm.chat_handler = v; })));
+    // 关键修复②：存储的模型文件被删除/改名后（如 Q8 换成 Q4），select 里没有对应 option，
+    // 浏览器显示第一项但 value 仍是旧值 → 「看着选了 Q4，跑起来报 Q8 不存在」。
+    // 这里统一对账并写回存储（含 mmproj / chat_handler），并在面板顶部给出提示。
+    const _modelFix = jzlReconcileChoice(llm.model, llmModels, llmModels[0]);
+    // 列表为空时 llmModels 里只有占位文案「（未找到本地 LLM 模型）」——它不是模型名，不能落库
+    if (String(_modelFix.value).startsWith("（")) _modelFix.value = "";
+    const _mmprojFix = jzlReconcileChoice(llm.mmproj || "None", mmprojModels, "None");
+    const _handlerFix = jzlReconcileChoice(llm.chat_handler || "None", chatHandlers, "None");
+    llm.model = _modelFix.value;
+    llm.mmproj = _mmprojFix.value;
+    llm.chat_handler = _handlerFix.value;
+    if (_modelFix.missing || _mmprojFix.missing || _handlerFix.missing) {
+        s.__jzlStaleModelFix = true;   // 交由 buildModal 打开后立即落盘
+        const warn = el("div", "margin:2px 0 10px;padding:8px 10px;border-radius:8px;background:#4a2b17;border:1px solid #b26a2a;color:#ffd9a8;font-size:12px;line-height:1.6;");
+        const lost = [];
+        if (_modelFix.missing) lost.push(`模型「${_modelFix.old || "(空)"}」→「${_modelFix.value || "无"}」`);
+        if (_mmprojFix.missing) lost.push(`mmproj「${_mmprojFix.old || "(空)"}」→「${_mmprojFix.value || "无"}」`);
+        if (_handlerFix.missing) lost.push(`Chat Handler「${_handlerFix.old || "(空)"}」→「${_handlerFix.value || "无"}」`);
+        warn.textContent = `⚠️ 原选择已不存在（可能被删除/改名），已自动切换并保存：${lost.join("；")}`;
+        localBox.append(warn);
+    }
+    localBox.append(field("模型", selectControl(llmModels, llm.model, v => { llm.model = String(v).startsWith("（") ? "" : v; })));
+    localBox.append(field("视觉模块 mmproj", selectControl(mmprojModels, llm.mmproj, v => { llm.mmproj = v; })));
+    localBox.append(field("Chat Handler", selectControl(chatHandlers, llm.chat_handler, v => { llm.chat_handler = v; })));
     localBox.append(field("推理后端", selectControl(["llama-cpp-python", "llama-server"], llm.backend || "llama-cpp-python", v => { llm.backend = v; })));
     localBox.append(field("上下文长度 n_ctx", numberControl(llm.n_ctx ?? 32768, { min: 1024, max: 262144, step: 128 }, v => { llm.n_ctx = Math.round(v); })));
     localBox.append(field("显存上限 vram_limit (GB)", numberControl(llm.vram_limit ?? -1, { min: -1, max: 1024, step: 1 }, v => { llm.vram_limit = Math.round(v); })));
@@ -6189,13 +6222,23 @@ function buildModal(node, data, panelId) {
         else { saveBtn.disabled = false; saveBtn.textContent = "💾 保存"; }
     });
 
-    // 自动保存：任何控件 change 后 1200ms 防抖保存（降低频繁整包 POST 的卡顿）
-    panelBox.addEventListener("change", () => {
-        if (settings.auto_save !== false) {
-            clearTimeout(autoSaveTimer);
-            autoSaveTimer = setTimeout(() => doSave(true, panelId === "assets"), 1200);
-        }
+    // 自动保存：控件 change 后防抖保存（降低频繁整包 POST 的卡顿）。
+    // 下拉框/复选框属于「一选就该生效」的离散选择（尤其模型选择），必须立刻落盘——
+    // 否则「选完模型马上点运行」会用到上一次保存的旧值（曾报「选了 Q4 却提示 Q8 不存在」）。
+    panelBox.addEventListener("change", (ev) => {
+        if (settings.auto_save === false) return;
+        const t = String(ev?.target?.tagName || "").toUpperCase();
+        const immediate = t === "SELECT" || (t === "INPUT" && String(ev?.target?.type || "").toLowerCase() === "checkbox");
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = setTimeout(() => doSave(true, panelId === "assets"), immediate ? 0 : 1200);
     });
+
+    // 面板打开时修正过「已失效的选择」（模型文件被删/改名）→ 立即落盘，让后端马上拿到新值。
+    // 这里不受「自动保存开关」限制：原值指向的文件已不存在，用户不可能是有意选择它。
+    if (settings.__jzlStaleModelFix) {
+        delete settings.__jzlStaleModelFix;
+        setTimeout(() => doSave(true, panelId === "assets"), 0);
+    }
 
     cancelBtn.addEventListener("click", close);
     overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) close(); });

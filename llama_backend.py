@@ -290,11 +290,53 @@ class LLAMA_CPP_STORAGE:
         else:
             cls._load_model_server(config)
 
+    @staticmethod
+    def _resolve_model_path(model, label="本地 LLM 模型"):
+        """把配置里的模型名解析成真实存在的绝对路径。
+
+        容错三种写法：绝对路径 / 二级子目录名（LLM/GPT4/x.gguf）/ 纯文件名。
+        都找不到时抛 FileNotFoundError 并列出 models/LLM 下现有模型——比 llama_cpp 抛出的
+        「ValueError: Model path does not exist: ...」更能直接告诉用户该改哪个下拉。
+        """
+        name = str(model or "").strip()
+        if not name:
+            raise FileNotFoundError(
+                f"未选择{label}（请在「大语言模型配置 → 本地 LLM 模型」里选择并保存后重新执行节点）")
+        cands = []
+        if os.path.isabs(name):
+            cands.append(name)
+        cands.append(os.path.join(folder_paths.models_dir, "LLM", name))
+        try:
+            full = folder_paths.get_full_path("LLM", name)
+        except Exception:
+            full = None
+        if full:
+            cands.append(full)
+        for p in cands:
+            if p and os.path.isfile(p):
+                return p
+        try:
+            avail = list(folder_paths.get_filename_list("LLM"))
+        except Exception:
+            avail = []
+        shown = "、".join(avail[:8]) + ("…" if len(avail) > 8 else "") if avail else "models/LLM 下没有可用文件"
+        raise FileNotFoundError(
+            f"{label}不存在：{name}（models/LLM 下现有：{shown}）。"
+            "请在「大语言模型配置 → 本地 LLM 模型」重新选择并保存（保存后重新执行节点）。")
+
+    @staticmethod
+    def model_available(model):
+        """模型是否真实可加载（不抛异常的探测版，供节点在执行前给出友好提示）。"""
+        try:
+            LLAMA_CPP_STORAGE._resolve_model_path(model)
+            return True
+        except Exception:
+            return False
+
     @classmethod
     def _load_model_server(cls, config):
         cls.clean(all=True)
         cls.backend = "llama-server"
-        cls.current_config = config.copy()
         model = config["model"]
         mmproj = config["mmproj"]
         chat_handler = config["chat_handler"]
@@ -304,7 +346,7 @@ class LLAMA_CPP_STORAGE:
         image_min_tokens = config["image_min_tokens"]
         n_gpu_layers = -1
 
-        model_path = os.path.join(folder_paths.models_dir, 'LLM', model)
+        model_path = cls._resolve_model_path(model)
 
         # A卡/N卡统一的显存感知层数计算
         vram_factor = get_vram_factor()
@@ -315,7 +357,7 @@ class LLAMA_CPP_STORAGE:
 
         mmproj_path = None
         if mmproj and mmproj != "None":
-            mmproj_path = os.path.join(folder_paths.models_dir, 'LLM', mmproj)
+            mmproj_path = cls._resolve_model_path(mmproj, label="视觉模块 mmproj ")
             if chat_handler == "None":
                 raise ValueError('"chat_handler" 不能为 None! (加载了 mmproj 视觉模块)')
 
@@ -339,6 +381,9 @@ class LLAMA_CPP_STORAGE:
             image_max_tokens=image_max_tokens,
             device=_gpu_device,
         )
+        # 记录「真正加载成功的配置」——必须放在加载完成之后：加载失败时若已写入，
+        # 之后再用同一份坏配置就会因为「config 相同」而跳过重载、复用一个空 backend。
+        cls.current_config = config.copy()
 
     @classmethod
     def _load_model_llama_cpp(cls, config):
@@ -357,7 +402,6 @@ class LLAMA_CPP_STORAGE:
 
         cls.clean(all=True)
         cls.backend = "llama-cpp-python"
-        cls.current_config = config.copy()
         model = config["model"]
         mmproj = config["mmproj"]
         chat_handler = config["chat_handler"]
@@ -367,7 +411,7 @@ class LLAMA_CPP_STORAGE:
         image_min_tokens = config["image_min_tokens"]
         n_gpu_layers = -1
 
-        model_path = os.path.join(folder_paths.models_dir, 'LLM', model)
+        model_path = cls._resolve_model_path(model)
         handler = get_handler(chat_handler)
 
         # A卡/N卡统一的显存感知层数计算
@@ -378,7 +422,7 @@ class LLAMA_CPP_STORAGE:
             gguf_layer_size = gguf_size / gguf_layers
 
         if mmproj and mmproj != "None":
-            mmproj_path = os.path.join(folder_paths.models_dir, 'LLM', mmproj)
+            mmproj_path = cls._resolve_model_path(mmproj, label="视觉模块 mmproj ")
             if handler is None:
                 raise ValueError('"chat_handler" 不能为 None! (加载了 mmproj 视觉模块)')
 
@@ -411,6 +455,8 @@ class LLAMA_CPP_STORAGE:
             n_ctx=n_ctx,
             verbose=False
         )
+        # 记录「真正加载成功的配置」——放在加载完成之后（见 _load_model_server 的说明）
+        cls.current_config = config.copy()
 
 
 any_type = AnyType("*")

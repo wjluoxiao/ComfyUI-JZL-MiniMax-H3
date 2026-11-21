@@ -3698,6 +3698,10 @@ def _llm_chat(enhance, system_prompt, user_msg, seed):
     custom_config, parameters = _llm_local_config(enhance)
     if not custom_config["model"]:
         return "[错误] 未选择本地 LLM 模型（请在「文本增强设置」里配置）"
+    try:
+        LLAMA_CPP_STORAGE._resolve_model_path(custom_config["model"])
+    except Exception as _me:
+        return f"[错误] {_me}"
     if not LLAMA_CPP_STORAGE.llm or LLAMA_CPP_STORAGE.current_config != custom_config:
         LLAMA_CPP_STORAGE.load_model(custom_config, "故事扩写")
     try:
@@ -3935,6 +3939,7 @@ def _run_script_processor(story, manager, video_count, story_style, story_name, 
     seam_runway：「无限时长」衔接跑道（秒）→ 第 2 段起的生成时长 = 设定时长 + 跑道（成片裁掉跑道 ⇒ 落盘 = 设定）。
     """
     from .nodes_llama import JZL_MiniMax_ScriptProcessor
+    from .llama_backend import LLAMA_CPP_STORAGE
 
     enhance = manager.get("enhance") or {}
     _lang = "zh" if "ZH" in str(prompt_lang or "") else "en"
@@ -3950,6 +3955,13 @@ def _run_script_processor(story, manager, video_count, story_style, story_name, 
     # 本地后端未选模型：直接给出友好错误（官方 ScriptProcessor 内部不校验空模型，会尝试加载而崩）
     if not is_api and not (custom_config.get("model") or "").strip():
         return story, "[错误] 未选择本地 LLM 模型（请在「文本增强设置」里配置）"
+    # 本地后端选的模型文件已不存在（被删除/改名）：执行前拦下并给出「现有可用模型」清单，
+    # 避免 llama_cpp 抛出生僻的 ValueError 把整个工作流中断。
+    if not is_api:
+        try:
+            LLAMA_CPP_STORAGE._resolve_model_path(custom_config.get("model"))
+        except Exception as _me:
+            return story, f"[错误] {_me}"
 
     # video_count → 精确分段数（数字字符串）；「剧情决定」→ 传特殊标签，由 LLM 按剧情时间线长度自动定段数
     seg_label = "剧情决定" if _vc_auto else str(count)
