@@ -1456,7 +1456,10 @@ def _selflift_seam_needs_tiling_patch(positive):
 
 
 def _sample_first_pass(model, positive, latent, sample_decode, seed, vae, tag="管理器"):
-    """一采入口：按「采样分类」分派 常规采样 / SelfLift采样。"""
+    """一采入口：按「采样分类」分派 常规采样 / SelfLift采样。
+
+    🎭 人物替换节点不用这里：它固定常规采样（联合窗口采样与渐进分辨率不兼容）。
+    """
     if str((sample_decode or {}).get("sample_mode") or SAMPLE_MODE_NORMAL) == SAMPLE_MODE_SELFLIFT:
         return _sample_av_selflift(model, positive, latent, sample_decode, seed, vae, tag=tag)
     return _sample_av(model, positive, latent, sample_decode, seed)

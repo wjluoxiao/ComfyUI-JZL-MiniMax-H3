@@ -5554,10 +5554,13 @@ function renderVideoParamsPanel(c, s, node) {
 function renderPrefPanel(c, s, d, node) {
     const p = s.sample_decode;
     const sec = p.second || (p.second = {});
+    // 🎭 人物替换没有「采样分类」：整片是「联合窗口采样」（每步按窗口分别预测再混合），
+    //    SelfLift 的渐进分辨率要求整段同一分辨率，插不进去 → 固定常规采样，二采由开关决定
+    const isSwapPref = !!node && node.type === SWAP_NODE_TYPE;
+    if (isSwapPref) p.sample_mode = "常规采样";
     renderAutoSave(c, s);
 
     // ── 采样分类（切换方式参照「🤖 大语言模型配置 → LLM 后端」：方形勾选单选，切换只显示对应区块）──
-    c.append(makeSectionTitle("采样分类"));
     const sl = p.selflift || (p.selflift = {
         steps: 8, transition_step: 6, lowres_scale: 0.5, rho: 0.6, w_min: 0.5, w_max: 1.0,
         upscaler_model: "none", upscaler_unload: true, highres_tiling: false,
@@ -5582,19 +5585,8 @@ function renderPrefPanel(c, s, d, node) {
         modeRow.append(lab);
         modeCbs.push(cb);
     };
-    // 🎭 人物替换不提供采样分类：整片用「联合窗口采样」（每步按窗口分别预测再混合），
-    //    SelfLift 的渐进分辨率要求整段同一分辨率 → 与本节点不兼容，面板里直接不给这个选项
-    const isSwapPref = !!node && node.type === SWAP_NODE_TYPE;
-    if (isSwapPref) {
-        p.sample_mode = "常规采样";
+    if (!isSwapPref) {
         c.append(makeSectionTitle("采样分类"));
-        c.append(field("采样分类", el("div", "font-size:13px;color:var(--fg-color,var(--jz-text));padding:6px 10px;"
-            + "background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));"
-            + "border-radius:4px;", "常规采样（本节点固定）")));
-        c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
-            "整片一次采样，每一步把画面切成若干窗口分别预测、再在重叠区混合 → 每个窗口的参考视频都对得上。\n"
-            + "SelfLift 的渐进分辨率（整段先低分辨率再提升）插不进这种逐窗口混合，所以这里不提供。"));
-    } else {
         c.append(field("采样分类", modeRow));
         mkModeCb("常规采样", "常规采样：K采样器 + 可选二次采样（现有链路）");
         mkModeCb("SelfLift采样", "SelfLift采样：低分辨率前缀 → 提升 → 高分辨率收尾（内置 SelfLift，替代二次采样）");
@@ -5606,7 +5598,7 @@ function renderPrefPanel(c, s, d, node) {
 
     // 常规采样区块（K 采样器 + 二次采样）
     const normalBox = el("div", "");
-    // SelfLift 区块
+    // SelfLift 区块（🎭 人物替换不显示）
     const slBox = el("div", "");
 
     // ── 采样（一采）──
@@ -5804,14 +5796,16 @@ function renderPrefPanel(c, s, d, node) {
     };
     syncSlHint();
 
-    c.append(normalBox, slBox);
+    // 🎭 人物替换只有常规采样：不挂 SelfLift 区块
+    c.append(normalBox);
+    if (!isSwapPref) c.append(slBox);
     // 采样分类切换：只显示当前分类对应的区块（常规=采样+二次采样；SelfLift=SelfLift 参数）
     // 调度器 / 采样步数是两种分类共用的一份配置，但两个区块各渲染了一套控件 →
     // 切换时把当前配置值同步到即将显示的控件里，避免看到另一套控件留下的旧值
     const _syncStepper = (wrapEl, v) => { const i = wrapEl?.querySelector("input"); if (i) i.value = v; };
     const _syncSelect = (selEl, v) => { if (selEl) selEl.value = v; };
     const syncSampleMode = () => {
-        const isSL = String(p.sample_mode || "常规采样") === "SelfLift采样";
+        const isSL = !isSwapPref && String(p.sample_mode || "常规采样") === "SelfLift采样";
         normalBox.style.display = isSL ? "none" : "";
         slBox.style.display = isSL ? "" : "none";
         if (isSL) {
@@ -6448,7 +6442,16 @@ function buildModal(node, data, panelId) {
         footer.insertBefore(clearBtn, cancelBtn);
     }
     dialog.append(error, footer);
-    if (panelId === "help") { saveBtn.style.display = "none"; autoSaveRow.style.display = "none"; footerZoomRow.style.display = "none"; footerUIRow.style.display = "none"; }  // 使用说明面板无需保存/自动保存/字号/界面缩放
+    if (panelId === "help") {
+        saveBtn.style.display = "none";
+        autoSaveRow.style.display = "none";
+        // 「📖 节点使用说明」是纯说明，不需要字号/界面缩放；
+        // 但 🎭 人物替换的「📝 提示词预设」也渲染在这个槽位上，它有大段 skill/描述文本 → 保留这两组按钮
+        if (!(node && node.type === SWAP_NODE_TYPE)) {
+            footerZoomRow.style.display = "none";
+            footerUIRow.style.display = "none";
+        }
+    }
 
     overlay.style.overflow = "auto";  // 界面放大后超高可滚动查看
     overlay.append(dialog);
@@ -6893,7 +6896,6 @@ function setupSwapNode(self) {
         }
         const f = swapFrameLen(gp.segment || "固定5秒");
         const up = Number(gp.upscale_scale ?? 2.0);
-        // 本节点固定常规采样（联合窗口采样）：即便旧工作流里存着「SelfLift采样」也按常规显示
         // 本节点固定常规采样（联合窗口采样）：旧工作流里存的「SelfLift采样」一律按常规显示
         const secTgt = String(gp.second_mode || "放大倍数") === "目标分辨率";
         const secOn = sec.enabled !== false;
