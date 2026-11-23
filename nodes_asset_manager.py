@@ -955,12 +955,17 @@ def _check_official_drift():
 def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
                          ref_images=None, ref_videos=None, ref_video_audios=None,
                          ref_audios=None, ref_image_size="match", ref_scale=1.0,
-                         slot_names=None, probe=None):
+                         slot_names=None, probe=None, defer=None, ref_video_fps=24.0):
     """复刻官方 MiniMaxH3ReferenceToVideo 编码（va2va / ref2va）。
 
     slot_names/probe：可选，用于回填「真实调用信息」——probe 会被写入
     {"images": [(槽位名, 0基图序号)], "videos": [(槽位名, <Video N> 的 N)], "audios": [(槽位名, <Audio N> 的 N)]}，
     记录的是**实际进入编码的项**（被跳过的项不会出现），供调用方打印真实调用结果。
+
+    defer：传一个 list 时**只做 VAE 部分**，把 (clip, prompt, ref_items, ref_blocks) 追加进去并
+    返回 (None, latent)。调用方之后再统一调用 `_cond_from_parts` 完成文本编码 ——
+    这样长视频多窗口时，VAE 和文本编码器各自只加载一次（否则会被反复换出换入，
+    表现就是「第一段正常、第二段卡死」）。
     """
     _check_official_drift()
     _assert_vae_roles(vae, audio_vae)
@@ -1032,10 +1037,18 @@ def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
             audio_latent, ref_audio_t = _encode_ref_audio(audio_vae, soundtrack)
             ref_items.append({"type": "audio"})
             _audio_n += 1          # 音轨占用一个 <Audio N> 编号
-        sample_idx = list(range(0, frames.shape[0], 12))  # FPS//2 = 12 (2fps)
+        # 视觉 token 固定「原始 24fps 下每 12 帧取 1 张」（= 每 0.5 秒一张）：
+        # 参考视频抽过帧后帧数变少，这里仍然每 12 帧取一张 → 视觉 token 同比减少（文本编码更快），
+        # 时间戳按抽帧后的真实帧率算 → 覆盖的时长不变。
+        # 注意：DiT 看到的参考视频仍是**全部帧**（ref_blocks 里的 latent），这里只影响文本编码的视觉通路。
+        _fps = float(ref_video_fps or 24.0)
+        _stride = max(1, int(round(24.0 / 2.0)))
+        if frames.shape[0] >= 4:      # 兜底：至少留 4 张，别让短窗口只剩 1~2 张
+            _stride = min(_stride, max(1, int(frames.shape[0]) // 4))
+        sample_idx = list(range(0, frames.shape[0], _stride))
         qwen_frames = frames[sample_idx]
         ref_items.append({"type": "video", "data": qwen_frames,
-                          "timestamps": [i / 2.0 for i in range(len(sample_idx))]})
+                          "timestamps": [i * _stride / _fps for i in range(len(sample_idx))]})
         ref_blocks.append({"kind": "video_audio" if ref_audio_t else "video",
                            "latent_t": z.shape[2], "latent_h": ch // 16, "latent_w": cw // 16,
                            "ref_audio_t": ref_audio_t, "latent": z, "audio_latent": audio_latent})
@@ -1052,11 +1065,24 @@ def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
         if probe is not None:
             probe["audios"].append((_nm(_au_names, pos), _audio_n, _audio_src_desc(audio, ref_audio_t)))
 
+    if defer is not None:
+        defer.append({"clip": clip, "prompt": prompt,
+                      "ref_items": ref_items, "ref_blocks": ref_blocks})
+        return None, latent
     tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
     cond = clip.encode_from_tokens_scheduled(tokens)
     if ref_blocks:
         cond = node_helpers.conditioning_set_values(cond, {"minimax_refs": ref_blocks})
     return cond, latent
+
+
+def _cond_from_parts(clip, prompt, ref_items, ref_blocks):
+    """把「VAE 已经算好的参考块」编码成 conditioning（文本编码器只在这一步用到）。"""
+    tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
+    cond = clip.encode_from_tokens_scheduled(tokens)
+    if ref_blocks:
+        cond = node_helpers.conditioning_set_values(cond, {"minimax_refs": ref_blocks})
+    return cond
 
 
 def _audio_src_desc(audio, ref_audio_t):
@@ -1179,13 +1205,16 @@ def _sample_av(model, positive, latent, sample_decode, seed):
     scheduler = sample_decode.get("scheduler", "simple") or "simple"
 
     latent_image = latent["samples"]
+    # 遮罩前缀（人物替换的段间衔接）会带一个 noise_mask：保护区不参与去噪。
+    # 导演台从不设这个键，所以这里对它是零影响。
+    noise_mask = latent.get("noise_mask") if isinstance(latent, dict) else None
     negative = []  # 空 negative（cfg=1 时不参与；[] 可安全通过 convert_cond）
     noise = comfy.sample.prepare_noise(latent_image, seed, None)
     disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
     samples = comfy.sample.sample(
         model, noise, steps, cfg, sampler_name, scheduler,
         positive, negative, latent_image,
-        denoise=denoise, disable_pbar=disable_pbar, seed=seed,
+        denoise=denoise, disable_pbar=disable_pbar, seed=seed, noise_mask=noise_mask,
     )
     return samples
 
@@ -1198,6 +1227,7 @@ def _sample_av_custom_sigmas(model, positive, latent, sigmas_text, sampler_name,
     """
     import re as _re
     latent_image = latent["samples"]
+    noise_mask = latent.get("noise_mask") if isinstance(latent, dict) else None
     negative = []  # 空 negative（cfg=1 时不参与）
     values = [float(x) for x in _re.findall(r"[-+]?(?:\d*\.*\d+)", sigmas_text or "")]
     if len(values) < 2:
@@ -1208,7 +1238,7 @@ def _sample_av_custom_sigmas(model, positive, latent, sigmas_text, sampler_name,
     disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
     samples = comfy.sample.sample_custom(
         model, noise, float(cfg), sampler, sigmas, positive, negative, latent_image,
-        disable_pbar=disable_pbar, seed=seed,
+        disable_pbar=disable_pbar, seed=seed, noise_mask=noise_mask,
     )
     return samples
 
@@ -1328,14 +1358,22 @@ def _sample_av_selflift(model, positive, latent, sample_decode, seed, vae, tag="
                           f"（含二级子目录）→ 改用 none（nearest 直接提升）")
         else:
             _ok, _p, _sz, _why, _fmt = _upscaler_file_check(_resolved)
-            if not _ok:
+            if _ok and _upscaler_arch(_p) == "2d":
+                # SelfLift（vendor_selflift/h3_upscaler.py）内置的是 3D 网络：2D 权重读不了 →
+                # 换 3D / none，别让整条工作流崩（「二采」已支持 2D，见 _run_upscaler）
+                _avail = [e for e in _selflift_upscaler_options() if e != "none"]
+                up = _avail[0] if _avail else "none"
+                _log_once(f"[JZL-{tag}] ⚠️ SelfLift 放大模型「{_resolved}」是 2D 架构（SelfLift 内置的是 3D 网络）"
+                          f" → 已自动改用：{up}")
+            elif not _ok:
                 raise RuntimeError(
                     f"SelfLift 放大模型不可用：{_resolved}\n  路径：{_p or '（解析失败）'}\n"
                     f"  大小：{_sz} 字节（{_sz / 1048576:.2f} MB）\n  原因：{_why}\n"
                     f"  可用选项：{_selflift_upscaler_options()}")
-            up = _resolved
-            _JZL_UP_MODEL_INFO.clear()
-            _JZL_UP_MODEL_INFO.update({"name": up, "path": _p, "size": _sz, "bad": False, "why": ""})
+            else:
+                up = _resolved
+                _JZL_UP_MODEL_INFO.clear()
+                _JZL_UP_MODEL_INFO.update({"name": up, "path": _p, "size": _sz, "bad": False, "why": ""})
     else:
         up = "none"
     rho = float(sl.get("rho", 0.6))
@@ -1490,6 +1528,46 @@ def _detect_weight_format(p):
     return ""
 
 
+_UP_ARCH_CACHE = {}
+
+
+def _upscaler_arch(path):
+    """放大权重架构：'3d'（纯 Conv3d）/ '2d'（resizer.* + 独立 temporal_blocks）/ ''（无法判断）。
+
+    只读 safetensors 头部键名（不加载权重），按「路径+大小+mtime」缓存。
+    .pth 需要 torch.load 才能看键 → 改用文件名判断（*_2d_conv_* / *_3d_conv_*）。
+    """
+    path = str(path or "")
+    try:
+        st = os.stat(path)
+        key = (path, st.st_size, int(st.st_mtime))
+    except Exception:
+        return ""
+    if key in _UP_ARCH_CACHE:
+        return _UP_ARCH_CACHE[key]
+    arch = ""
+    low = path.lower()
+    if low.endswith(".safetensors"):
+        try:
+            from safetensors import safe_open
+            with safe_open(path, framework="pt", device="cpu") as f:
+                keys = list(f.keys())
+            if any(k.startswith("resizer.") or ".temporal_blocks." in k for k in keys):
+                arch = "2d"
+            elif any(k.endswith("conv_in.weight") for k in keys):
+                arch = "3d"
+        except Exception:
+            arch = ""
+    if not arch:
+        base = os.path.basename(low)
+        if "2d_conv" in base:
+            arch = "2d"
+        elif "3d_conv" in base:
+            arch = "3d"
+    _UP_ARCH_CACHE[key] = arch
+    return arch
+
+
 def _list_upscaler_entries():
     """latent_upscale_models 下全部权重（**含二级/更深子目录**），返回相对路径列表。
 
@@ -1567,13 +1645,36 @@ def _resolve_upscaler_entry(name):
     return None
 
 
+def _upscaler_model_options():
+    """二采「latent放大模型」下拉：latent_upscale_models 的实时列表。
+
+    2D（`*_2d_conv_*`，resizer.* + 独立 temporal_blocks）与 3D（`*_3d_conv_*`，纯 Conv3d）
+    两套权重都支持 —— 运行时由 `_run_upscaler()` 按权重键名自动分派到对应网络。
+    """
+    return _list_upscaler_entries()
+
+
 def _selflift_upscaler_options():
-    """SelfLift「放大模型」下拉选项：["none"] + 磁盘上可用的 **H3** 放大模型（含二级子目录）。
+    """SelfLift「放大模型」下拉选项：["none"] + 磁盘上可用的 **H3 3D 架构** 放大模型（含二级子目录）。
 
     与上游 SelfLift 节点 _upscaler_input() 同一口径：只列名字含 h3 的，避免把 Ltx 等
     其它架构的放大模型混进来（选中后会在内部报架构不符）。
+    `*_2d_conv_*` 那套是 2D 架构（resizer.* + 独立 temporal_blocks），内置的
+    LatentResizer3D 加载不了 → 直接从下拉里剔除，免得用户选中后跑一半才报 state_dict 不符。
     """
-    return ["none"] + [e for e in _list_upscaler_entries() if "h3" in os.path.basename(e).lower()]
+    out = []
+    for e in _list_upscaler_entries():
+        if "h3" not in os.path.basename(e).lower():
+            continue
+        try:
+            p = folder_paths.get_full_path("latent_upscale_models",
+                                           _resolve_upscaler_entry(e) or e)
+        except Exception:
+            p = None
+        if p and _upscaler_arch(p) == "2d":
+            continue
+        out.append(e)
+    return ["none"] + out
 
 
 def _upscaler_file_check(name):
@@ -1667,7 +1768,8 @@ def _resolve_upscaler_model(precision="fp32", explicit_model=""):
     背景：官方把放大模型按精度拆成三个文件（fp32.pth / fp16.safetensors / bf16.safetensors），
     很多用户只下载其中一套（例如只装了 fp16）→ 若代码锁死加载 fp32.pth 必然 "Model file not found"。
     规则：
-    - 若用户显式指定了非 MiniMax 标准模型（自定义其它放大模型）→ 尊重用户选择；
+    - 用户显式指定了模型（含 2D / 3D 架构、或其它自定义放大模型）→ 尊重用户选择
+      （2D / 3D 的加载由 `_run_upscaler()` 按权重键名分派，这里不做架构过滤）；
     - 候选顺序：显式指定 → 所选精度 → 其它精度（同权重不同精度，配合 precision 参数运行等价）；
     - ⭐ 每个候选都做**文件可用性校验**（存在性/大小/zip 或 safetensors 结构），跳过损坏或未下载完整的
       文件（云机常见：Git LFS 指针、下载中断）→ 避免 torch.load 报看不懂的 zip 错误；
@@ -1685,13 +1787,13 @@ def _resolve_upscaler_model(precision="fp32", explicit_model=""):
         _names = []
     _std = []
     for _n in _names:
-        _base = os.path.basename(_n)
-        if (_base.startswith("minimax_h3_latent_upscaler_3d")
-                and _base.lower().endswith((".pth", ".safetensors"))):
+        _base = os.path.basename(_n).lower()
+        if (_base.startswith("minimax_h3_latent_upscaler_")      # 2d_conv / 3d_conv 两套都算标准权重
+                and _base.endswith((".pth", ".safetensors"))):
             _std.append(_n)
 
     # 自定义非 MiniMax 模型：尊重用户（但也校验，并给出提示）
-    if exp and "minimax_h3_latent_upscaler_3d" not in exp:
+    if exp and "minimax_h3_latent_upscaler_" not in exp:
         _ok, _p, _sz, _why, _fmt = _upscaler_file_check(exp)
         if _ok:
             _log_once(f"[JZL-管理器] 二采放大模型：{exp}（自定义，{_sz / 1048576:.1f} MB）")
@@ -1704,6 +1806,8 @@ def _resolve_upscaler_model(precision="fp32", explicit_model=""):
     cands = []
     if exp:
         cands.append(exp)
+    # 没指定模型时：同精度优先，且 3D 权重排在 2D 前面（老工作流行为不变）
+    cands += [n for n in _std if _key in os.path.basename(n) and "2d" not in os.path.basename(n).lower()]
     cands += [n for n in _std if _key in os.path.basename(n)]
     cands += [n for n in _std if _key not in os.path.basename(n)]
     _seen = set()
@@ -1718,7 +1822,7 @@ def _resolve_upscaler_model(precision="fp32", explicit_model=""):
             if exp and c != exp:
                 _log_once(f"[JZL-管理器] 指定的放大模型 {exp} 不可用，已自动改用：{c}")
             elif (not exp) and (_key not in os.path.basename(c)):
-                _log_once(f"[JZL-管理器] 未找到 minimax_h3_latent_upscaler_3d_{prec} 权重，自动改用磁盘现有模型：{c}")
+                _log_once(f"[JZL-管理器] 未找到 minimax_h3_latent_upscaler_{prec} 权重，自动改用磁盘现有模型：{c}")
             _JZL_UP_MODEL_INFO.clear()
             _JZL_UP_MODEL_INFO.update({"name": c, "path": _p, "size": _sz, "bad": False, "why": ""})
             return c
@@ -1884,6 +1988,104 @@ def _import_upscaler_3d():
     raise RuntimeError(_msg)
 
 
+def _split_av_latent(samples):
+    """NestedTensor / LATENT dict → (video_latent dict, audio_latent dict)。
+
+    等价于官方「Separate AV Latent」节点：它的两个输出都是 LATENT dict（不是裸张量），
+    所以要切片时必须先取 `["samples"]`，切片后再放回 dict 交给「Concat AV Latent」。
+    """
+    from comfy_extras.nodes_lt import LTXVSeparateAVLatent
+
+    if isinstance(samples, dict):        # 兼容 LATENT dict（SelfLift 等节点返回的就是这种）
+        samples = samples.get("samples", samples)
+    sep = LTXVSeparateAVLatent.execute({"samples": samples})
+    return sep.args[0], sep.args[1]
+
+
+def _import_upscaler_2d():
+    """获取 MinimaxH3LatentUpscalerNode2D 类（2D 架构权重的 latent 放大用）。
+
+    查找顺序与 `_import_upscaler_3d()` 一致：内置副本 → 按文件加载 → ComfyUI 全局注册表。
+    内置副本仅用于内部调用，不导出它的 NODE_CLASS_MAPPINGS。
+    """
+    import importlib.util as _ilu
+
+    try:
+        from .jzl_h3_latent_upscaler_2d import MinimaxH3LatentUpscalerNode2D as _VENDORED
+        return _VENDORED
+    except Exception as _ev:
+        try:
+            _vf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jzl_h3_latent_upscaler_2d.py")
+            _spec = _ilu.spec_from_file_location("_jzl_vendored_up2d", _vf)
+            _vmod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_vmod)
+            return _vmod.MinimaxH3LatentUpscalerNode2D
+        except Exception as _ev2:
+            try:
+                from nodes import NODE_CLASS_MAPPINGS as _GLOBAL_MAP
+                _cls = _GLOBAL_MAP.get("MinimaxH3LatentUpscalerNode2D")
+                if _cls is not None:
+                    return _cls
+            except Exception:
+                pass
+            raise RuntimeError(
+                "2D 架构放大模型需要「Minimax H3 Latent Upscaler (2D)」节点："
+                f"内置副本加载失败（{type(_ev).__name__}: {_ev}；按文件加载 {type(_ev2).__name__}: {_ev2}），"
+                "且 ComfyUI 里也没装该节点。请检查 jzl_h3_latent_upscaler_2d.py 是否完整。")
+
+
+def _upscaler_arch_of_model(model_name):
+    """已解析的放大模型文件名 → '2d' / '3d' / ''（判断不了）。"""
+    try:
+        p = folder_paths.get_full_path("latent_upscale_models", model_name)
+    except Exception:
+        p = None
+    return _upscaler_arch(p) if p else ""
+
+
+def _run_upscaler(latent, second, mode_val, tag="管理器", align=32):
+    """二采 latent 放大：按模型架构自动选 2D / 3D 网络。
+
+    - 模型名由 `second`（latent放大模型 + 精度）解析成磁盘真实路径；
+    - 架构看权重键名（`resizer.*` = 2D，`conv_in.weight` = 3D）→ 调对应的节点类；
+    - 参数按节点实际签名挑（3D 用 enable_temporal_chunking，2D 用 temporal_chunking 字典，
+      兼容用户自装的其它版本）。
+
+    返回 (放大后的 LATENT dict, 实际使用的模型文件名)。
+    """
+    model_name = _resolve_upscaler_model(second.get("precision") or "fp32",
+                                        second.get("upscaler_model") or "")
+    arch = _upscaler_arch_of_model(model_name)
+    up_cls = _import_upscaler_2d() if arch == "2d" else _import_upscaler_3d()
+    tag_name = "2D" if arch == "2d" else "3D"
+
+    try:
+        import inspect as _inspect
+        params = set(_inspect.signature(up_cls.execute).parameters.keys())
+    except Exception:
+        params = set()
+
+    chunk = bool(second.get("enable_chunking", True))
+    kwargs = {
+        "latent": latent,
+        "model_name": model_name,
+        "mode": mode_val,
+        "align": int(align),
+        "device": second.get("device") or "cuda",
+        "precision": second.get("precision") or "fp32",
+    }
+    if "enable_chunking" in params:
+        kwargs["enable_chunking"] = chunk
+    if "enable_temporal_chunking" in params:
+        kwargs["enable_temporal_chunking"] = chunk
+    if "temporal_chunking" in params:      # 2D 版：{"temporal_chunking": "chunked"|"single pass", "chunk_frames": N}
+        kwargs["temporal_chunking"] = {"temporal_chunking": "chunked" if chunk else "single pass"}
+    if "force_unload" in params:
+        kwargs["force_unload"] = True
+    _log_once(f"[JZL-{tag}] 二采放大网络：{tag_name}（{os.path.basename(model_name)}）")
+    return up_cls.execute(**kwargs).args[0], model_name
+
+
 def _run_second_sampling(model, positive, samples, sample_decode, second, upscale_scale, seed, tag="管理器"):
     """复刻 1180 二采链路：一采 latent → LTXV分离音视频 → 视频latent放大(MinimaxH3LatentUpscaler3D)
     → LTXVConcatAVLatent 合并 → 按二采参数再次采样。
@@ -1893,40 +2095,20 @@ def _run_second_sampling(model, positive, samples, sample_decode, second, upscal
     管理器始终 ref2va，直接复用一采的 positive。种子与一采共享，cfg 沿用一采。
     """
     try:
-        from comfy_extras.nodes_lt import LTXVSeparateAVLatent, LTXVConcatAVLatent
+        from comfy_extras.nodes_lt import LTXVConcatAVLatent
     except Exception as e:
         raise RuntimeError(f"缺少官方节点 LTXVSeparateAVLatent/LTXVConcatAVLatent（comfy-core 自带，请升级 ComfyUI）：{e}")
-    MinimaxH3LatentUpscaler3D = _import_upscaler_3d()
 
     # 1) 分离音视频潜空间
-    sep = LTXVSeparateAVLatent.execute({"samples": samples})
-    video_latent, audio_latent = sep.args[0], sep.args[1]
+    video_latent, audio_latent = _split_av_latent(samples)
 
     # 2) 视频 latent 放大（scale by multiplier，倍数=二采放大；对齐 32）
-    #    签名自适应：云机可能是官方原版（enable_temporal_chunking/force_unload），
-    #    本地是定制版（enable_chunking）——用 inspect 检测实际参数名，按需传参，兼容两者。
+    #    2D / 3D 架构由 _run_upscaler 按权重键名自动分派（2D 用 *2d_conv* 权重，3D 用 *3d_conv*）。
     try:
-        import inspect as _inspect
-        _params = set(_inspect.signature(MinimaxH3LatentUpscaler3D.execute).parameters.keys())
-    except Exception:
-        _params = set()
-    _up_kwargs = {
-        "latent": video_latent,
-        "model_name": _resolve_upscaler_model(second.get("precision") or "fp32", second.get("upscaler_model") or ""),
-        "mode": {"mode": "scale by multiplier", "scale": float(upscale_scale or 1.0)},
-        "align": 32,
-        "device": second.get("device") or "cuda",
-        "precision": second.get("precision") or "fp32",
-    }
-    _chunk = bool(second.get("enable_chunking", True))
-    if "enable_chunking" in _params:
-        _up_kwargs["enable_chunking"] = _chunk
-    if "enable_temporal_chunking" in _params:
-        _up_kwargs["enable_temporal_chunking"] = _chunk
-    if "force_unload" in _params:
-        _up_kwargs["force_unload"] = True
-    try:
-        up = MinimaxH3LatentUpscaler3D.execute(**_up_kwargs)
+        up_latent, _up_model = _run_upscaler(
+            video_latent, second,
+            {"mode": "scale by multiplier", "scale": float(upscale_scale or 1.0)},
+            tag=tag, align=32)
     except Exception as _ue:
         _umsg = str(_ue)
         if ("PytorchStreamReader" in _umsg) or ("central directory" in _umsg) or ("zip archive" in _umsg):
@@ -1937,14 +2119,13 @@ def _run_second_sampling(model, positive, samples, sample_decode, second, upscal
             raise RuntimeError(
                 f"{_umsg}\n"
                 f"  [JZL提示] 这是**放大模型权重文件本身有问题**（torch.load 读不出 zip 结构），不是本节点的 bug：\n"
-                f"    实际加载：{_up_kwargs.get('model_name')}\n"
+                f"    实际加载：{_info.get('name') or second.get('upscaler_model') or '（按精度自动选择）'}\n"
                 f"    绝对路径：{_p or '（未能解析）'}\n"
                 f"    文件大小：{_sz} 字节（{_sz / 1048576:.2f} MB）\n"
                 f"    {('节点校验结论：' + _why) if _why else '若该文件明显偏小（几百 KB）→ 是 Git LFS 指针 / 下载未完成，请重新下载'}\n"
                 f"    也可在「采样与解码设置」把二采「精度」切到已下载完整的那一套（fp32.pth / fp16.safetensors / bf16.safetensors），"
                 f"或直接指定放大模型文件。") from _ue
         raise
-    up_latent = up.args[0]
 
     # 2.5) ♾️ 无限时长衔接：二采画布被放大，而 positive 里的 keyframe 引导 latent 取自「一采画布」
     #      → PackedLayout 按二采画布算 cond 行数、引导 latent 按自己 h/w 排行 → 行数不匹配必崩。
@@ -2196,7 +2377,7 @@ def _seg_fail_context(idx, tb):
         return ""
 
 
-def _decode_av(vae, audio_vae, samples, sample_decode=None, tag="管理器"):
+def _decode_av(vae, audio_vae, samples, sample_decode=None, tag="管理器", skip_audio=False):
     """NestedTensor latent → (IMAGE [T,H,W,C], AUDIO dict|None)。
 
     「解码前清理=卸载显存模型」时完全对齐 XB-BOX「VAE解码（原版优化）」：解码前先
@@ -2223,7 +2404,7 @@ def _decode_av(vae, audio_vae, samples, sample_decode=None, tag="管理器"):
         image = image[0]  # [T, H, W, C]
 
     audio = None
-    if audio_z is not None:
+    if audio_z is not None and not skip_audio:
         if audio_vae is None:
             # 采样结果含音频潜空间但没接「音频VAE」→ 只解码视频，别在这里崩掉整段
             _log_once(f"[JZL-{tag}] ⚠️ 本段含音频潜空间但未连接「音频VAE」→ 只解码视频（该段无声）")
@@ -2921,7 +3102,7 @@ def _next_batch(folder, story):
     if not os.path.isdir(folder):
         return 1
     mx = 0
-    pat = re.compile(rf"^{re.escape(str(story))}_(\d+)次生成分段(?:合并)?")
+    pat = re.compile(rf"^{re.escape(str(story))}_(\d+)次生成")
     try:
         for fn in os.listdir(folder):
             m = pat.match(fn)
@@ -2961,11 +3142,12 @@ def _fit_audio_to_frames(waveform, sample_rate, frames, fps=VIDEO_FPS):
 
 
 def _save_segment_mp4(image, audio, out_dir, index, story_name="story", counter=1, fps=VIDEO_FPS, batch=None,
-                      keep_wav=None):
+                      keep_wav=None, label=None):
     """把单段 (IMAGE [T,H,W,C] float 0-1, AUDIO dict|None) 用 ffmpeg 落盘 mp4（临时 raw 文件方案）。
 
     文件名规则：{故事名}_{N}次生成分段{序号}_{5位编号}.mp4（batch=N 时）；batch=None 保持旧名
     {故事名}_分段{序号}_{5位编号}.mp4（兼容 Pro 等旧调用）。编号按目录已有文件递增。
+    label 不为空时用 label 代替「{N}次生成分段」这段文字（如「成片」「重跑第2段」）。
     返回保存的文件绝对路径；失败抛异常（由调用方捕获并记录日志）。
     - 帧数据先整体写入临时 rawvideo 文件，再让 ffmpeg 读取——不经过 stdin 管道，
       彻底规避 ffmpeg 提前退出导致的「flush of closed file」竞态（Linux 下 stdin 行为与 Windows 不同）；
@@ -2981,7 +3163,7 @@ def _save_segment_mp4(image, audio, out_dir, index, story_name="story", counter=
     if C >= 4:
         img = img[:, :, :, :3]  # 只取 RGB（ffmpeg rgb24 需 3 通道）
     os.makedirs(out_dir, exist_ok=True)
-    _seg = f"{int(batch)}次生成分段" if batch else "分段"
+    _seg = str(label) if label else (f"{int(batch)}次生成分段" if batch else "分段")
     path = os.path.join(out_dir, f"{story_name}_{_seg}{int(index)}_{int(counter):05d}.mp4")
     ff = _resolve_ffmpeg()
 
@@ -4552,8 +4734,6 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
         saved_segments = []
         _JZL_SEG_TRACEBACKS.clear()   # 本次运行的分段失败调用栈（诊断报告用）
         _JZL_SEG_ERR_SEEN.clear()     # 每轮重置去重表：否则本轮第 1 段失败会被上一轮抑制掉调用栈
-        # 自动合并时同时收集各段无損 WAV → 合并时「音频统一编码一次」（消除段边界 AAC encoder delay 误差）
-        _merge_wavs = [] if (auto_merge and auto_merge_path) else None
         # 保存/合并路径固定为运行中 ComfyUI 的 output/jzl（运行时可推导，不写死盘符，不可修改）
         _out_root = os.path.abspath(folder_paths.get_output_directory())
         _jzl_dir = os.path.join(_out_root, "jzl")
@@ -4561,6 +4741,9 @@ class JZL_MiniMaxAssetManager(io.ComfyNode):
         # 逐段落盘 / 自动合并 都归入 output/jzl/{故事名}/（视频名称与保存文件夹均与故事名一致）
         auto_save_path = os.path.join(_jzl_dir, _safe_story)
         auto_merge_path = os.path.join(_jzl_dir, _safe_story)
+        # 自动合并时同时收集各段无損 WAV → 合并时「音频统一编码一次」（消除段边界 AAC encoder delay 误差）
+        # （必须在 auto_merge_path 赋值之后：这里用到它，否则开启自动合并会 NameError）
+        _merge_wavs = [] if (auto_merge and auto_merge_path) else None
         _batch = _next_batch(auto_save_path, _safe_story)  # 本次生成批次号（文件名「第 N 次生成」，与 Max 统一）
         _seg_start = _next_counter(auto_save_path, f"{_safe_story}_{_batch}次生成分段")
         if auto_save:

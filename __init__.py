@@ -583,12 +583,29 @@ async def jzl_generated_videos(request):
                     if n:
                         stories.append({"story": d, "count": n})
             return web.json_response({"ok": True, "stories": stories})
-        safe = _safe_story_name(story_name)
-        d = os.path.join(jzl_dir, safe)
+        # 「分段输出」前缀语义（?prefix=1，🎭 人物替换节点用）：前段是 output 下的目录、
+        # 末段是文件名前缀；其它节点仍走 output/jzl/{故事名}/ 的老规则。
+        use_prefix = (request.query.get("prefix") or "").strip() in ("1", "true", "yes")
+        if use_prefix:
+            raw_parts = [_safe_story_name(p) for p in story_name.replace("\\", "/").strip().strip("/").split("/")
+                         if p and p not in (".", "..") and not p.endswith(":")]
+            if raw_parts:
+                d = os.path.join(out_root, *raw_parts[:-1]) if len(raw_parts) > 1 else out_root
+                safe = raw_parts[-1]
+            else:
+                d = os.path.join(out_root, "视频")
+                safe = "人物替换"
+            want = safe
+        else:
+            safe = _safe_story_name(story_name)
+            d = os.path.join(jzl_dir, safe)
+            want = ""
         videos = []
         if os.path.isdir(d):
             for fn in os.listdir(d):
                 fp = os.path.join(d, fn)
+                if want and not fn.startswith(want):
+                    continue
                 if fn.lower().endswith(".mp4") and os.path.isfile(fp):
                     try:
                         mtime = os.path.getmtime(fp)
@@ -734,11 +751,39 @@ async def jzl_manager_get(request):
         # 下拉显示标签：短名 → 「短名（适合 xxx）」，供前端 combo getOptionLabel 使用
         story_style_labels = {k: (_style_labels.get(k) or k) for k in story_styles}
         save_dir = os.path.join(folder_paths.get_output_directory(), "jzl")
-        upscaler_models = folder_paths.get_filename_list("latent_upscale_models")
+        # 二采 latent 放大模型下拉：磁盘实时列表，但剔除 2D 架构权重
+        # （本插件内置的是 3D 加载器 LatentResizer3D，2D 权重会报 state_dict 不符）
+        try:
+            from .nodes_asset_manager import _upscaler_model_options as _jzl_up_options
+            upscaler_models = _jzl_up_options()
+        except Exception:
+            try:
+                upscaler_models = folder_paths.get_filename_list("latent_upscale_models")
+            except Exception:
+                upscaler_models = []
         # SelfLift「放大模型」下拉：none + 磁盘上的 H3 放大模型（含二级子目录）
         selflift_upscaler_models = _selflift_upscaler_options()
         # 「生成设定 → 语义修正」适配器下拉：models/semantic_bridge/ 下的 .safetensors
         semantic_bridge_adapters = _semantic_bridge_adapters()
+        # 🎭 人物替换「📝 提示词预设」的自定义 skill 下拉：skills/jzl/*.md
+        from .nodes_skill import _skill_files as _jzl_skill_files
+        prompt_skills = [f for f in _jzl_skill_files() if not f.startswith("（")]
+        # 本地文本生成的 CLIP 类型：直接取官方 CLIPLoader 的下拉（保持与官方同源）
+        try:
+            import nodes as _cnodes
+            clip_types = list(_cnodes.CLIPLoader.INPUT_TYPES()["required"]["type"][0])
+        except Exception:
+            clip_types = ["qwen_image"]
+        # 「CLIP 模型」下拉 = models/text_encoders ∪ models/clip 的全部文件（去重，保持顺序）
+        try:
+            _te = list(folder_paths.get_filename_list("text_encoders"))
+        except Exception:
+            _te = []
+        try:
+            _cl = list(folder_paths.get_filename_list("clip"))
+        except Exception:
+            _cl = []
+        all_clip_models = list(dict.fromkeys(_te + _cl))
     except Exception:
         llm_list, mmproj_list, _ch = [], ["None"], ["None"]
         diff_models = clip_models = vae_models = lora_models = []
@@ -748,6 +793,9 @@ async def jzl_manager_get(request):
         upscaler_models = []
         selflift_upscaler_models = ["none"]
         semantic_bridge_adapters = []
+        prompt_skills = []
+        clip_types = ["qwen_image"]
+        all_clip_models = []
     return web.json_response({
         "ok": True,
         "settings": _read_manager_settings(),
@@ -764,6 +812,9 @@ async def jzl_manager_get(request):
         "upscaler_models": upscaler_models,
         "selflift_upscaler_models": selflift_upscaler_models,
         "semantic_bridge_adapters": semantic_bridge_adapters,
+        "prompt_skills": prompt_skills,
+        "clip_types": clip_types,
+        "all_clip_models": all_clip_models,
     })
 
 
@@ -1398,6 +1449,48 @@ def _jzl_decode_text(raw):
         except Exception:
             continue
     return ""
+
+
+@PromptServer.instance.routes.post("/jzl/swap_prompt_preview")
+async def jzl_swap_prompt_preview(request):
+    """📝 提示词预设 →「LLM验证」：只跑提示词生成，不跑视频（不进采样、不占队列）。
+
+    传 {manager_settings, video_desc, image_desc}，返回最终提示词 + 来源 + 耗时。
+    LLM 生成是同步阻塞（要加载文本编码器），放到线程池里跑，别卡住 ComfyUI 的事件循环。
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    ms = payload.get("manager_settings")
+    if not isinstance(ms, str):
+        import json as _json
+        ms = _json.dumps(ms or {}, ensure_ascii=False)
+    vd = str(payload.get("video_desc") or "")
+    imd = str(payload.get("image_desc") or "")
+
+    def _run():
+        from .nodes_character_swap import _build_swap_prompt, _parse_swap_settings
+        cfg = _parse_swap_settings(ms)
+        pc = cfg.get("prompt_cfg") or {}
+        t0 = time.time()
+        text = _build_swap_prompt(pc, vd, imd)
+        return {"ok": True, "prompt": text, "source": pc.get("source"),
+                "use_llm": bool(pc.get("use_llm")),
+                "llm_backend": pc.get("llm_backend"),
+                "seconds": round(time.time() - t0, 2)}
+
+    try:
+        import asyncio
+        res = await asyncio.get_running_loop().run_in_executor(None, _run)
+        return web.json_response(res)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return web.json_response(
+            {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)
 
 
 @PromptServer.instance.routes.get("/jzl/skills")

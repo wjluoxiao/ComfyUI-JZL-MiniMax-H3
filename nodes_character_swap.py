@@ -24,10 +24,10 @@
 import json
 import math
 import os
+import re
 import sys
 import time
 
-import node_helpers
 import torch
 
 import folder_paths
@@ -48,43 +48,59 @@ from .nodes_asset_manager import (
     SEAM_DEFAULT_WINDOW,
     SEAM_WINDOW_CHOICES,
     VIDEO_FPS,
-    _clean_cache,
+    _cond_from_parts,
     _decode_av,
+    _empty_av_latent,
     _encode_ref_to_video,
-    _fmt_call_info,
-    _import_upscaler_3d,
     _log_once,
-    _maybe_wrap_tiling,
-    _merge_mp4_concat,
     _next_batch,
     _next_counter,
     _parse_duration_spec,
     _resolve_gen_size,
     _resolve_length,
     _resolve_seed,
-    _resolve_upscaler_model,
+    _run_upscaler,
     _safe_story_name,
-    _sample_av,
-    _sample_av_custom_sigmas,
-    _sample_first_pass,
-    _save_segment_mp4,
-    _seam_apply_guide,
-    _seam_fit_guides_to_canvas,
-    _seam_frame_luma,
-    _seam_luma_ramp,
-    _seam_plan,
     _seam_resolve_window,
-    _seam_trim_decoded,
+    _save_segment_mp4,
     _seam_video_tensor,
+    _split_av_latent,
 )
 from .nodes import _resize, align_frame_count
+from . import h3_windows as _win
 
 TAG = "人物替换"
+
+# 参考视频只给这几档（都是实测/推导出来有意义的档，不给自由输入）：
+#   面积倍数：token 数 ∝ 面积，0.5 约省一半编码，0.25 已经明显糊（再低换人就失效）
+#   强制帧率：参考帧数必须 5+17k，太低会掉到 5 帧 = 等于没参考，所以下限 8fps
+
+# 落盘前缀默认值：「文件夹/文件名前缀」，例如 视频/人物替换 → output/视频/人物替换_2次生成分段1_00001.mp4
+DEFAULT_OUT_PREFIX = "视频/人物替换"
+
+
+def _resolve_out_prefix(prefix, out_root):
+    """把「视频/人物替换」拆成 (落盘目录, 文件名前缀)。
+
+    前几段是 output 下的相对目录（可多级），最后一段是文件名前缀。
+    `..` / 盘符 / 前导斜杠都会被丢掉，保证不会写到 output 之外。
+    """
+    raw = str(prefix or "").replace("\\", "/").strip().strip("/")
+    parts = [_safe_story_name(p) for p in raw.split("/")
+             if p and p not in (".", "..") and not p.endswith(":")]
+    if not parts:
+        return out_root, _safe_story_name(DEFAULT_OUT_PREFIX.split("/")[-1])
+    name = parts[-1]
+    sub = os.path.join(out_root, *parts[:-1]) if len(parts) > 1 else out_root
+    return sub, name
+
+# 单块解码的帧数上限：解码把 latent 变成 IMAGE float32（约 5.9 MB/帧），
+# 超过这个量就分块解，保证内存不随片长增长（1200 帧 ≈ 7 GB @480x864 / 3 GB @352x608）
+DECODE_FRAMES_BUDGET = 1200
 
 # 固定段长选项（区间值对换人没有意义：段长决定源片切点，必须确定）
 _SEGMENT_SECONDS_OPTIONS = tuple(x for x in SEGMENT_DURATION_CHOICES if x.startswith("固定"))
 
-AUDIO_MODES = ("保留原声（推荐）", "使用生成音轨", "静音")
 
 DEFAULT_PROMPT = (
     "[SHOT_START]\n"
@@ -105,9 +121,12 @@ DEFAULT_PROMPT = (
     "            partially_preserved —— 画面里的人物被 <Subject 1> 取代，位置与遮挡关系不变。\n"
     "\n"
     "detailed_description:\n"
-    "<Subject 1> 以 <Video 1> 中人物的同一姿态、同一动作节奏、同一表情完成整段表演，口型开合与停顿"
-    "与 <Video 1> 一致；镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 "
-    "<Video 1> 一致。只替换人物本身：脸、发型、服装、配饰换成 <Picture 1> 的，动作与场景不换。\n"
+    "<Subject 1> 以 <Video 1> 中人物的同一姿态、同一动作节奏、同一表情完成整段表演，"
+    "口型开合与停顿与 <Video 1> 一致；镜头、景别、景深、运动与 <Video 1> 一致；"
+    "场景、道具、背景、光线与色彩与 <Video 1> 一致。只替换人物本身：脸、发型、服装、配饰换成 "
+    "<Picture 1> 的，动作与场景不换。\n"
+    "{video_desc}"
+    "{image_desc}"
     "\n"
     "[Shot 1] 沿用 <Video 1> 的表演与运镜。\n"
     "\n"
@@ -116,6 +135,21 @@ DEFAULT_PROMPT = (
     "non_diegetic_music: N/A\n"
     "[SHOT_END]"
 )
+
+# 提示词来源（「📝 提示词预设 → 提示词来源」下拉）
+PROMPT_SOURCES = ("系统默认", "内置skill", "自定义skill")
+BUILTIN_SWAP_SKILL = "人物替换提示词.md"
+
+
+def _fill_desc(template, video_desc, image_desc):
+    """把「视频描述 / 图片描述」填进模板；空的就整行去掉，不留空段落。"""
+    out = str(template or "")
+    v = str(video_desc or "").strip()
+    i = str(image_desc or "").strip()
+    out = out.replace("{video_desc}", (f"视频描述补充：{v}\n" if v else ""))
+    out = out.replace("{image_desc}", (f"图片描述补充：{i}\n" if i else ""))
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -168,6 +202,29 @@ def _slice_frames(frames, start, count):
     return piece
 
 
+def _as_audio_dict(audio):
+    """把各种 AUDIO 表示统一成 {"waveform": [B,C,L], "sample_rate": int}；取不到返回 None。
+
+    节点只用它做「按帧号切片落盘」，**从不参与参考编码，也从不参与 latent 音频解码**。
+    """
+    if audio is None:
+        return None
+    if isinstance(audio, dict):
+        wf = audio.get("waveform")
+        if wf is None:
+            return None
+        return {"waveform": wf, "sample_rate": int(audio.get("sample_rate", 32000) or 32000)}
+    wf = getattr(audio, "waveform", None)
+    if wf is not None:
+        return {"waveform": wf, "sample_rate": int(getattr(audio, "sample_rate", 32000) or 32000)}
+    if isinstance(audio, (list, tuple)) and audio and hasattr(audio[0], "shape"):
+        sr = int(audio[1]) if len(audio) > 1 else 32000
+        return {"waveform": audio[0], "sample_rate": sr}
+    if hasattr(audio, "shape") and getattr(audio, "ndim", 0) in (2, 3):
+        return {"waveform": audio, "sample_rate": 32000}
+    return None
+
+
 def _slice_audio(audio, start_frames, keep_frames, fps=VIDEO_FPS):
     """按帧号切音频（与视频同一条 24fps 时间轴）。越界自动钳制，剩下的由落盘端补静音。"""
     if not isinstance(audio, dict):
@@ -197,136 +254,161 @@ def _fill_prompt(prompt, index, count, start_frame, keep_frames):
                .replace("{frames}", str(int(keep_frames))))
 
 
-def _store_pixels(image, width, height, count):
-    """把一段解码结果的尾部 count 帧存成 uint8 像素（供下一段钉帧用）。
+def _load_swap_skill(name, tag=TAG):
+    """读 skill 文件（skills/jzl/*.md，与「✨ MiniMax-skill加载」同一目录与规则）。"""
+    try:
+        from .nodes_skill import _read_skill
+        return _read_skill(name)
+    except Exception as e:
+        print(f"[JZL-{tag}] ⚠️ skill 读取失败（{name or '未选择'}）：{e}"
+              f" → 本次回退「系统默认」提示词", flush=True)
+        return None
 
-    count 就是「重叠帧数」：下段开头那 count 帧会被丢掉，钉住的正是这 count 帧，
-    所以取的刚好是「会被丢弃的量」，两边同一段帧。
-    存像素而不是 latent：钉帧每次采样都要按本次画布重新 vae.encode，
-    latent 跨分辨率只能插值，会让 keyframe 变糊并传染整段。
-    uint8 存 22 帧 @1280×704 约 60MB，只保留一份（每段覆盖）。
+
+def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
+    """调 LLM 生成提示词。失败返回 None，由调用方回退系统默认（绝不因 LLM 挂掉而中断生成）。"""
+    backend = str(prompt_cfg.get("llm_backend") or "")
+    try:
+        if "api" in backend:
+            from .nodes_llama import JZL_MiniMax_ScriptProcessor
+            api = prompt_cfg.get("api") or {}
+            if not str(api.get("model") or "").strip():
+                print(f"[JZL-{tag}] ⚠️ 在线 API 未填模型名 → 回退「系统默认」提示词", flush=True)
+                return None
+            text = JZL_MiniMax_ScriptProcessor._call_api(
+                json.dumps(api, ensure_ascii=False), system_prompt, user_msg)
+        else:
+            # 本地 = 官方「Load CLIP」+「Generate Text」（models/text_encoders 的 CLIP 文本编码器）
+            llm = prompt_cfg.get("llm") or {}
+            clip_name = str(llm.get("clip_name") or "").strip()
+            if not clip_name:
+                print(f"[JZL-{tag}] ⚠️ 未选择本地 CLIP 模型 → 回退「系统默认」提示词", flush=True)
+                return None
+            import comfy.sd
+            import folder_paths as _fp
+            from comfy_extras.nodes_textgen import TextGenerateV2
+            # 模型可能放在 models/text_encoders 或 models/clip → 两处都找
+            clip_path = _fp.get_full_path("text_encoders", clip_name) or _fp.get_full_path("clip", clip_name)
+            if not clip_path:
+                print(f"[JZL-{tag}] ⚠️ 找不到 CLIP 模型「{clip_name}」"
+                      f"（models/text_encoders 和 models/clip 里都没有）→ 回退「系统默认」提示词", flush=True)
+                return None
+            # 生成过程中的进度条会走 ComfyUI 的 PROGRESS_BAR_HOOK，它要读这两个属性；
+            # 而 last_prompt_id 只在 prompt_worker 里赋值 → 在 HTTP 路由（LLM验证）里必须自己补
+            try:
+                from server import PromptServer as _PS
+                _ps = _PS.instance
+                if getattr(_ps, "last_prompt_id", None) is None:
+                    _ps.last_prompt_id = ""
+                if not hasattr(_ps, "last_node_id"):
+                    _ps.last_node_id = None
+            except Exception:
+                pass
+            _type_name = str(llm.get("clip_type") or "qwen_image")
+            clip_obj = comfy.sd.load_clip(
+                ckpt_paths=[clip_path],
+                embedding_directory=_fp.get_folder_paths("embeddings"),
+                clip_type=getattr(comfy.sd.CLIPType, _type_name.upper(),
+                                  comfy.sd.CLIPType.STABLE_DIFFUSION))
+            try:
+                out = TextGenerateV2.execute(
+                    clip=clip_obj,
+                    prompt=user_msg,
+                    max_length=int(llm.get("max_length") or 2048),
+                    sampling_mode={
+                        "sampling_mode": "on",
+                        "temperature": float(llm.get("temperature") or 0.7),
+                        "top_k": int(llm.get("top_k") or 64),
+                        "top_p": float(llm.get("top_p") or 0.95),
+                        "min_p": float(llm.get("min_p") or 0.05),
+                        "repetition_penalty": float(llm.get("repetition_penalty") or 1.05),
+                        "presence_penalty": float(llm.get("presence_penalty") or 0.0),
+                        "seed": int(llm.get("seed") or 0),
+                    },
+                    thinking=bool(llm.get("thinking")),
+                    use_default_template=bool(llm.get("use_default_template", True)),
+                    system_prompt=system_prompt,
+                )
+                text = out.args[0] if hasattr(out, "args") else out[0]
+            finally:
+                # 生成完立刻把文本编码器退回，给后面的视频模型腾显存
+                try:
+                    import comfy.model_management as _mm
+                    _mm.unload_all_models()
+                    _mm.soft_empty_cache()
+                    import torch as _t
+                    if _t.cuda.is_available():
+                        _t.cuda.empty_cache()
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[JZL-{tag}] ⚠️ LLM 调用失败（{type(e).__name__}: {e}）"
+              f" → 回退「系统默认」提示词", flush=True)
+        return None
+    text = str(text or "").strip()
+    if not text or text.startswith(("[API 错误]", "[LLM 错误]", "[API 配置错误]")):
+        print(f"[JZL-{tag}] ⚠️ LLM 返回异常：{text[:160] or '(空)'}"
+              f" → 回退「系统默认」提示词", flush=True)
+        return None
+    return text
+
+
+def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG):
+    """按「📝 提示词预设」产出最终提示词。
+
+    系统默认 = 内置模板 + 用户填的「视频描述 / 图片描述」；
+    内置skill / 自定义skill = 把 skill 当 LLM 设定词，让 LLM 依据两段描述写 H3 提示词。
     """
-    if image is None or not hasattr(image, "shape") or int(image.shape[0]) < 1:
-        return None
-    total = int(image.shape[0])
-    n = max(1, min(int(count), total))
-    tail = image[total - n:]
-    tail = _resize(tail, int(width), int(height), "disabled")
-    return (tail.detach().clamp(0.0, 1.0) * 255.0).to(torch.uint8).cpu().contiguous()
-
-
-def _pixels_to_frames(px, width, height):
-    """uint8 像素尾帧 → 指定画布的 float 帧（供 vae.encode / 参考视频用）。"""
-    if px is None:
-        return None
-    frames = px.to(dtype=torch.float32).div(255.0)
-    if int(frames.shape[1]) != int(height) or int(frames.shape[2]) != int(width):
-        frames = _resize(frames, int(width), int(height), "disabled")
-    return frames.contiguous()
-
-
-def _apply_pixel_guide(positive, prev_pixels, vae, width, height, window, back=0):
-    """把上一段解码像素按本采画布 vae.encode 成段首 keyframe（位置固定在第 0 帧）。
-
-    默认取上段**最后** window 帧（`back=0`）：段首生成位置 0 对应的源片时间正是
-    「本段起点 − window」，也就是上一段输出的最后 window 帧 —— 两边同一条时间轴，不抢跑。
-    像素先缩放到本采分辨率再编码，所以 keyframe 是清晰的；直接拿一采 latent 尾部跨分辨率
-    使用只能插值 ⇒ 糊。
-    """
-    if prev_pixels is None or vae is None:
-        return positive
-    frames = _pixels_to_frames(prev_pixels, width, height)
-    total, span = int(frames.shape[0]), max(1, int(window))
-    p0 = max(0, total - span - max(0, int(back)))
-    frames = frames[p0:p0 + span]
-    n = int(frames.shape[0])
-    if n >= 5:
-        while n % 17 != 5:      # 官方同款：多帧裁到 17k+5
-            n -= 1
-        frames = frames[:n]
-        if n < span:
-            print(f"[JZL-{TAG}]   ⚠️ 衔接画面只有 {n} 帧（需要 {span} 帧，上段只能回溯 {total} 帧）"
-                  f"→ 衔接可能偏短")
-    else:
-        frames = frames[:1]
-    keyframe = {"resolved_frame_index": 0, "latent": vae.encode(frames)}
-    keyframes = list((positive[0][1] or {}).get("minimax_keyframes") or [])
-    keyframes.append(keyframe)
-    return node_helpers.conditioning_set_values(positive, {"minimax_keyframes": keyframes})
-
-
-def _rgb_means(image, frames, from_tail=False):
-    """取若干帧的逐通道平均值（0..1 浮点，长度 3）。用于段间配色对齐。"""
-    if image is None or not hasattr(image, "shape") or int(image.shape[0]) < 1:
-        return None
-    total = int(image.shape[0])
-    n = max(1, min(int(frames), total))
-    chunk = image[total - n:] if from_tail else image[:n]
-    m = chunk.float().mean(dim=(0, 1, 2))
-    return [float(m[0]), float(m[1]), float(m[2])]
-
-
-def _apply_rgb_offset(image, offset):
-    """整段加上一个固定的逐通道偏移（加性，clamp 0..1；offset 单位是 0..1 浮点）。
-
-    与「逐帧亮度渐变」不同：这里是**整段一个常量**，用来消掉段与段之间的色偏/色温漂移，
-    段内每一帧的相对关系完全不变（不会引入闪烁）。
-
-    显存：只 clone 一份（本来落盘前就要一份可写副本），逐块原地加，峰值 = 1 段 + 1 块。
-    """
-    if image is None or offset is None:
-        return image
-    if all(abs(float(o)) < 1e-5 for o in offset):
-        return image
-    out = image.clone()
-    add = torch.tensor([float(offset[0]), float(offset[1]), float(offset[2])],
-                       dtype=torch.float32, device=image.device).view(1, 1, 1, 3)
-    step = 4
-    with torch.no_grad():
-        for s in range(0, int(out.shape[0]), step):
-            blk = out[s:s + step].float()
-            blk.add_(add)
-            blk.clamp_(0.0, 1.0)
-            out[s:s + step] = blk.to(dtype=out.dtype)
-            del blk
-    return out
-
-
-def _seam_color_offset(prev_rgb, cur_rgb, strength, max_offset, guard):
-    """按「前段结尾均值 vs 本段开头均值」算逐通道固定补偿（返回 0..1 浮点三元组）。
-
-    三个护栏（缺一不可）：
-      · 强度 0~1：补偿只做一部分，留一点自然差异，避免整段被推成另一个色调；
-      · 单通道上限：默认 16/255，超过就说明不是色彩漂移而是换场景，硬拉会毁画面；
-      · 差异阈值：三通道平均差 > guard/255 时整体放弃（场景/灯光真的变了，不该对齐）。
-    """
-    if prev_rgb is None or cur_rgb is None:
-        return None
-    diff = [float(prev_rgb[c]) - float(cur_rgb[c]) for c in range(3)]
-    if (abs(diff[0]) + abs(diff[1]) + abs(diff[2])) / 3.0 > float(guard) / 255.0:
-        return None
-    cap = float(max_offset) / 255.0
-    return [max(-cap, min(cap, d * float(strength))) for d in diff]
+    source = str(prompt_cfg.get("source") or "系统默认")
+    fallback = _fill_desc(DEFAULT_PROMPT, video_desc, image_desc)
+    if not bool(prompt_cfg.get("use_llm")) or source == "系统默认":
+        return fallback
+    skill = _load_swap_skill(
+        BUILTIN_SWAP_SKILL if source == "内置skill" else (prompt_cfg.get("skill") or ""), tag)
+    if not skill:
+        return fallback
+    v = str(video_desc or "").strip() or "（用户未填写，请按通用换人场景处理）"
+    i = str(image_desc or "").strip() or "（用户未填写，请按通用换人场景处理）"
+    user_msg = ("请根据下面的素材描述，写一段用于「把视频里的人换成参考图中的人」的 MiniMax-H3 提示词。\n"
+                "必须严格使用 ===H3_PROMPT=== 结构，并用 [SHOT_START] / [SHOT_END] 包裹。\n\n"
+                f"【视频描述】\n{v}\n\n【图片描述】\n{i}")
+    text = _swap_llm_call(prompt_cfg, skill, user_msg, tag)
+    if not text:
+        return fallback
+    if "[SHOT_START]" not in text:
+        text = "[SHOT_START]\n\n" + text + "\n[SHOT_END]"
+    elif "[SHOT_END]" not in text:
+        print(f"[JZL-{tag}] ⚠️ 提示词结尾没有 [SHOT_END]：多半是撞上 max_length 被截断了"
+              f"（当前 {len(text)} 字）。把「max_length」调大再验证一次。", flush=True)
+        text = text + "\n[SHOT_END]"
+    print(f"[JZL-{tag}] 提示词：{source} 生成完成（{len(text)} 字）", flush=True)
+    return text
 
 
 def _resolve_overlap(want, seg_len, enabled=True):
-    """把「重叠帧数」限制到合法范围。
+    """校验「重叠帧数」，不合法直接报错（不静默降级）。
 
-    重叠必须同时是 17k+5（钉帧帧数只能取 5/22/39/56）**且小于段长**
-    （否则上一段的输出根本凑不出这么多帧当衔接）。
+    重叠必须同时是 17k+5（钉帧/前缀帧数只能取 5/22/39/56，才能和模型
+    「5 token = 17 帧」的分组对齐）**且小于段长**（否则上一段凑不出这么多帧当衔接）。
     """
     if not enabled:
         return 0
     try:
         want = int(want)
     except Exception:
-        return 0
-    limit = max(0, int(seg_len) - 1)
-    usable = [w for w in SEAM_WINDOW_CHOICES if w <= limit]
-    if not usable:
-        return 0
-    fit = [w for w in usable if w <= want]
-    return int(max(fit) if fit else min(usable))
+        raise ValueError(f"「重叠帧数」必须是整数（收到 {want!r}）")
+    choices = "/".join(str(v) for v in SEAM_WINDOW_CHOICES)
+    if want not in SEAM_WINDOW_CHOICES:
+        raise ValueError(
+            f"「重叠帧数」只能是 {choices} 帧（这些值和模型的 5 token = 17 帧分组对齐），"
+            f"当前是 {want} 帧。请在「🎭 采样解码设置 → 分段衔接」里重新选一个。")
+    if want > int(seg_len) - 1:
+        smaller = [v for v in SEAM_WINDOW_CHOICES if v < int(seg_len)]
+        hint = f"或把重叠帧数改成 {max(smaller)} 帧" if smaller else ""
+        raise ValueError(
+            f"「重叠帧数」{want} 帧 ≥ 每段帧数 {int(seg_len)}：每段必须留一部分是新画面。"
+            f"请把「每段时长」调大，{hint}")
+    return want
 
 
 def _second_area_scale(gp):
@@ -349,6 +431,44 @@ def _second_canvas(gp, width, height):
     tw = max(32, int(round(width * s / 32.0)) * 32)
     th = max(32, int(round(height * s / 32.0)) * 32)
     return tw, th
+
+
+# 源片帧率的候选值：用「原声真实时长」反推，命中这些常见帧率才采信
+_SOURCE_FPS_CANDIDATES = (8.0, 10.0, 12.0, 15.0, 16.0, 20.0, 23.976, 24.0, 25.0,
+                          29.97, 30.0, 48.0, 50.0, 59.94, 60.0)
+
+
+def _detect_source_fps(n_frames, source_audio, tol=0.03):
+    """用原声真实时长反推源视频帧率，返回 (fps, 原声秒数)。
+
+    模型的时间轴固定按 24fps 解释帧数，所以 12fps 的 10 秒视频（120 帧）会被当成 5 秒。
+    有了原声的真实秒数就能反推：120 帧 / 10 秒 = 12fps → 升帧到 24fps 才是真正的 10 秒。
+    没接原声、或算出来不像任何常见帧率，就按 24fps 处理（返回 VIDEO_FPS）。
+    """
+    wf = source_audio.get("waveform") if isinstance(source_audio, dict) else None
+    if wf is None:
+        return float(VIDEO_FPS), None
+    sr = int(source_audio.get("sample_rate", 32000) or 32000)
+    dur = float(wf.shape[-1]) / float(sr)
+    if dur <= 0.2 or int(n_frames) < 5:
+        return float(VIDEO_FPS), dur
+    est = float(n_frames) / dur
+    best = min(_SOURCE_FPS_CANDIDATES, key=lambda f: abs(f - est))
+    if abs(best - est) / best <= tol:
+        return float(best), dur
+    return float(VIDEO_FPS), dur
+
+
+def _resample_to_24(frames, src_fps, dst_fps=float(VIDEO_FPS)):
+    """按时间轴把源片重采样到 dst_fps（最近邻取样，返回新张量）。
+
+    只改帧数，不改时长：12fps 120 帧（10 秒）→ 24fps 240 帧（还是 10 秒）。
+    """
+    n = int(frames.shape[0])
+    target = max(5, int(round(n * float(dst_fps) / float(src_fps))))
+    pos = torch.arange(target, dtype=torch.float64) * (float(src_fps) / float(dst_fps))
+    idx = pos.floor().clamp_(0, n - 1).long()
+    return frames.index_select(0, idx)
 
 
 def _cache_source(frames, max_gb, tag=TAG):
@@ -389,159 +509,24 @@ def _slice_source(frames, start, count, uint8_cached, width, height):
 def _first_pass_desc(sd):
     """一采参数的一行摘要（控制台里两次采样必须有各自的日志，否则分不清跑到哪一步）。"""
     d = sd or {}
-    if str(d.get("sample_mode") or SAMPLE_MODE_NORMAL) == SAMPLE_MODE_SELFLIFT:
-        sl = d.get("selflift") or {}
-        return (f"SelfLift {int(sl.get('steps', 8) or 8)} 步"
-                f"（低分辨率 {int(sl.get('transition_step', 6) or 6)} 步）"
-                f"｜{d.get('scheduler') or 'simple'}")
     return (f"{d.get('sampler') or 'res_multistep'} {int(d.get('steps', 4) or 4)} 步"
             f"｜{d.get('scheduler') or 'simple'}"
             f"｜降噪 {float(d.get('denoise', 1.0) or 1.0):.2f}")
 
 
-def _run_second_pass(model, positive, samples, sample_decode, second_cfg, gp, width, height, seed,
-                     tag=TAG, guide_fn=None):
-    """二采：latent 放大（面积倍数 / 目标分辨率）→ 合并音视频 → 再采样。
+def _plan_line(label, steps, n_win):
+    """一行采样计划。
 
-    与导演台 `_run_second_sampling` 同源，额外支持「目标分辨率」模式。
-
-    `guide_fn(width_px, height_px) -> positive`：拿到放大后的**真实**画布尺寸后再钉帧。
-    二采画布由放大模型决定（latent 尺寸 × 16 再对齐），事先算出来的像素尺寸可能差几帧，
-    所以必须在这里回调，才能保证钉帧像素与目标画布**完全一致**（否则又要插值 → 糊）。
+    步数一律取**实际 sigmas 条数**（不是面板上的「步数」）：降噪 < 1 时两者本来就不一样，
+    二采又常常用显式 sigmas —— 打印面板值会让人以为「设 3 步却跑了 8 步」。
     """
-    try:
-        from comfy_extras.nodes_lt import LTXVSeparateAVLatent, LTXVConcatAVLatent
-    except Exception as e:
-        raise RuntimeError(f"缺少官方节点 LTXVSeparateAVLatent/LTXVConcatAVLatent（comfy-core 自带）：{e}")
-
-    up_cls = _import_upscaler_3d()
-    sep = LTXVSeparateAVLatent.execute({"samples": samples})
-    video_latent, audio_latent = sep.args[0], sep.args[1]
-
-    if str(gp.get("second_mode") or "放大倍数") == "目标分辨率":
-        tw, th = _second_canvas(gp, width, height)
-        mode_val = {"mode": "target dimensions", "width": int(tw), "height": int(th)}
-    else:
-        # 「放大倍数」是**面积**倍率 → 传给放大模型要开方（它期望的是线性倍数）
-        mode_val = {"mode": "scale by multiplier", "scale": float(_second_area_scale(gp))}
-
-    try:
-        import inspect as _inspect
-        params = set(_inspect.signature(up_cls.execute).parameters.keys())
-    except Exception:
-        params = set()
-    model_file = _resolve_upscaler_model(second_cfg.get("precision") or "fp32",
-                                         second_cfg.get("upscaler_model") or "")
-    kwargs = {
-        "latent": video_latent,
-        "model_name": model_file,
-        "mode": mode_val,
-        "align": 32,
-        "device": second_cfg.get("device") or "cuda",
-        "precision": second_cfg.get("precision") or "fp32",
-    }
-    chunk = bool(second_cfg.get("enable_chunking", True))
-    if "enable_chunking" in params:
-        kwargs["enable_chunking"] = chunk
-    if "enable_temporal_chunking" in params:
-        kwargs["enable_temporal_chunking"] = chunk
-    if "force_unload" in params:
-        kwargs["force_unload"] = False
-    _t_up = time.time()
-    up = up_cls.execute(**kwargs)
-    up_latent = up.args[0]
-
-    try:
-        tv = _seam_video_tensor(up_latent)
-        pw, ph = int(tv.shape[-1]) * 16, int(tv.shape[-2]) * 16
-    except Exception:
-        pw, ph = _second_canvas(gp, width, height)
-    area = pw * ph / float(max(1, width * height))
-    print(f"[JZL-{tag}]   二采放大：{os.path.basename(model_file or '内置模型')} "
-          f"{width}x{height} → {pw}x{ph}（面积 {area:.2f}x）｜{time.time() - _t_up:.1f} 秒", flush=True)
-
-    # 二采钉帧：用放大后的真实像素尺寸重新编码像素引导（绝不拿一采的 keyframe 插值）
-    if guide_fn is not None:
-        try:
-            positive = guide_fn(pw, ph)
-            print(f"[JZL-{tag}]   衔接（二采·像素）：按放大后的真实画布 {pw}x{ph} 重编码钉成本段首帧",
-                  flush=True)
-        except Exception as _ge:
-            print(f"[JZL-{tag}]   ⚠️ 二采钉帧失败（{type(_ge).__name__}: {_ge}）→ 本段二采不带衔接条件",
-                  flush=True)
-
-    # 引导 latent 空间对齐（像素模式在上一行已按真实画布编码，这里是零开销空操作）
-    positive = _seam_fit_guides_to_canvas(positive, up_latent, tag=tag)
-    merged = LTXVConcatAVLatent.execute(up_latent, audio_latent).args[0]
-
-    cfg = float(sample_decode.get("cfg", 1.0) or 1.0)
-    model2 = _maybe_wrap_tiling(model, second_cfg, up_latent, audio_latent, tag=tag)
-    if str(second_cfg.get("sigmas_mode") or "scheduler") == "custom":
-        sigs = second_cfg.get("custom_sigmas") or "0.8500, 0.6316, 0.3158, 0.0000"
-        sampler2 = second_cfg.get("sampler") or "euler"
-        print(f"[JZL-{tag}]   二采：{sampler2}｜自定义 sigmas {sigs}｜{pw}x{ph}", flush=True)
-        _t2 = time.time()
-        out = _sample_av_custom_sigmas(model2, positive, merged, sigs, sampler2, seed, cfg)
-        print(f"[JZL-{tag}]   二采完成：{time.time() - _t2:.1f} 秒", flush=True)
-        return out
-    sd2 = dict(sample_decode or {})
-    sd2["sampler"] = second_cfg.get("sampler") or "euler"
-    sd2["scheduler"] = second_cfg.get("scheduler") or "simple"
-    sd2["steps"] = int(second_cfg.get("steps", 3) or 3)
-    sd2["denoise"] = float(second_cfg.get("denoise", 0.3) or 0.3)
-    print(f"[JZL-{tag}]   二采：{_first_pass_desc(sd2)}｜{pw}x{ph}", flush=True)
-    _t2 = time.time()
-    out = _sample_av(model2, positive, merged, sd2, seed)
-    print(f"[JZL-{tag}]   二采完成：{time.time() - _t2:.1f} 秒", flush=True)
-    return out
-
-
-def _plan_source_segments(total_frames, seg_len, overlap, max_segments):
-    """切段计划：每段「生成帧数 / 源片起点 / 头部丢弃 / 尾部丢弃 / 成片保留帧数」。
-
-    ⭐ 目标：成片帧数与源片**严格相等**（不缺帧、不多帧）。
-
-    · i=0：没有前文可承接 → 生成帧数 = align(保留帧数)，不丢头；
-    · i>0：生成帧数 = align(保留帧数 + 重叠)，丢掉头部「重叠」帧，
-      源片起点 = 段起点 − 重叠（这段源片正好是上一段已产出的内容）；
-    · 因为 align 会把总长向上补到 17k+5，补出来的余量从**尾部**丢掉（0~16 帧）；
-    · 每段真正落盘 = 保留帧数，累加恒等于源片总帧数。
-
-    重叠帧既是「衔接窗口」也是「头部丢弃量」：钉帧钉住的正好是被丢掉的那段，
-    所以模型输出的第 1 帧直接接在钉住内容的下一帧 → 接缝平顺、无重复无缺失。
-    """
-    seg_len = max(5, int(seg_len))
-    overlap = max(0, int(overlap))
-    count = max(1, int(math.ceil(total_frames / float(seg_len))))
-    if count > int(max_segments):
-        raise ValueError(
-            f"源片 {total_frames} 帧 ÷ 每段 {seg_len} 帧 = {count} 段，超过「最大段数」{int(max_segments)}。"
-            f"请把「每段时长」调大（或分段处理源片）后重试。")
-    plan = []
-    start = 0
-    for i in range(count):
-        keep = min(seg_len, int(total_frames) - start)
-        if keep <= 0:
-            break
-        if i == 0 or overlap <= 0:
-            gen = align_frame_count(keep)
-            drop = 0
-            src_start = start
-        else:
-            gen = align_frame_count(keep + overlap)
-            drop = overlap
-            src_start = max(0, start - overlap)
-        avail = int(gen) - int(drop)          # 丢头后还剩多少帧可落盘
-        extra = int(avail) - int(keep)        # align 补出来的余量 → 尾部丢掉
-        if extra < 0:                          # 理论上不可能（align 只向上取整），兜底重算
-            gen = align_frame_count(keep + drop)
-            avail = int(gen) - int(drop)
-            extra = max(0, int(avail) - int(keep))
-        plan.append({"index": len(plan), "start": int(start), "keep": int(keep),
-                     "gen": int(gen), "src_start": int(src_start),
-                     "drop": int(drop), "extra": int(extra)})
-        start += int(keep)
-    return plan
+    steps, n_win = max(1, int(steps)), max(1, int(n_win))
+    if n_win == 1:
+        print(f"[JZL-{TAG}]   {label}计划：{steps} 步 × 1 个窗口 = {steps} 次模型前向", flush=True)
+        return
+    print(f"[JZL-{TAG}]   {label}计划：{steps} 步 × {n_win} 个窗口 = {steps * n_win} 次模型前向；"
+          f"进度条 {steps * n_win} 格（1 格 = 1 个窗口，每步按顺序算全部 {n_win} 个窗口）",
+          flush=True)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -564,10 +549,9 @@ _SWAP_DEFAULTS = {
         "second_mode": "放大倍数",        # 放大倍数（面积倍率，默认 2.0）| 目标分辨率
         "second_width": 1280,
         "second_height": 704,
-        "audio_mode": "保留原声（推荐）",
-        "max_segments": 60,
-        # 源片超过这个体积就用 uint8 缓存（0 = 不转）：长片常驻内存降到 1/4
-        "source_cache_gb": 8.0,
+        "retake": 0,
+        # 声音来源：使用原声（默认，原声只用于切片落盘）| 生成音频（解码模型音轨）
+        "audio_mode": "使用原声",
     },
     "sample_decode": {
         "sample_mode": "常规采样",
@@ -578,17 +562,10 @@ _SWAP_DEFAULTS = {
         "selflift": {"steps": 8, "transition_step": 6, "lowres_scale": 0.5, "rho": 0.6,
                      "w_min": 0.5, "w_max": 1.0, "upscaler_model": "none",
                      "upscaler_unload": True, "highres_tiling": False},
-        # 分段衔接：重叠 22 帧 = 上一段结尾的 22 帧既钉成本段开头、又在成片里丢掉。
+        # 分段衔接：重叠 22 帧 = 上一段结尾的 22 帧铺进本段开头（并在成片里丢掉）。
         # 没有「过渡帧数」——那是为了迁就「落盘必须 17k+5」造出来的，参考工作流没有这个概念。
-        "seam": {"enabled": True, "window": 22, "ref_video_tail": 0,
-                 # 引导来源：pixels = 上段解码像素按本采画布重编码（清晰）
-                 #           latent = 上段一采 latent 尾部（旧实现，二采会糊）
-                 "guide_mode": "pixels",
-                 # ⭐ 一采与二采各自钉一次帧（二采用二采画布重编码，避免插值发糊）
-                 "pin_second": True,
-                 # 段间配色：用「前段结尾均值 vs 本段开头均值」做逐通道常量补偿
-                 "color": {"enabled": True, "strength": 0.8, "max_offset": 16,
-                           "guard": 32, "ramp": 12}},
+        # 分段衔接：重叠 22 帧（窗口之间的重叠区，按斜坡混合）
+        "seam": {"enabled": True, "window": 22},
         # 二次采样：默认开，用参考工作流的显式 sigmas（几乎重跑整条 schedule，才能真正提清晰度）。
         # 想用「步数 + 降噪」就切到「调度器」模式，参数全部由面板控制。
         "second": {"enabled": True, "sampler": "euler", "scheduler": "simple",
@@ -598,7 +575,22 @@ _SWAP_DEFAULTS = {
                    "upscaler_model": "", "device": "cuda", "enable_chunking": True,
                    "tiling": "关闭", "tiling_tiles": 2, "tiling_overlap": 128},
     },
-    "save": {"mode": "拼接保存", "auto_merge_delete": False},
+    "save": {},
+    # 📝 提示词预设：LLM 增强 + 提示词来源
+    "prompt_cfg": {
+        "use_llm": False,
+        "source": "系统默认",              # 系统默认 | 内置skill | 自定义skill
+        "skill": "",                       # 自定义 skill 文件名（skills/jzl/*.md）
+        "llm_backend": "在线API [api]",    # 本地模型 [local] | 在线API [api]
+        # 本地文本生成 = 官方「Load CLIP」+「Generate Text」（CLIP 文本编码器，不是 gguf）
+        "llm": {"clip_name": "", "clip_type": "qwen_image", "max_length": 2048,
+                "temperature": 0.7, "top_k": 64, "top_p": 0.95, "min_p": 0.05,
+                "repetition_penalty": 1.05, "presence_penalty": 0.0, "seed": 0,
+                "thinking": False, "use_default_template": True},
+        "api": {"provider": "OpenAI 兼容 (OpenAI/DeepSeek/Qwen/GLM/Kimi/Ollama/vLLM/LM Studio)",
+                "model": "deepseek-flash", "api_key": "", "base_url": "https://api.deepseek.com",
+                "temperature": 0.6, "max_tokens": 81920, "thinking": "disabled"},
+    },
 }
 
 
@@ -638,7 +630,7 @@ def _parse_swap_settings(raw):
             print(f"[JZL-{TAG}] ⚠️ 节点配置 JSON 解析失败 → 本次全部使用默认配置")
             got = None
         if isinstance(got, dict):
-            for grp in ("gen_params", "sample_decode", "save"):
+            for grp in ("gen_params", "sample_decode", "save", "prompt_cfg"):
                 src = got.get(grp)
                 if isinstance(src, dict):
                     for k, v in src.items():
@@ -656,13 +648,11 @@ def _parse_swap_settings(raw):
         "second_mode": _cfg_opt(gp, "second_mode", "放大倍数", ("目标分辨率", "放大倍数")),
         "second_width": int(_cfg_num(gp, "second_width", 1280, 32, 4096)),
         "second_height": int(_cfg_num(gp, "second_height", 704, 32, 4096)),
-        "audio_mode": _cfg_opt(gp, "audio_mode", AUDIO_MODES[0], AUDIO_MODES),
-        "max_segments": int(_cfg_num(gp, "max_segments", 60, 1, 200)),
-        # 源片超过这个体积就用 uint8 缓存（0 = 不转）：长片常驻内存降到 1/4
-        "source_cache_gb": _cfg_num(gp, "source_cache_gb", 8.0, 0.0, 512.0),
+        "retake": int(_cfg_num(gp, "retake", 0, 0, 200)),
+        "audio_mode": _cfg_opt(gp, "audio_mode", "使用原声", ("使用原声", "生成音频")),
     }
+    # 只剩两个旋钮：窗口长度（每段时长）与重叠帧数
     seam = sd.get("seam") or {}
-    color_cfg = seam.get("color") if isinstance(seam.get("color"), dict) else {}
     second = sd.get("second") or {}
     selflift = sd.get("selflift") or {}
     # ⚠️ 采样解码这一段与「短剧导演台」100% 同构：面板渲染的是同一套键，
@@ -691,21 +681,7 @@ def _parse_swap_settings(raw):
             "highres_tiling": _cfg_bool(selflift, "highres_tiling", False),
         },
         "seam": {
-            # 缺失/None → 默认开；只有显式 false 才关（与 _seam_flag 同一套语义）
-            "enabled": _cfg_bool(seam, "enabled", True),
             "window": int(_seam_resolve_window(_cfg_num(seam, "window", SEAM_DEFAULT_WINDOW))),
-            "ref_video_tail": int(_cfg_num(seam, "ref_video_tail", 0, 0, 600)),
-            # 引导来源：pixels（按本采画布重编码）/ latent（旧实现）
-            "guide_mode": ("latent" if "latent" in str(seam.get("guide_mode") or "").lower()
-                           or "latent" in str(seam.get("guide_mode") or "") else "pixels"),
-            "pin_second": _cfg_bool(seam, "pin_second", True),
-            "color": {
-                "enabled": _cfg_bool(color_cfg, "enabled", True),
-                "strength": _cfg_num(color_cfg, "strength", 0.8, 0.0, 1.0),
-                "max_offset": _cfg_num(color_cfg, "max_offset", 16, 0, 64),
-                "guard": _cfg_num(color_cfg, "guard", 32, 0, 128),
-                "ramp": int(_cfg_num(color_cfg, "ramp", 12, 0, 24)),
-            },
         },
         "second": {
             "enabled": _cfg_bool(second, "enabled", True),
@@ -724,9 +700,48 @@ def _parse_swap_settings(raw):
             "tiling_overlap": int(_cfg_num(second, "tiling_overlap", 128, 0, 512)),
         },
     }
-    cfg["save"] = {
-        "mode": _cfg_opt(sv, "mode", "拼接保存", ("拼接保存", "分段保存")),
-        "auto_merge_delete": _cfg_bool(sv, "auto_merge_delete", False),
+    # 落盘固定为「逐段落盘」（长片必须，否则整片解码爆内存）；
+    # 合并交给下游「XB-BOX - 🎬 视频批量拼接」，所以这里不再有保存模式开关。
+    del sv
+
+    # 📝 提示词预设：LLM 开关 + 来源 + 后端配置（结构与导演台的 llm/api 同构）
+    pc = sd.get("prompt_cfg") or cfg.get("prompt_cfg") or {}
+    use_llm = _cfg_bool(pc, "use_llm", False)
+    source = _cfg_opt(pc, "source", "系统默认", PROMPT_SOURCES)
+    # LLM 关闭时强制回「系统默认」，且后端也按关闭处理（面板同样会禁用下拉）
+    if not use_llm:
+        source = "系统默认"
+    api = pc.get("api") or {}
+    llm = pc.get("llm") or {}
+    cfg["prompt_cfg"] = {
+        "use_llm": use_llm,
+        "source": source,
+        "skill": str(pc.get("skill") or ""),
+        "llm_backend": _cfg_opt(pc, "llm_backend", "在线API [api]",
+                                 ("本地模型 [local]", "在线API [api]")),
+        "llm": {
+            "clip_name": str(llm.get("clip_name") or ""),
+            "clip_type": str(llm.get("clip_type") or "qwen_image"),
+            "max_length": int(_cfg_num(llm, "max_length", 2048, 1, 32768)),
+            "temperature": _cfg_num(llm, "temperature", 0.7, 0.01, 2.0),
+            "top_k": int(_cfg_num(llm, "top_k", 64, 0, 1000)),
+            "top_p": _cfg_num(llm, "top_p", 0.95, 0.0, 1.0),
+            "min_p": _cfg_num(llm, "min_p", 0.05, 0.0, 1.0),
+            "repetition_penalty": _cfg_num(llm, "repetition_penalty", 1.05, 0.0, 5.0),
+            "presence_penalty": _cfg_num(llm, "presence_penalty", 0.0, 0.0, 5.0),
+            "seed": int(_cfg_num(llm, "seed", 0, 0, 0xFFFFFFFFFFFF)),
+            "thinking": _cfg_bool(llm, "thinking", False),
+            "use_default_template": _cfg_bool(llm, "use_default_template", True),
+        },
+        "api": {
+            "provider": str(api.get("provider") or ""),
+            "model": str(api.get("model") or ""),
+            "api_key": str(api.get("api_key") or ""),
+            "base_url": str(api.get("base_url") or ""),
+            "temperature": _cfg_num(api, "temperature", 0.6, 0.0, 2.0),
+            "max_tokens": int(_cfg_num(api, "max_tokens", 81920, 1, 262144)),
+            "thinking": str(api.get("thinking") or "disabled"),
+        },
     }
     return cfg
 
@@ -735,8 +750,189 @@ def _parse_swap_settings(raw):
 #  节点
 # ═══════════════════════════════════════════════════════════════
 
+def _bar_enabled():
+    try:
+        import comfy.utils
+        return bool(comfy.utils.PROGRESS_BAR_ENABLED)
+    except Exception:
+        return False
+
+
+def _ram_gb():
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None
+        free, total = torch.cuda.mem_get_info()
+        return (total - free) / float(2 ** 30), total / float(2 ** 30)
+    except Exception:
+        return None
+
+
+def _free_before_sampling(tag=TAG):
+    """采样前把 VAE / 文本编码器退回内存，把整张卡的显存留给 UNET。
+
+    长片窗口采样时，32B 的文本编码器（int4 也有十几 GB）如果还驻留，
+    就会和 UNET 抢显存 → 反复换出换入，表现就是「一步几十秒还卡」。这里只是
+    把「当前不需要的模型」卸掉，UNET 会在采样开始时正常加载。
+    """
+    try:
+        import comfy.model_management as mm
+    except Exception:
+        return
+    before = _ram_gb()
+    try:
+        mm.unload_all_models()
+        mm.soft_empty_cache()
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+    except Exception as e:
+        print(f"[JZL-{tag}] ⚠️ 释放显存失败（{type(e).__name__}: {e}）", flush=True)
+    after = _ram_gb()
+    if before and after:
+        print(f"[JZL-{tag}] 采样前释放显存：{before[0]:.1f} → {after[0]:.1f} GB"
+              f"（共 {after[1]:.1f} GB，给 UNET 留出 {after[1] - after[0]:.1f} GB）", flush=True)
+    elif after:
+        print(f"[JZL-{tag}] 采样前已用 {after[0]:.1f}/{after[1]:.1f} GB", flush=True)
+
+
+def _log_peak(tag=TAG, label="采样峰值"):
+    """打印这一步的显存占用：torch 峰值 + 整张卡已用（判断会不会 OOM 看后者）。"""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return
+        peak = torch.cuda.max_memory_allocated() / float(2 ** 30)
+        torch.cuda.reset_peak_memory_stats()
+        now = _ram_gb()
+        tail = f"｜卡上已用 {now[0]:.1f}/{now[1]:.1f} GB" if now else ""
+        print(f"[JZL-{tag}] {label}显存：torch 峰值 {peak:.1f} GB{tail}", flush=True)
+    except Exception:
+        pass
+
+
+def _crop_audio_frames(audio, keep_frames, fps=VIDEO_FPS):
+    """把一段音频裁到指定的帧数（用于非「保留原声」时按解码块对齐）。"""
+    if not isinstance(audio, dict) or audio.get("waveform") is None:
+        return None
+    sr = int(audio.get("sample_rate", 32000) or 32000)
+    wf = audio["waveform"]
+    n = int(round(int(keep_frames) / float(fps) * sr))
+    n = max(1, min(n, int(wf.shape[-1])))
+    return {"waveform": wf[..., :n], "sample_rate": sr}
+
+
+def _decode_chunk(vae, audio_vae, samples, chunk, sample_decode=None, skip_audio=True):
+    """解码一个「解码块」：切 latent → 解码 → 丢掉块首的上下文帧。
+
+    块首多解了 34 帧（2 个 17 帧组）前文，是因为 VAE 时序因果：从中间直接解开头会灰掉。
+    """
+    from comfy_extras.nodes_lt import LTXVConcatAVLatent
+
+    video_latent, audio_latent = _split_av_latent(samples)
+    v0, v1 = chunk["video"]
+    a0, a1 = chunk["audio"]
+    v_part = dict(video_latent)
+    v_part["samples"] = video_latent["samples"][:, :, int(v0):int(v1)]
+    a_part = dict(audio_latent)
+    a_part["samples"] = audio_latent["samples"][..., int(a0):int(a1)]
+    part = LTXVConcatAVLatent.execute(v_part, a_part).args[0]
+    image, audio = _decode_av(vae, audio_vae, part, sample_decode, tag=TAG,
+                             skip_audio=skip_audio)
+    if image is None:
+        raise RuntimeError("VAE 解码返回空画面（检查「视觉VAE」是否接对、是否与模型匹配）")
+    drop = int(chunk["drop_frames"])
+    keep = int(chunk["keep_frames"])
+    if drop:
+        image = image[drop:]
+    if audio is not None and audio.get("waveform") is not None:
+        audio = _crop_audio_frames(audio, image.shape[0])
+        if drop:
+            sr = int(audio.get("sample_rate", 32000))
+            wf = audio["waveform"]
+            x0 = int(round(drop / float(VIDEO_FPS) * sr))
+            audio = dict(audio)
+            audio["waveform"] = wf[..., x0:]
+    if image.shape[0] > keep:
+        image = image[:keep]
+    return image, audio
+
+
+def _second_pass_windowed(model, samples, window_conds, windows, total_aligned,
+                          sec_w, sec_h, gp, second_cfg, sample_decode, seed):
+    """二采：把整片 latent 放大 → 用同一套窗口再跑一次低噪采样。
+
+    窗口的 token 位置只取决于帧数，所以画布放大后窗口计划完全复用，只需换一套
+    按新画布编码的参考条件。
+    """
+    import re as _re
+
+    import torch as _torch
+
+    from comfy_extras.nodes_lt import LTXVConcatAVLatent
+
+    video_latent, audio_latent = _split_av_latent(samples)
+
+    if str(gp.get("second_mode") or "放大倍数") == "目标分辨率":
+        mode_val = {"mode": "target dimensions", "width": int(sec_w), "height": int(sec_h)}
+    else:
+        mode_val = {"mode": "scale by multiplier", "scale": float(_second_area_scale(gp))}
+    # 2D / 3D 架构由 _run_upscaler 按权重键名自动分派（*2d_conv* → 2D 网络，*3d_conv* → 3D 网络）
+    _t = time.time()
+    up, model_file = _run_upscaler(video_latent, second_cfg, mode_val, tag=TAG, align=32)
+    try:
+        tv = _seam_video_tensor(up)
+        pw, ph = int(tv.shape[-1]) * 16, int(tv.shape[-2]) * 16
+    except Exception:
+        pw, ph = sec_w, sec_h
+    print(f"[JZL-{TAG}]   二采放大：{os.path.basename(model_file or '内置模型')} "
+          f"{sec_w}x{sec_h} → {pw}x{ph}｜{time.time() - _t:.1f} 秒", flush=True)
+    merged = LTXVConcatAVLatent.execute(up, audio_latent).args[0]
+
+    ws2 = _win.WindowSet(windows, window_conds, total_aligned)
+    cond = _win.windowed_conditioning(ws2)
+    cfg = float(sample_decode.get("cfg", 1.0) or 1.0)
+    # 注意：Concat AV Latent 的输出本身就是 LATENT dict（{"samples": NestedTensor}），
+    # 直接交给 sample_windowed；再包一层 {"samples": dict} 会让 prepare_noise 拿 dict 当张量用
+    # → AttributeError: 'dict' object has no attribute 'is_nested'
+    if str(second_cfg.get("sigmas_mode") or "scheduler") == "custom":
+        text = second_cfg.get("custom_sigmas") or "0.909375, 0.725, 0.421875, 0.0000"
+        vals = [float(x) for x in _re.findall(r"[-+]?(?:\d*\.*\d+)", text or "")]
+        if len(vals) < 2:
+            raise ValueError("自定义 Sigmas 无效（至少 2 个，末位通常为 0）")
+        sampler = second_cfg.get("sampler") or "euler"
+        print(f"[JZL-{TAG}]   二采：{sampler}｜自定义 sigmas {text}｜{pw}x{ph}", flush=True)
+        _plan_line("二采", len(vals) - 1, len(windows))
+        _t = time.time()
+        out = _win.sample_windowed(model, cond, merged, seed,
+                                   sampler_name=sampler, cfg=cfg,
+                                   sigmas=_torch.FloatTensor(vals),
+                                   disable_pbar=not _bar_enabled(), tag=TAG)
+    else:
+        _steps2 = int(second_cfg.get("steps", 3) or 3)
+        _den2 = float(second_cfg.get("denoise", 0.3) or 0.3)
+        sig2, _sampler2 = _win.make_sigmas(
+            model, second_cfg.get("sampler") or "euler",
+            second_cfg.get("scheduler") or "simple", _steps2, _den2)
+        print(f"[JZL-{TAG}]   二采：{_sampler2} {_steps2} 步｜"
+              f"{second_cfg.get('scheduler') or 'simple'}｜"
+              f"降噪 {_den2:.2f}｜{pw}x{ph}", flush=True)
+        _plan_line("二采", max(1, int(sig2.numel()) - 1), len(windows))
+        _t = time.time()
+        out = _win.sample_windowed(model, cond, merged, seed,
+                                   steps=_steps2, cfg=cfg,
+                                   sampler_name=_sampler2,
+                                   scheduler=second_cfg.get("scheduler") or "simple",
+                                   denoise=_den2, sigmas=sig2,
+                                   disable_pbar=not _bar_enabled(), tag=TAG)
+    print(f"[JZL-{TAG}]   二采完成：{time.time() - _t:.1f} 秒", flush=True)
+    return out
+
+
 class JZL_MiniMaxCharacterSwap(io.ComfyNode):
-    """长视频人物替换：源片逐段 ref2va 重生成 + 分段衔接 + 重叠裁切 + 原声回流。"""
+    """长视频人物替换：整片一次采样、逐窗口预测后在重叠区混合；保留原声。"""
 
     @classmethod
     def define_schema(cls):
@@ -744,47 +940,57 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             node_id="JZL_MiniMaxCharacterSwap",
             display_name="JZL - 🎭 MiniMax-H3人物替换",
             category="JZL/MiniMax",
-            description=("把源视频里的人换成参考图里的人（长视频自动分段）：每段拿「源片同名段」当 "
-                         "<Video 1> 参考、定妆图当 <Picture 1>，第 2 段起用上一段生成结果的尾窗钉成本段首帧，"
-                         "段首重叠帧自动裁掉 ⇒ 成片时长 = 源片时长、段界无缝。默认保留原声。"),
+            description=("把源视频里的人换成参考图里的人（长视频自动分窗口）：整片只采样一次，"
+                         "每一步内部逐窗口用「源片同名段」当 <Video 1>、定妆图当 <Picture 1> 各预测一次，"
+                         "再在重叠区按斜坡混合 ⇒ 成片时长 = 源片时长、段界无缝、不累积漂移。"
+                         "长片自动分块解码逐段落盘；默认保留原声。"),
             inputs=[
                 io.Model.Input("model", display_name="主模型"),
                 io.Clip.Input("clip", display_name="CLIP"),
                 io.Vae.Input("vae", display_name="视觉VAE"),
-                io.Vae.Input("audio_vae", display_name="音频VAE", optional=True),
+                io.Vae.Input("audio_vae", display_name="音频VAE（生成音频时才要）", optional=True,
+                    tooltip="「🎨 视频参数设置 → 声音来源」选「生成音频」时必须接，用来解码模型音轨；"
+                            "选「使用原声」时完全不使用它（latent 音频不解码），可以留空，"
+                            "省一个音频 VAE 的加载与显存。"),
                 io.Image.Input("source_video",
                     tooltip="源视频帧（IMAGE 批次，按 24fps 解释）。用「加载视频 / GetVideoComponents」接入；"
                             "源片不是 24fps 请先转码，否则时长会对不上"),
                 io.Audio.Input("source_audio", optional=True,
-                    tooltip="源视频原声（与源视频同一条时间轴）。「保留原声」时用它的对应片段落盘，"
-                            "同时作为 <Video 1> 的音轨参考（音色/节奏线索）"),
+                    tooltip="源视频原声（与源视频同一条时间轴）。「声音来源=使用原声」时用它按帧号切片落盘；"
+                            "无论哪种模式，源音频都**不参与参考编码**"),
                 io.Autogrow.Input("ref_images", optional=True,
                     template=io.Autogrow.TemplatePrefix(
                         io.Image.Input("ref_image", tooltip="新角色定妆图（<Picture N>）。建议正面清晰、单人、同画幅"),
                         prefix="ref_image_", min=0, max=9)),
-                io.String.Input("story_name", default="人物替换", display_name="输出名称",
-                    tooltip="落盘目录 output/jzl/{名称}/（在「🎬 生成视频管理」面板里修改）"),
+                io.String.Input("story_name", default=DEFAULT_OUT_PREFIX, display_name="分段输出",
+                    tooltip="文件名前缀，格式「文件夹/视频名称」，例如 视频/人物替换 → "
+                            "落盘到 output/视频/ 下，文件名以 人物替换 开头。"
+                            "（在「🎬 生成视频管理」面板里修改）"),
                 io.String.Input("manager_settings", display_name="节点配置", multiline=True,
                     socketless=True, default="",
                     tooltip="本节点完整配置 JSON（由 🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理 写入），随工作流保存"),
                 # 提示词固定放在最底部（节点表面从上到下：模型类端口 → 素材端口 → 按钮区 → 提示词）
-                io.String.Input("prompt", multiline=True, default=DEFAULT_PROMPT,
-                    tooltip="换人提示词。模型按 ===H3_PROMPT=== 结构理解，务必保留 subject_definitions / "
-                            "retention_analysis / detailed_description 三段：前者定义 <Subject 1> = <Picture 1>，"
-                            "中间写明哪些保留、哪些替换，后者描述画面。只写一句「把人物换成 <Picture 1>」会被"
-                            "参考视频压过去（模型直接照抄原人物）。"
-                            "可用占位符：{seg}=本段序号、{total}=总段数、{start}=本段在源片里的起始帧、"
-                            "{frames}=本段帧数。参考图按顺序是 <Picture 1..9>，源片固定是 <Video 1>"),
+                io.String.Input("video_desc", multiline=True, default="",
+                    display_name="视频描述",
+                    tooltip="这段源视频里发生了什么：人物/动作/场景/镜头/光线/节奏。\n"
+                            "开启「📝 提示词预设 → 启用 LLM 增强提示词」时，它会连同「图片描述」一起交给 "
+                            "LLM 生成完整 H3 提示词；关闭时它会被填进内置提示词的 detailed_description 段。"),
+                io.String.Input("image_desc", multiline=True, default="",
+                    display_name="图片描述",
+                    tooltip="参考图（定妆图）里的人长什么样：发型/脸型/服装/配饰/配色/年龄气质。\n"
+                            "越具体越像。同样只在「LLM 增强」开启或被填进模板时使用。"),
             ],
             outputs=[
-                io.String.Output("merged_video", display_name="成片路径"),
-                io.String.Output("segment_files", display_name="分段视频", is_output_list=True),
+                io.Video.Output(
+                    "videos", display_name="批量视频", is_output_list=True,
+                    tooltip="本次落盘的每一段（VIDEO 指向文件，不占内存）。"
+                            "直接接「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条。"),
             ],
             is_output_node=True,
         )
 
     @classmethod
-    def fingerprint_inputs(cls, manager_settings="", prompt="", story_name="", **kwargs):
+    def fingerprint_inputs(cls, manager_settings="", video_desc="", image_desc="", story_name="", **kwargs):
         """配置变了就必须重跑（所有可调项都在 manager_settings 里；种子随机时每轮都算新输入）。"""
         try:
             cfg = _parse_swap_settings(manager_settings)
@@ -796,34 +1002,23 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             return "no-settings"
 
     @classmethod
-    def execute(cls, source_video, prompt, story_name="人物替换",
+    def execute(cls, source_video, video_desc="", image_desc="", story_name=DEFAULT_OUT_PREFIX,
                 manager_settings="", ref_images=None, source_audio=None,
                 model=None, clip=None, vae=None, audio_vae=None) -> io.NodeOutput:
+        """整片一次采样：按窗口切 latent，逐窗口预测后在重叠区按斜坡混合。
 
-        # ── 所有可调项都来自「🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理」三个面板 ──
+        不再「一段生成完再拼下一段」—— 那会让每段都重新走一遍 VAE / 文本编码器 / UNET
+        （模型反复换出换入 → 越跑越慢），并让身份与色温逐段漂移。
+        """
+
         cfg = _parse_swap_settings(manager_settings)
-        gp, sd, sv = cfg["gen_params"], cfg["sample_decode"], cfg["save"]
+        gp, sd = cfg["gen_params"], cfg["sample_decode"]
+        # 📝 提示词预设：系统默认模板 / 内置skill / 自定义skill（LLM 关闭时恒为系统默认）
+        prompt = _build_swap_prompt(cfg.get("prompt_cfg") or {}, video_desc, image_desc)
         seam_cfg, second_cfg = sd["seam"], sd["second"]
-        segment_seconds = gp["segment"]
         aspect_ratio = gp["aspect_ratio"]
         megapixels = float(gp["megapixels"])
         ref_scale = float(gp["scale_factor"])
-        audio_mode = gp["audio_mode"]
-        max_segments = int(gp["max_segments"])
-        seam_enabled = bool(seam_cfg["enabled"])
-        window = int(seam_cfg["window"])
-        ref_video_tail = int(seam_cfg["ref_video_tail"])
-        guide_mode = seam_cfg["guide_mode"]
-        pin_second = bool(seam_cfg["pin_second"])
-        color_cfg = seam_cfg["color"]
-        color_enabled = bool(color_cfg["enabled"])
-        color_strength = float(color_cfg["strength"])
-        color_max = float(color_cfg["max_offset"])
-        color_guard = float(color_cfg["guard"])
-        color_ramp = int(color_cfg["ramp"])
-        source_cache_gb = float(gp["source_cache_gb"])
-        save_mode = sv["mode"]
-        auto_merge_delete = bool(sv["auto_merge_delete"])
         seed, seed_mode = sd["seed"], sd["seed_mode"]
 
         frames_all = _as_4d(source_video)
@@ -831,357 +1026,388 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             raise ValueError("「源视频」为空或不足 5 帧：请把视频（IMAGE 批次，24fps 解释）接进来")
         if model is None or clip is None or vae is None:
             raise ValueError("必须连接「主模型 + CLIP + 视觉VAE」才能生成")
-        keep_original_audio = str(audio_mode).startswith("保留原声")
-        mute = str(audio_mode).startswith("静音")
-        if keep_original_audio and not isinstance(source_audio, dict):
-            _log_once(f"[JZL-{TAG}] ⚠️ 选了「保留原声」但没连「源视频原声」→ 本次改用生成音轨")
+        source_audio = _as_audio_dict(source_audio)
+        # 「🎨 视频参数设置 → 声音来源」显式选择，不再靠「接没接原声」猜：
+        #   使用原声 → 源音频只按帧号切片落盘；不进参考编码，latent 音频不解码，音频 VAE 不传。
+        #   生成音频 → 解码模型自己生成的音轨（需要「音频VAE」）；源音频依旧不进参考编码。
+        use_model_audio = (str(gp.get("audio_mode") or "使用原声") == "生成音频")
+        if use_model_audio and audio_vae is None:
+            _log_once(f"[JZL-{TAG}] ⚠️ 选了「生成音频」但没接「音频VAE」→ 本次回退："
+                      f"能拿到源片原声就用原声，否则成片无声")
+            use_model_audio = False
+        keep_original_audio = source_audio is not None and not use_model_audio
+        audio_vae_eff = audio_vae if use_model_audio else None
+        skip_model_audio = not use_model_audio
+        if use_model_audio:
+            print(f"[JZL-{TAG}] 音频：生成音频（解码模型音轨；源音频不参与参考编码，只作画面参考）",
+                  flush=True)
+        elif keep_original_audio:
+            print(f"[JZL-{TAG}] 音频：使用原声（只按帧号切片落盘）"
+                  f"｜源音频不参与参考编码｜latent 音频不解码｜音频VAE 不使用", flush=True)
+        else:
+            _log_once(f"[JZL-{TAG}] ⚠️ 没接「源视频原声」→ 成片将没有声音"
+                      f"（把 AUDIO 接上可保留原音，或在「视频参数设置 → 声音来源」选「生成音频」）")
 
         total_src = int(frames_all.shape[0])
         src_h, src_w = int(frames_all.shape[1]), int(frames_all.shape[2])
+        frames_in_shape = tuple(frames_all.shape)
 
-        # ① 画布
+        # 源片先落成「一份可切片的缓存」，后面所有窗口都从它切
+        frames_src, src_is_u8 = _cache_source(frames_all, 8.0)
+        if src_is_u8:
+            frames_all = None
+
+        # 模型时间轴固定按 24fps 解释帧数；源片不是 24fps 就按「原声真实时长」反推帧率并升帧，
+        # 否则 12fps 的 10 秒视频（120 帧）会被当成 5 秒，和 10 秒的原声完全对不上。
+        src_fps, audio_dur = _detect_source_fps(total_src, source_audio)
+        if abs(src_fps - float(VIDEO_FPS)) > 0.01:
+            n_before = total_src
+            frames_src = _resample_to_24(frames_src, src_fps)
+            total_src = int(frames_src.shape[0])
+            print(f"[JZL-{TAG}] 源片帧率 {src_fps:g}fps"
+                  f"（{n_before} 帧 / 原声 {audio_dur:.2f} 秒）→ 已升帧到 {VIDEO_FPS}fps："
+                  f"{total_src} 帧 = {total_src / float(VIDEO_FPS):.2f} 秒（时长不变）", flush=True)
+        elif audio_dur is not None:
+            print(f"[JZL-{TAG}] 源片帧率：{total_src} 帧 / 原声 {audio_dur:.2f} 秒"
+                  f" ≈ {total_src / max(audio_dur, 1e-6):.1f}fps → 按 {VIDEO_FPS}fps 处理", flush=True)
+
         if str(aspect_ratio).startswith("跟随源片"):
             width, height = _canvas_for_ratio(src_w, src_h, megapixels)
         else:
             width, height = _resolve_gen_size(aspect_ratio, megapixels)
 
-        # ② 重叠 / 段长 / 切段计划（帧账严格等于源片）
-        dur_lo, _dur_hi, _dur_desc = _parse_duration_spec(segment_seconds)
-        seg_len = int(_resolve_length(dur_lo))
-        overlap = _resolve_overlap(int(window) if seam_enabled else 0, seg_len, seam_enabled)
-        if seam_enabled and overlap != int(window):
-            print(f"[JZL-{TAG}] ⚠️ 重叠帧数 {int(window)} 不合法（必须 ≤ 段长−1 且是 5/22/39/56）"
-                  f"→ 本次按 {overlap} 帧执行")
-        plan = _plan_source_segments(total_src, seg_len, overlap, max_segments)
-        count = len(plan)
-        if count == 1:
-            overlap = 0   # 单段没有衔接，也就不重叠
+        # 窗口：每段时长 = 单个窗口一次生成的长度；整片按 17 帧网格切窗口
+        dur_lo, _dur_hi, _dur_desc = _parse_duration_spec(gp["segment"])
+        window_frames = int(_resolve_length(dur_lo))
+        overlap = _resolve_overlap(int(seam_cfg["window"]), window_frames, True)
+        total_aligned = align_frame_count(total_src)
+        windows = _win.plan_windows(total_aligned, window_frames, overlap)
+        n_all = len(windows)
 
-        # ③ 源片内存：超过阈值就转 uint8 缓存（长片常驻内存降到 1/4）
-        frames_src, src_is_u8 = _cache_source(frames_all, source_cache_gb)
-        if src_is_u8:
-            frames_all = None      # 及时放掉 float32 原张量
+        # 只重跑某一个窗口：左右各带一个邻居，重定位成独立小段
+        retake = int(gp.get("retake", 0) or 0)
+        piece_range = None
+        frame_base = 0          # 重跑时源片要按这个偏移去取，否则参考切片会错位
+        if 1 <= retake <= n_all:
+            k = retake - 1
+            first, last = max(0, k - 1), min(n_all - 1, k + 1)
+            frame_base = windows[first].frame_start
+            windows, total_aligned = _win.sub_windows(windows, first, last)
+            lo = 0 if k == 0 else windows[k - first].frame_start
+            hi = total_aligned if k == n_all - 1 else windows[k - first + 1].frame_start
+            piece_range = (lo, min(hi, total_aligned))
+            print(f"[JZL-{TAG}] 只重跑第 {retake}/{n_all} 个窗口"
+                  f"（带左右邻居共 {len(windows)} 个，用来做重叠混合）", flush=True)
+        elif retake:
+            print(f"[JZL-{TAG}] ⚠️「重跑窗口」={retake} 超出范围 1~{n_all} → 本次跑全部", flush=True)
 
-        # ④ 定妆图（参考图）只解析一次：每段都重新注入 → 抗长链漂移（导演台已验证）
         ref_imgs = []
-        for k, img in enumerate((ref_images or {}).values()):
+        for img in (ref_images or {}).values():
             if img is None:
                 continue
             ref_imgs.append(_as_4d(img)[:1])
         if not ref_imgs:
-            print(f"[JZL-{TAG}] ⚠️ 没有接任何定妆图「ref_image_N」：模型只能靠提示词猜身份，换人效果会很差")
+            print(f"[JZL-{TAG}] ⚠️ 没有接任何定妆图「ref_image_N」：只能靠提示词猜身份，换人效果会很差")
 
-        # ⑤ 二采目标画布（默认「放大倍数」= 面积倍率，宽高比跟随一采）
-        use_second = (bool(second_cfg["enabled"])
-                      and str(sd["sample_mode"]) != SAMPLE_MODE_SELFLIFT)
+        # 本节点整片是「联合窗口采样」：每一步切成若干窗口分别预测再混合。
+        # SelfLift 的渐进分辨率是整段一次采样（内部改用低分辨率模型跑前缀），插不进窗口混合，
+        # 所以这里直接按常规采样跑，并且明确告警（面板已不再提供 SelfLift 选项）。
+        if str(sd.get("sample_mode") or SAMPLE_MODE_NORMAL) == SAMPLE_MODE_SELFLIFT:
+            print(f"[JZL-{TAG}] ⚠️「采样分类=SelfLift采样」不适用于本节点（联合窗口采样必须整段同一分辨率）"
+                  f" → 本次按常规采样执行，步数用「采样步数」那一项", flush=True)
+            sd = dict(sd)
+            sd["sample_mode"] = SAMPLE_MODE_NORMAL
+
+        use_second = bool(second_cfg["enabled"])
         sec_w, sec_h = _second_canvas(gp, width, height)
         if use_second and sec_w * sec_h < width * height:
             print(f"[JZL-{TAG}] ⚠️ 二采画布 {sec_w}×{sec_h} 比一采 {width}×{height} 还小"
-                  f"（面积 {sec_w * sec_h / float(width * height):.2f}x）→ 二采只会更糊。"
-                  f"请把「二采放大」调到 > 1.0")
+                  f"（{sec_w * sec_h / float(width * height):.2f}x 面积）→ 二采只会更糊，本次跳过")
+            use_second = False
 
         out_root = os.path.abspath(folder_paths.get_output_directory())
-        safe_story = _safe_story_name(story_name or "人物替换")
-        out_dir = os.path.join(out_root, "jzl", safe_story)
+        out_dir, safe_story = _resolve_out_prefix(story_name, out_root)
         os.makedirs(out_dir, exist_ok=True)
         batch = _next_batch(out_dir, safe_story)
         counter0 = _next_counter(out_dir, f"{safe_story}_{batch}次生成分段")
 
         print(f"[JZL-{TAG}] ─────────────────────────────────────────────")
-        print(f"[JZL-{TAG}] 源片 {total_src} 帧（{total_src / float(VIDEO_FPS):.2f} 秒）｜画布 {width}x{height}"
-              f"｜每段 {seg_len} 帧（{seg_len / float(VIDEO_FPS):.2f} 秒）｜段数 {count}")
-        if overlap > 0:
-            print(f"[JZL-{TAG}] 分段衔接：重叠 {overlap} 帧（上一段结尾 → 钉成本段开头，同时在成片里丢掉）；"
-                  f"生成帧数 = align(保留 + {overlap})，补出来的余量从尾部丢掉 → "
-                  f"成片总帧数严格等于源片 {total_src} 帧")
-        print(f"[JZL-{TAG}] 参考：{len(ref_imgs)} 张定妆图（参考图放大 {ref_scale:.1f}×，面积倍率）"
-              f"｜音频方式：{audio_mode}"
-              f"｜二采：{(str(sec_w) + '×' + str(sec_h)) if use_second else '关闭'}"
-              f"（{sec_w * sec_h / float(max(1, width * height)):.2f}x 面积）")
-        print(f"[JZL-{TAG}] 衔接引导：{'像素尾帧重编码' if guide_mode == 'pixels' else '一采latent尾部（旧）'}"
-              f"｜二采钉帧：{'开' if pin_second else '关'}")
-        print(f"[JZL-{TAG}] 落盘目录：{out_dir}")
+        print(f"[JZL-{TAG}] 源片输入：{tuple(frames_in_shape)}"
+              f"（{frames_in_shape[0]} 帧 × {src_h}h × {src_w}w）", flush=True)
+        print(f"[JZL-{TAG}] 源片 {total_src} 帧（{total_src / float(VIDEO_FPS):.2f} 秒）"
+              f"｜画布 {width}x{height}｜单窗口上限 {window_frames} 帧｜重叠 {overlap} 帧")
+        # 视频帧数按 24fps 解释；用「原声时长」做交叉校验 —— 两者对不上就说明接进来的视频
+        # 不是你以为的那条（帧率被改写、多条视频被拼接、或文件本身更长）
+        if keep_original_audio:
+            _wf = source_audio.get("waveform") if isinstance(source_audio, dict) else None
+            _sr = int((source_audio or {}).get("sample_rate", 32000) or 32000)
+            if _wf is not None:
+                _aud_s = float(_wf.shape[-1]) / float(_sr)
+                _vid_s = total_src / float(VIDEO_FPS)
+                if abs(_aud_s - _vid_s) > 0.5:
+                    print(f"[JZL-{TAG}] ⚠️ 视频与原声长度不一致：视频 {_vid_s:.2f} 秒"
+                          f"（{total_src} 帧 @24fps），原声 {_aud_s:.2f} 秒"
+                          f"（差 {abs(_aud_s - _vid_s):.2f} 秒）。\n"
+                          f"    常见原因：①「加载视频」的 fps 设错（把 30fps 视频当 24fps 载入会变长/变短）；"
+                          f"② 接进来的是多条视频拼起来的；③ 选错文件。"
+                          f"建议先确认加载节点显示的帧数/时长。", flush=True)
+        print(f"[JZL-{TAG}] {_win.describe(windows, total_aligned)}"
+              + (f"（只算第 {retake}/{n_all} 段：邻居窗口只用来做重叠混合，源片共 {total_src} 帧）"
+                 if piece_range is not None
+                 else f"（整片对齐到 {total_aligned} 帧，成片再裁回 {total_src} 帧）"))
+        print(f"[JZL-{TAG}] 采样：整段一次采样跑完，逐窗口预测后在重叠区按斜坡混合；"
+              f"窗口之间不传递已解码画面 → 不累积漂移")
+        print(f"[JZL-{TAG}] 参考：{len(ref_imgs)} 张定妆图（放大 {ref_scale:.1f}×，面积倍率）"
+              f"｜音频：{('生成音频（模型音轨）' if use_model_audio else ('使用原声' if keep_original_audio else '无（没接原声/音频VAE）'))}"
+              f"｜二采：{(str(sec_w) + '×' + str(sec_h)) if use_second else '关闭'}")
+        print(f"[JZL-{TAG}] 落盘：{out_dir}{os.sep}{safe_story}_…mp4"
+              f"（「分段输出」= 文件夹/{safe_story}）")
 
-        ref_names = {
-            "image": [f"定妆图{k + 1}" for k in range(len(ref_imgs))],
-            "video": ["源片"],
-            "audio": ["源片原声"],
-        }
-        # ⚠️ 直接透传整份 sample_decode（含 sample_mode / selflift / second）——
-        #    与「短剧导演台」调同一套后端实现，SelfLift 采样与二采空间分块都能原样生效。
+        ref_names = {"image": [f"定妆图{k + 1}" for k in range(len(ref_imgs))],
+                     "video": ["源片"], "audio": ["源片原声"]}
         sample_decode = dict(sd)
         sample_decode.pop("seam", None)
-        second_run = dict(second_cfg)
-        second_run["enabled"] = True
-        if str(sd["sample_mode"]) == SAMPLE_MODE_SELFLIFT:
-            print(f"[JZL-{TAG}] 采样分类 = SelfLift采样（步数 {sd['selflift']['steps']}，"
-                  f"低分辨率步数 {sd['selflift']['transition_step']}）→ 二采不生效（SelfLift 自身即渐进分辨率）")
 
-        saved_files, errors = [], []
-        merge_wavs = [] if save_mode == "拼接保存" else None
-        prev_latent, prev_luma, prev_rgb = None, None, None
-        # 上一段落盘后的尾部像素（uint8），供「像素钉帧」与「参考视频拼接上段输出」
-        prev_pixels = None
-        total_out = 0
+        canvases = [(width, height)] + ([(sec_w, sec_h)] if use_second else [])
 
-        def _run_segment(seg):
-            """单段：源片参考 → ref2va 编码 → 钉帧 → 采样 → 解码 → 裁重叠 → 落盘。"""
-            nonlocal prev_latent, prev_luma, prev_rgb, prev_pixels, total_out
-            i = seg["index"]
-            idx = i + 1
-            start, kept_target = seg["start"], seg["keep"]
-            gen_len, src_start = seg["gen"], seg["src_start"]
-            drop_head = int(seg.get("drop", 0))
-            try:
-                _clean_cache()
-            except Exception:
-                pass
-
-            seg_prompt = _fill_prompt(prompt, i, count, start, kept_target)
-
-            # ① 源片参考片段：源片 [src_start, src_start+gen_len) → 生成画布尺寸
-            #    只在需要时才缩放这一段（不整片缓存画布副本，长片内存立刻省一半以上）
-            src_clip = _slice_source(frames_src, src_start, gen_len, src_is_u8, width, height)
-            # 「参考帧数」>0 时只保留该段开头 N 帧：参考的第 1 帧 = 生成位置 0 = 源片 src_start，
-            # 这样参考视频和接住的画面在同一时间轴上；取尾部会整体错位一整段。
-            ref_total = int(src_clip.shape[0])
-            ref_tail = int(ref_video_tail or 0)
-            if ref_tail >= 5:
-                ref_total = min(ref_total, align_frame_count(ref_tail))
-            src_clip = src_clip[:int(ref_total)]
-            # 参考视频必须是 17k+5（官方编码器会向下吸附；这里先说清楚实际送进去多少帧）
-            ref_video_frames = int(src_clip.shape[0])
-
-            # ② 原声片段：既作 <Video 1> 的音轨参考（音色/节奏），也是「保留原声」的成片音轨
-            #    长度跟参考视频实际送进去的帧数一致，避免音轨和画面参考对不齐
-            ref_audio_clip = _slice_audio(source_audio, src_start, ref_video_frames) if keep_original_audio else None
-            ref_video_audios = [ref_audio_clip] if (ref_audio_clip is not None and audio_vae is not None) else []
-
-            print(f"[JZL-{TAG}] 分段 {idx}/{count}：源片 [{src_start}, {src_start + gen_len})"
-                  f"→ 生成 {gen_len} 帧，成片保留 [{start}, {start + kept_target}) 共 {kept_target} 帧"
-                  f"（参考视频 {ref_video_frames} 帧{' + 原声' if ref_video_audios else ''}）")
-
-            # ③ ref2va 编码（每段都重新注入同一组定妆图）
-            #    与「JZL - 🎬 MiniMax H3 参考编码」完全同一套逻辑与参数：
-            #    ref_image_size="match" + ref_scale（参考图放大 / 面积倍率）
-            probe = {}
-            positive, latent = _encode_ref_to_video(
-                clip, vae, audio_vae, seg_prompt, width, height, gen_len,
-                ref_images=ref_imgs, ref_videos=[src_clip], ref_video_audios=ref_video_audios,
-                ref_audios=[], ref_image_size="match", ref_scale=float(ref_scale),
-                slot_names=ref_names, probe=probe)
-            _info = _fmt_call_info(probe)
-            print(f"[JZL-{TAG}]   参考调用：{_info if _info else '（仅文本，无参考）'}")
-
-            # ④ 分段衔接：把上一段**成片结尾的重叠帧**钉成本段首帧
-            #    生成位置 0..overlap-1 ↔ 源片 [start-overlap, start-1] = 上一段输出的最后 overlap 帧
-            #    → 用 back=0 直接取上段尾部，和本段参考视频、成片三者落在同一条时间轴。
-            #    positive_base = 不含衔接 keyframe 的原始条件：一采/二采各从它出发钉一次，
-            #    否则二采会在「一采分辨率的 keyframe」上再叠一个 → 两个 keyframe 都落在第 0 帧。
-            positive_base = positive
-            seam_plan = None
-            if i > 0 and seam_enabled and drop_head > 0:
-                # 只有 latent 引导模式才需要 _seam_plan（像素模式直接用重叠帧数）
-                if guide_mode != "pixels" or prev_pixels is None:
-                    seam_plan = _seam_plan(latent["samples"], overlap)
-
-            if guide_mode == "pixels" and prev_pixels is not None and drop_head > 0:
-                positive = _apply_pixel_guide(positive_base, prev_pixels, vae, width, height,
-                                             drop_head, back=0)
-                print(f"[JZL-{TAG}]   衔接（像素）：上段 [{start - drop_head}, {start}) "
-                      f"共 {drop_head} 帧 → 按 {width}x{height} 重编码钉成本段首帧", flush=True)
-            elif seam_plan is not None and prev_latent is not None:
-                positive, _kf = _seam_apply_guide(positive_base, prev_latent, seam_plan,
-                                                 audio_link=True, vae=vae, guide_source="latent")
-                positive = _seam_fit_guides_to_canvas(positive, latent["samples"], tag=TAG)
-                print(f"[JZL-{TAG}]   衔接（latent）：上段尾窗 {seam_plan['window']} 帧"
-                      f"（token {seam_plan['trim_tokens']}）已钉成本段首帧", flush=True)
-
-            seed_i = int(_resolve_seed(seed_mode, int(seed or 0), i))
-
-            # ⑤ 一采（采样进度只在 UI 里，控制台补一行参数 + 一行耗时，否则两次采样分不清）
-            print(f"[JZL-{TAG}]   一采：{_first_pass_desc(sample_decode)}"
-                  f"｜画布 {width}x{height}｜{gen_len} 帧", flush=True)
-            _t_first = time.time()
-            first = _sample_first_pass(model, positive, latent, sample_decode, seed_i, vae, tag=TAG)
-            print(f"[JZL-{TAG}]   一采完成：{time.time() - _t_first:.1f} 秒", flush=True)
-            samples = first
-            positive2 = positive
-
-            # ⑥ 二采（可选）：latent 放大 + 补采，结果只用于解码落盘
-            if use_second:
-                # ⑥b 二采也要钉帧：等放大完拿到**真实**画布尺寸后，从 positive_base 重新编码一次
-                #     （绝不能拿一采分辨率的 keyframe 去插值 → 会糊，也不能叠两个 keyframe）
-                guide_fn = None
-                if pin_second and drop_head > 0 and guide_mode == "pixels" and prev_pixels is not None:
-                    guide_fn = (lambda pw, ph, _pp=prev_pixels, _dh=drop_head:
-                                _apply_pixel_guide(positive_base, _pp, vae, pw, ph, _dh, back=0))
+        # ═══ 阶段 1：VAE 编码全部窗口的参考素材（VAE 只加载这一次）═══
+        jobs = {c: [] for c in canvases}
+        _enc_t = time.time()
+        ref_n_last = 0
+        for cw, ch in canvases:
+            for i, window in enumerate(windows):
+                src_start = frame_base + window.frame_start
+                seg_prompt = _fill_prompt(prompt, i, len(windows), src_start, window.frames)
+                clip_frames = _slice_source(frames_src, src_start, window.frames,
+                                            src_is_u8, cw, ch)
+                ref_n_last = int(clip_frames.shape[0])
+                # 源片原声不参与编码：只作为最后落盘的音轨
+                _encode_ref_to_video(
+                    clip, vae, audio_vae_eff, seg_prompt, cw, ch, window.frames,
+                    ref_images=ref_imgs, ref_videos=[clip_frames],
+                    ref_video_audios=[],
+                    ref_audios=[], ref_image_size="match", ref_scale=ref_scale,
+                    slot_names=ref_names, probe=None, defer=jobs[(cw, ch)])
                 try:
-                    samples = _run_second_pass(model, positive2, first, sample_decode, second_run,
-                                               gp, width, height, seed_i, tag=TAG, guide_fn=guide_fn)
-                except Exception as _se:
-                    print(f"[JZL-{TAG}]   分段 {idx}：⚠️ 二采失败，本段退回一采结果"
-                          f"（{type(_se).__name__}: {_se}）", flush=True)
-                    samples = first
+                    del clip_frames
+                except Exception:
+                    pass
+            _n_win = len(jobs[(cw, ch)])
+            print(f"[JZL-{TAG}]   参考素材编码完成（{cw}x{ch}）：{_n_win} 个窗口"
+                  f"｜{time.time() - _enc_t:.1f} 秒（每窗口参考 {ref_n_last} 帧 @ {VIDEO_FPS}fps）",
+                  flush=True)
+            _enc_t = time.time()
 
-            # ⑦ 解码
+        # ═══ 阶段 2：文本编码（文本编码器只加载这一次，全部窗口一起做完）═══
+        # 32B 文本编码器 int4 也有十几 GB：先把 VAE 等模型卸掉再进阶段 2，
+        # 否则 24G 卡上会和它抢显存 → 反复换入换出，表现就是「编码卡住十几分钟」。
+        try:
+            import comfy.model_management as _mm
+            _mm.unload_all_models()
+            _mm.soft_empty_cache()
+            import torch as _torch
+            if _torch.cuda.is_available():
+                _torch.cuda.empty_cache()
+            _r = _ram_gb()
+            if _r:
+                print(f"[JZL-{TAG}]   文本编码前释放显存：已用 {_r[0]:.1f}/{_r[1]:.1f} GB"
+                      f"（给 {len(windows)} 个窗口的文本编码腾空间）", flush=True)
+        except Exception as _fe:
+            print(f"[JZL-{TAG}]   ⚠️ 文本编码前释放显存失败：{type(_fe).__name__}: {_fe}", flush=True)
+
+        conds = {}
+        _t2 = time.time()
+        for cw, ch in canvases:
+            got = []
+            for _i, j in enumerate(jobs[(cw, ch)], 1):
+                got.append(_cond_from_parts(j["clip"], j["prompt"], j["ref_items"], j["ref_blocks"]))
+                _nvis = sum(int(it["data"].shape[0]) for it in j["ref_items"] if it.get("type") == "video")
+                print(f"[JZL-{TAG}]   文本编码 {_i}/{len(jobs[(cw, ch)])}"
+                      f"（{cw}x{ch}｜视觉 {_nvis} 帧）｜{time.time() - _t2:.1f} 秒", flush=True)
+                _t2 = time.time()
+            conds[(cw, ch)] = got
+            jobs[(cw, ch)] = None
+        print(f"[JZL-{TAG}]   提示词编码完成（{len(windows)} 个窗口 × {len(canvases)} 种画布）"
+              f"｜{time.time() - _enc_t:.1f} 秒", flush=True)
+
+        # 文本编码器（32B int4 ≈ 十几 GB）用完就放：不清掉引用的话它会一直驻留显存
+        # （ComfyUI 的 unload_all_models 不管 CLIP），采样时就只剩几 GB 余量
+        clip = None
+        import gc
+        gc.collect()
+
+        # ═══ 阶段 3：一采（整片一次采样）═══
+        seed_i = int(_resolve_seed(seed_mode, int(seed or 0), 0))
+        ws1 = _win.WindowSet(windows, conds[(width, height)], total_aligned)
+        conditioning = _win.windowed_conditioning(ws1)
+        latent, _frames = _empty_av_latent(width, height, total_aligned)
+        _free_before_sampling()
+        print(f"[JZL-{TAG}] 一采：{_first_pass_desc(sample_decode)}"
+              f"｜{width}x{height}｜{total_aligned} 帧 / {len(windows)} 个窗口", flush=True)
+        _sig1, _sampler1 = _win.make_sigmas(
+            model,
+            sample_decode.get("sampler") or "res_multistep",
+            sample_decode.get("scheduler") or "simple",
+            int(sample_decode.get("steps", 4) or 4),
+            float(sample_decode.get("denoise", 1.0) or 1.0))
+        _steps = max(1, int(_sig1.numel()) - 1)
+        _plan_line("一采", _steps, len(windows))
+        _t = time.time()
+        samples = _win.sample_windowed(
+            model, conditioning, latent, seed_i,
+            steps=_steps,
+            cfg=float(sample_decode.get("cfg", 1.0) or 1.0),
+            sampler_name=_sampler1,
+            scheduler=sample_decode.get("scheduler") or "simple",
+            denoise=float(sample_decode.get("denoise", 1.0) or 1.0),
+            sigmas=_sig1,
+            disable_pbar=not _bar_enabled(), tag=TAG)
+        _cost = time.time() - _t
+        _fwd = max(1, _steps * len(windows))
+        print(f"[JZL-{TAG}] 一采完成：{_cost:.1f} 秒"
+              f"（{_fwd} 次前向，平均 {_cost / _fwd:.1f} 秒/窗口/步）", flush=True)
+        _log_peak(label="一采")
+
+        # ═══ 阶段 3b：二采（放大 latent 后按同一套窗口再跑一次）═══
+        if use_second:
+            try:
+                samples = _second_pass_windowed(
+                    model, samples, conds[(sec_w, sec_h)], windows, total_aligned,
+                    sec_w, sec_h, gp, second_cfg, sample_decode, seed_i)
+            except Exception as _se:
+                print(f"[JZL-{TAG}] ⚠️ 二采失败，退回一采结果"
+                      f"（{type(_se).__name__}: {_se}）", flush=True)
+
+        # ═══ 阶段 4：解码 / 音轨 / 落盘 ═══
+        # 长片按「解码块」分组解码：每块解完立刻落盘并释放，峰值内存恒定在一块的量级
+        # （整片一次性解成 IMAGE 约 5.9 MB/帧，5 分钟片子要 18 GB 以上）
+        chunks = _win.plan_decode_chunks(total_aligned, DECODE_FRAMES_BUDGET)
+        grouped = len(chunks) > 1 and piece_range is None
+        out_files = []
+
+        if grouped:
+            print(f"[JZL-{TAG}]   解码：整片分 {len(chunks)} 块（每块 ≤ {DECODE_FRAMES_BUDGET} 帧，"
+                  f"块间带 34 帧上下文）→ 逐块解码落盘，内存不随片长增长", flush=True)
+            total_out = 0
+            for i, ch in enumerate(chunks):
+                _t = time.time()
+                n = min(int(ch["keep_frames"]), total_src - int(ch["frame_start"]))
+                if n <= 0:
+                    continue
+                image, chunk_audio = _decode_chunk(vae, audio_vae_eff, samples, ch, sample_decode,
+                                                   skip_audio=skip_model_audio)
+                image = image[:n]
+                if use_model_audio:
+                    audio = _crop_audio_frames(chunk_audio, n)
+                elif keep_original_audio:
+                    audio = _slice_audio(source_audio, int(ch["frame_start"]), n)
+                else:
+                    audio = None
+                path = _save_segment_mp4(image, audio, out_dir, i + 1, story_name=safe_story,
+                                         counter=counter0 + i, batch=batch)
+                out_files.append(path)
+                total_out += n
+                print(f"[JZL-{TAG}] 块 {i + 1}/{len(chunks)} 已落盘：{path}"
+                      f"（{n} 帧，源片 {ch['frame_start']}..{ch['frame_start'] + n}）"
+                      f"｜{time.time() - _t:.1f} 秒", flush=True)
+                del image, audio, chunk_audio
+                try:
+                    import torch as _tc
+                    _tc.cuda.empty_cache()
+                except Exception:
+                    pass
+                gc.collect()
+        else:
             print(f"[JZL-{TAG}]   解码…", flush=True)
-            _t_dec = time.time()
-            image, audio = _decode_av(vae, audio_vae, samples, sample_decode, tag=TAG)
+            _t = time.time()
+            image, audio = _decode_av(vae, audio_vae_eff, samples, sample_decode, tag=TAG,
+                                      skip_audio=skip_model_audio)
             if image is None:
                 raise RuntimeError("VAE 解码返回空画面（检查「视觉VAE」是否接对、是否与模型匹配）")
-            raw_frames = int(image.shape[0])
-            print(f"[JZL-{TAG}]   解码完成：{raw_frames} 帧｜{time.time() - _t_dec:.1f} 秒", flush=True)
+            raw = int(image.shape[0])
+            print(f"[JZL-{TAG}]   解码完成：{raw} 帧｜{time.time() - _t:.1f} 秒", flush=True)
 
-            # ⑧ 裁掉段首「重叠帧」（像素域：保住 VAE 解码的 5 token = 17 帧分组相位）
-            if drop_head > 0:
-                image, audio = _seam_trim_decoded(image, audio, {"window": drop_head},
-                                                  settle_frames=0, trim_audio=True, tag=TAG)
-                print(f"[JZL-{TAG}]   像素域裁切：解码 {raw_frames} 帧 - 重叠 {drop_head} = "
-                      f"{int(image.shape[0])} 帧")
-
-            # ⑨ 只保留本段的「保留帧数」：多出来的就是 align 补的余量，从尾部丢掉
-            #    （这样成片总帧数严格等于源片，不缺帧也不多帧）
-            if int(image.shape[0]) > kept_target:
-                tail_drop = int(image.shape[0]) - kept_target
-                image = image[:kept_target]
-                if tail_drop:
-                    print(f"[JZL-{TAG}]   尾部裁切：多生成 {tail_drop} 帧（17k+5 对齐余量）→ 丢掉，"
-                          f"本段落盘 {kept_target} 帧")
-            elif int(image.shape[0]) < kept_target:
-                print(f"[JZL-{TAG}]   分段 {idx}：⚠️ 只剩 {int(image.shape[0])} 帧 < 需要 {kept_target} 帧"
-                      f"（生成 {raw_frames}，重叠 {drop_head}）→ 本段会偏短")
-            audio_keep = int(image.shape[0])
-
-            # ⑩ 音轨策略
-            if mute:
-                audio = None
-            elif keep_original_audio and isinstance(source_audio, dict):
-                audio = _slice_audio(source_audio, start, audio_keep)
-            # 否则保留模型生成的音轨（已在 ⑧ 里随画面同步裁过）
-
-            # ⑪ 段间配色 + 亮度匹配（必须在落盘前做：拼接是 -c copy 不重编码）
-            #     ① 逐通道常量补偿：用「上段结尾均值 vs 本段开头均值」消色偏/色温漂移
-            #     ② 亮度渐变：把开头 12 帧朝上段末帧亮度平滑过渡（补残余的亮度台阶）
-            if drop_head > 0:
-                if color_enabled and prev_rgb is not None:
-                    cur_rgb = _rgb_means(image, color_ramp or 12)
-                    off = _seam_color_offset(prev_rgb, cur_rgb, color_strength,
-                                             color_max, color_guard)
-                    if off is not None:
-                        image = _apply_rgb_offset(image, off)
-                        print(f"[JZL-{TAG}]   配色补偿：R{off[0] * 255:+.1f} G{off[1] * 255:+.1f} "
-                              f"B{off[2] * 255:+.1f}（8bit，整段恒定）")
-                    elif cur_rgb is not None:
-                        d = [abs(prev_rgb[c] - cur_rgb[c]) * 255 for c in range(3)]
-                        print(f"[JZL-{TAG}]   配色补偿：跳过（通道差 {d[0]:.0f}/{d[1]:.0f}/{d[2]:.0f} "
-                              f"> {color_guard:.0f}，判定为换了场景，不该硬拉）")
-                if prev_luma is not None and color_ramp > 0:
-                    image = _seam_luma_ramp(image, prev_luma, frames=color_ramp)[0]
-
-            # ⑫ 落盘
-            wav_keep = None
-            if merge_wavs is not None and audio is not None:
-                wav_keep = os.path.join(out_dir, f"._jzl_swap{i + 1}_{counter0 + i}_{os.getpid()}.wav")
-                merge_wavs.append(wav_keep)
-            path = _save_segment_mp4(image, audio, out_dir, idx, story_name=safe_story,
-                                     counter=counter0 + i, batch=batch, keep_wav=wav_keep)
-            saved_files.append(path)
-            total_out += audio_keep
-            print(f"[JZL-{TAG}] 分段 {idx}/{count} 已落盘：{path}（{audio_keep} 帧 = "
-                  f"{audio_keep / float(VIDEO_FPS):.2f} 秒，种子 {seed_i}）")
-
-            # ⑬ 给下一段留状态：
-            #    · 像素尾帧（uint8，按二采画布存 → 下段一采/二采都能用清晰像素重编码）；
-            #      存最后「重叠帧数」帧：下一段钉帧直接取它当本段开头（back=0），时间轴严格对齐
-            #    · 一采 latent（仅 latent 引导模式需要）
-            #    · 本段落盘后末帧亮度 / 逐通道均值（接缝配色）
-            store_w, store_h = (sec_w, sec_h) if use_second else (width, height)
-            try:
-                prev_pixels = _store_pixels(image, store_w, store_h, max(5, int(overlap or window)))
-            except Exception as _pe:
-                prev_pixels = None
-                print(f"[JZL-{TAG}]   分段 {idx}：⚠️ 保存尾部像素失败（{_pe}）→ 下一段改用 latent 引导")
-            if guide_mode != "pixels":
-                try:
-                    prev_latent = first.to("cpu") if hasattr(first, "to") else first
-                except Exception:
-                    prev_latent = first
-            try:
-                prev_luma = _seam_frame_luma(image[-1]) if audio_keep > 0 else prev_luma
-            except Exception:
-                prev_luma = None
-            if color_enabled and audio_keep > 0:
-                try:
-                    prev_rgb = _rgb_means(image, color_ramp or 12, from_tail=True)
-                except Exception:
-                    prev_rgb = None
+            # 只重跑单个窗口：从这一小段里裁出目标窗口那一片
+            if piece_range is not None:
+                lo, hi = piece_range
+                lo, hi = min(lo, raw), min(hi, raw)
+                if hi <= lo:
+                    raise RuntimeError(f"重跑窗口裁切范围为空（{lo}..{hi} / 解码 {raw} 帧）")
+                image = image[lo:hi]
+                if audio is not None and audio.get("waveform") is not None:
+                    sr = int(audio.get("sample_rate", 32000))
+                    a0 = int(round(lo / float(VIDEO_FPS) * sr))
+                    a1 = int(round(hi / float(VIDEO_FPS) * sr))
+                    audio = dict(audio)
+                    audio["waveform"] = audio["waveform"][..., a0:a1]
+                print(f"[JZL-{TAG}]   裁出第 {retake} 个窗口：{lo}..{hi}（{hi - lo} 帧）", flush=True)
+                total_out = int(image.shape[0])
+                offset = frame_base + lo
             else:
-                prev_rgb = None
+                if raw > total_src:
+                    image = image[:total_src]
+                    print(f"[JZL-{TAG}]   裁到源片长度：{raw} → {total_src} 帧"
+                          f"（补出来的 {raw - total_src} 帧是对齐余量）", flush=True)
+                elif raw < total_src:
+                    print(f"[JZL-{TAG}]   ⚠️ 解码只有 {raw} 帧 < 源片 {total_src} 帧", flush=True)
+                total_out = int(image.shape[0])
+                offset = 0
 
-            try:
-                del image, audio, samples, first, positive, positive2, latent, src_clip
-            except Exception:
-                pass
-            _clean_cache()
+            if use_model_audio:
+                audio = _slice_audio(audio, offset, total_out)
+            elif keep_original_audio:
+                audio = _slice_audio(source_audio, offset, total_out)
+            else:
+                audio = None
 
-        for seg in plan:
-            try:
-                _run_segment(seg)
-            except Exception as e:
-                # 单段失败不拖垮整片：记录后继续下一段（上一段好结果仍是下一段的衔接源）
-                errors.append(f"第{seg['index'] + 1}段失败：{type(e).__name__}: {e}")
-                print(f"[JZL-{TAG}] ⚠️ 第{seg['index'] + 1}段失败：{type(e).__name__}: {e}")
-                try:
-                    import traceback as _tb
-                    print(_tb.format_exc())
-                except Exception:
-                    pass
-                try:
-                    _clean_cache()
-                except Exception:
-                    pass
+            # 分段落盘：按窗口起点切（重叠区归后一段，正好不重不漏）
+            bounds = [w.frame_start for w in windows] + [total_out]
+            pieces = []
+            for i in range(len(windows)):
+                a, b = bounds[i], min(bounds[i + 1], total_out)
+                if b > a:
+                    pieces.append((a, b))
+            if piece_range is not None:
+                lbl = f"{batch}次生成重跑第{retake}段"
+                path = _save_segment_mp4(image, audio, out_dir, 0, story_name=safe_story,
+                                         counter=_next_counter(out_dir, f"{safe_story}_{lbl}"),
+                                         batch=batch, label=lbl)
+                out_files = [path]
+                print(f"[JZL-{TAG}] 第 {retake} 个窗口已落盘：{path}（{total_out} 帧）", flush=True)
+                print(f"[JZL-{TAG}] 用它替换成片里 {offset}~{offset + total_out} 帧那一段即可",
+                      flush=True)
+            elif len(pieces) > 1:
+                for i, (a, b) in enumerate(pieces):
+                    piece_audio = None
+                    if audio is not None and audio.get("waveform") is not None:
+                        piece_audio = _slice_audio(audio, a, b - a)
+                    path = _save_segment_mp4(image[a:b], piece_audio, out_dir, i + 1,
+                                             story_name=safe_story, counter=counter0 + i, batch=batch)
+                    out_files.append(path)
+                    print(f"[JZL-{TAG}] 分段 {i + 1}/{len(pieces)} 已落盘：{path}"
+                          f"（{b - a} 帧）", flush=True)
+            else:
+                lbl = f"{batch}次生成成片"
+                only = _save_segment_mp4(image, audio, out_dir, 0, story_name=safe_story,
+                                         counter=_next_counter(out_dir, f"{safe_story}_{lbl}"),
+                                         batch=batch, label=lbl)
+                out_files = [only]
+                print(f"[JZL-{TAG}] 成片已落盘：{only}", flush=True)
 
-        # ⑭ 拼接
-        merged_path = ""
-        out_files = list(saved_files)
-        if save_mode == "拼接保存" and saved_files:
-            try:
-                merged_path = os.path.join(
-                    out_dir,
-                    f"{safe_story}_{batch}次生成分段合并_"
-                    f"{_next_counter(out_dir, f'{safe_story}_{batch}次生成分段合并'):05d}.mp4")
-                merged_path = _merge_mp4_concat(saved_files, merged_path, audio_wavs=merge_wavs)
-                out_files = [merged_path]
-                print(f"[JZL-{TAG}] 拼接完成（{len(saved_files)} 段）：{merged_path}")
-                if auto_merge_delete:
-                    _del = 0
-                    for _sp in saved_files:
-                        try:
-                            if os.path.exists(_sp):
-                                os.remove(_sp)
-                                _del += 1
-                        except Exception:
-                            pass
-                    if _del:
-                        print(f"[JZL-{TAG}] 已按配置删除 {_del} 个分段视频（仅保留合并结果）")
-            except Exception as _me:
-                errors.append(f"拼接失败：{_me}（各分段已保留）")
-                merged_path = ""
-        if merge_wavs:
-            for _w in merge_wavs:
-                try:
-                    if os.path.exists(_w):
-                        os.remove(_w)
-                except Exception:
-                    pass
+        videos = []
+        try:
+            from comfy_api.input_impl import VideoFromFile
+            for _p in out_files:
+                videos.append(VideoFromFile(_p))
+        except Exception as _ve:
+            print(f"[JZL-{TAG}] ⚠️ 无法把落盘文件包成 VIDEO 输出：{_ve}", flush=True)
 
         print(f"[JZL-{TAG}] ─────────────────────────────────────────────")
         print(f"[JZL-{TAG}] 成片合计 {total_out} 帧 = {total_out / float(VIDEO_FPS):.2f} 秒"
-              f"（源片 {total_src} 帧 = {total_src / float(VIDEO_FPS):.2f} 秒，{count} 段）")
-        if abs(total_out - total_src) > 2:
-            print(f"[JZL-{TAG}] ⚠️ 成片与源片差 {total_out - total_src:+d} 帧"
-                  f"（{count} 段 × 段长 {seg_len} 未整除源片长度时的正常取整，差值上限 = 段长）")
-        for e in errors:
-            print(f"[JZL-{TAG}] {e}")
-        return io.NodeOutput(merged_path, list(out_files))
+              f"（源片 {total_src} 帧 = {total_src / float(VIDEO_FPS):.2f} 秒"
+              f"，{len(windows)} 个窗口一次采样"
+              + (f"｜{len(chunks)} 块解码" if grouped else "") + "）", flush=True)
+        if grouped or len(out_files) > 1:
+            print(f"[JZL-{TAG}] 已落盘 {len(out_files)} 段：把「分段视频」接到 "
+                  f"「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条", flush=True)
+        return io.NodeOutput(videos)

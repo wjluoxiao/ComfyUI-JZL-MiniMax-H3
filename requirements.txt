@@ -13,4 +13,5 @@ imageio-ffmpeg
 # —— 节点运行时强依赖（ComfyUI 自带环境通常已安装；若缺失会导致插件加载或落盘失败）——
 Pillow      # 图像处理：参考图缩放/缩略图/帧处理（nodes_asset_manager 顶层 import PIL）
 numpy       # 数组运算：视频帧 / 音频波形处理
+einops      # 2D 架构 latent 放大权重（内置副本 jzl_h3_latent_upscaler_2d.py）用到 rearrange
 # ffmpeg：分段落盘 / 合并 / 视频抽帧必需（优先用上面的 imageio-ffmpeg；系统已装可忽略）

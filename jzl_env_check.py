@@ -339,9 +339,9 @@ def _api_probe():
         import inspect
         eq = _import_upscaler_execute()
         if eq is None:
-            out.append("放大节点         : 未安装 MinimaxH3LatentUpscaler3D（二采不可用）")
+            out.append("放大节点         : ❌ 内置 2D/3D 放大网络都不可用（二采不可用，请检查插件文件完整性）")
         else:
-            out.append(f"Upscaler3D.execute: {sorted(inspect.signature(eq).parameters)}")
+            out.append(f"Upscaler.execute : {sorted(inspect.signature(eq).parameters)}")
     except Exception as e:
         out.append(f"放大节点         : ❌ 不可探测（{type(e).__name__}: {e}）")
     out.append("── 关键函数实际来源（若指向别的 custom_nodes，即为第三方包改写了 ComfyUI）──")
@@ -446,7 +446,14 @@ def _helper_drift_probe():
 
 
 def _import_upscaler_execute():
-    """尽力找到 MinimaxH3LatentUpscaler3D.execute（第三方放大节点，可选）。"""
+    """放大网络的 execute（内置 2D / 3D 副本优先；用户另装的上游节点只是兜底）。"""
+    # 1) 本插件内置副本（二采实际用的就是这两份，装不装上游节点包都一样）
+    try:
+        from .nodes_asset_manager import _import_upscaler_3d
+        return _import_upscaler_3d().execute
+    except Exception:
+        pass
+    # 2) 兜底：用户自装的上游节点
     try:
         from importlib import import_module
         for name in ("Comfyui_Minimax_h3_latent_Upscaler.nodes.minimax_h3_latent_upscaler_3d",

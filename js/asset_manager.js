@@ -37,7 +37,7 @@ const SHORTDRAMA_NODE_TYPE = "JZL_MiniMaxAssetManagerShortDrama";
 //    🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理
 const SWAP_NODE_TYPE = "JZL_MiniMaxCharacterSwap";
 // manager_settings 结构版本：用来让「一次性迁移」只跑一次（否则用户手动关掉的选项会被反复改回来）
-const SWAP_SETTINGS_SCHEMA = 2;
+const SWAP_SETTINGS_SCHEMA = 3;
 const VIEWER_NODE_TYPE = "JZL_MiniMaxVideoViewer";
 const SCRIPT_VIEWER_NODE_TYPE = "JZL_MiniMaxScriptViewer";
 
@@ -241,7 +241,7 @@ const PANELS = {
     prompt_elements: { label: "➕ 常用提示词元素" },
     align: { label: "🎯 参考元素切换" },
     save_settings: { label: "💾 视频保存设置" },
-    help: { label: "📖 节点使用说明" },
+    help: { label: "📝 提示词预设" },
     video_manager: { label: "🎬 生成视频管理" },
     gen_settings: { label: "🎛️ 运行参数设置" },
     video_params: { label: "🎨 视频参数设置" },
@@ -256,7 +256,7 @@ const PANEL_BUTTONS = [
     { widget: "btn_elements", label: "➕ 常用提示词元素", panel: "prompt_elements" },
     { widget: "btn_preference", label: "🎯 镜头参数预设", panel: "preference_settings" },
     { widget: "btn_align", label: "🎯 参考元素切换", panel: "align" },
-    { widget: "btn_help", label: "📖 节点使用说明", panel: "help" },
+    { widget: "btn_help", label: "📝 提示词预设", panel: "help" },
 ];
 
 const KIND_LABEL = { image: "图片", video: "视频", audio: "音频" };
@@ -2089,6 +2089,7 @@ async function loadLists() {
         diffusion_models: [], clip_models: [], vae_models: [], lora_models: [],
         story_styles: [], story_style_labels: {}, save_dir: "",
         upscaler_models: [], selflift_upscaler_models: ["none"], semantic_bridge_adapters: [],
+        prompt_skills: [], clip_types: ["qwen_image"], all_clip_models: [],
     };
     try {
         const resp = await api.fetchApi(MANAGER_ENDPOINT);
@@ -2221,7 +2222,10 @@ function migrateLegacyDefaults(s, isSwap) {
             if (seam.settle !== undefined) { delete seam.settle; changed = true; }
             // 老的「5 帧窗口 + 12 帧过渡」→ 「22 帧重叠」
             if (Number(seam.window) === 5) { seam.window = 22; changed = true; }
-            if (!seam.guide_mode) { seam.guide_mode = "pixels"; changed = true; }
+            // 老的「引导来源」→ 新的「衔接通道」，一律升级到遮罩前缀（更好）
+            if (seam.guide_mode !== undefined) { delete seam.guide_mode; changed = true; }
+            if (String(seam.transport || "") !== "prefix") { seam.transport = "prefix"; changed = true; }
+            if (!seam.repair) { seam.repair = "auto"; changed = true; }
         }
         const gp = s.gen_params;
         if (gp && typeof gp === "object") {
@@ -2230,6 +2234,10 @@ function migrateLegacyDefaults(s, isSwap) {
                 gp.second_mode = "放大倍数";
                 gp.upscale_scale = 2.0;
                 changed = true;
+            }
+            for (const dead of ["merge_tail", "ref_inject", "ref_inject_every",
+                                "audio_mode", "max_segments", "source_cache_gb"]) {
+                if (gp[dead] !== undefined) { delete gp[dead]; changed = true; }
             }
         }
         // 二采的「开关」绝不动：那是用户的明确意图（强行打开 = 关不掉，就是之前那个 bug）。
@@ -2322,8 +2330,10 @@ function pruneSwapSettings(v) {
         // 配置结构版本：必须保留，否则「一次性迁移」每次都会被当成老配置重跑
         _schema: Number(v._schema || 0),
         gen_params: pick(v.gen_params, ["segment", "aspect_ratio", "megapixels",
-            "scale_factor", "upscale_scale", "second_mode", "second_width", "second_height",
-            "audio_mode", "max_segments", "source_cache_gb"]),
+            "scale_factor", "upscale_scale", "second_mode", "second_width", "second_height", "retake",
+            "audio_mode"]),
+        // 📝 提示词预设：LLM 开关 / 来源 / skill / 后端配置
+        prompt_cfg: pick(v.prompt_cfg, ["use_llm", "source", "skill", "llm_backend", "llm", "api"]),
         sample_decode: Object.assign(
             pick(sd, ["sample_mode", "sampler", "scheduler", "steps", "cfg", "denoise",
                 "seed", "seed_mode", "decode_cleanup"]),
@@ -2331,16 +2341,12 @@ function pruneSwapSettings(v) {
                 // 与短剧导演台同一套键：SelfLift 采样参数整组保留
                 selflift: pick(sl, ["steps", "transition_step", "lowres_scale", "rho", "w_min", "w_max",
                     "upscaler_model", "upscaler_unload", "highres_tiling"]),
-                seam: Object.assign(
-                    pick(sd.seam, ["enabled", "window", "ref_video_tail",
-                        "guide_mode", "pin_second"]),
-                    { color: pick(sd.seam && sd.seam.color,
-                        ["enabled", "strength", "max_offset", "guard", "ramp"]) }),
+                seam: pick(sd.seam, ["window"]),
                 second: pick(sec, ["enabled", "sampler", "scheduler", "sigmas_mode", "custom_sigmas",
                     "steps", "denoise", "precision", "upscaler_model", "device", "enable_chunking",
                     "tiling", "tiling_tiles", "tiling_overlap"]),
             }),
-        save: pick(v.save, ["mode", "auto_merge_delete"]),
+        save: {},
     };
 }
 
@@ -4012,10 +4018,8 @@ function defaultSettings() {
             aspect_ratio: "16:9 (Widescreen)", megapixels: 1.0, multiple: 32, duration: 5,
             width: 0, height: 0, scale_factor: 1.0, upscale_scale: 1.0,
             // 🎭 人物替换专用（其它导演台不读这些键，互不影响）
-            segment: "固定5秒", audio_mode: "保留原声（推荐）", max_segments: 60,
+            segment: "固定5秒",
             second_mode: "目标分辨率", second_width: 1280, second_height: 704,
-            // 源片超过这个 GB 就转 uint8 缓存（0 = 不转）
-            source_cache_gb: 8,
         },
         sample_decode: {
             sampler: "res_multistep", scheduler: "simple", steps: 4, cfg: 1.0,
@@ -4034,13 +4038,8 @@ function defaultSettings() {
                 trim_mode: "像素域裁切（推荐）", guide_source: "一采latent尾部（推荐）",
                 second_guide: "first", luma_match: true,
             },
-            // 🎭 人物替换的分段衔接：重叠 22 帧既是钉帧窗口、也是成片丢头量（没有「过渡帧数」）
-            seam: { enabled: true, window: 22, ref_video_tail: 0,
-                    // pixels = 上段解码像素按本采画布重编码（清晰）
-                    // latent = 上段一采 latent 尾部（旧实现，二采会糊）
-                    guide_mode: "pixels", pin_second: true,
-                    // 段间配色：逐通道常量补偿 + 亮度渐变
-                    color: { enabled: true, strength: 0.8, max_offset: 16, guard: 32, ramp: 12 } },
+            // 🎭 人物替换：只有「窗口长度 = 每段时长」和「重叠帧数」两个旋钮
+            seam: { window: 22 },
             second: {
                 enabled: false,
                 upscaler_model: "",
@@ -4226,6 +4225,17 @@ function renderAutoSave(c, s) {
 // 下拉值校验：存储值不在选项里时（如模型文件被删除/改名），select 没有任何 option 被选中，
 // 浏览器会「显示第一个选项」但 value 仍是旧值 → 面板显示 A、后端收到 B（"选了 Q4 却报 Q8 不存在"）。
 // 这里统一修正为「所见即所得」：返回实际生效值，并标记原值缺失。
+// 「分段输出」前缀 → { dir, name }：前段是 output 下的文件夹，末段是视频名称。
+// 与后端 _resolve_out_prefix 保持同一套清洗规则（丢掉 ..、盘符、空段）。
+// 参考视频抽帧：模型参考帧数必须是 5+17k，所以「12fps」实际会落在 56 帧 ≈ 10.8fps。
+function jzlSplitOutPrefix(prefix) {
+    const parts = String(prefix ?? "").replace(/\\/g, "/").split("/")
+        .map((p) => p.trim())
+        .filter((p) => p && p !== "." && p !== ".." && !p.endsWith(":"));
+    if (!parts.length) return { dir: "", name: "人物替换" };
+    return { dir: parts.slice(0, -1).join("/"), name: parts[parts.length - 1] };
+}
+
 function jzlReconcileChoice(value, options, fallback) {
     const opts = (options || []).map((o) => String((o && typeof o === "object") ? (o.value ?? "") : o));
     const v = String(value ?? "").trim();
@@ -5049,17 +5059,25 @@ function renderSwapVideoParamsPanel(c, s, node) {
     c.append(segHint);
     const showSegLen = () => {
         const f = swapFrameLen(gp.segment || "固定5秒");
-        segHint.textContent = `每段生成 ${f} 帧 = ${(f / 24).toFixed(2)} 秒（自动对齐到模型支持的帧数）。`
-            + "段越短接缝越多、越慢；5~8 秒最稳。这只是切段粒度，成片总时长等于源片。";
+        segHint.textContent = `单窗口一次生成上限 ${f} 帧 = ${(f / 24).toFixed(2)} 秒（自动对齐到模型支持的帧数）。`
+            + "\n显存小就调小（4 秒），显存大可以调大（10~15 秒）；整片会自动切成若干个这么长的窗口，且只采样一次。";
     };
     showSegLen();
 
-    c.append(makeSectionTitle("音频"));
-    c.append(field("音频方式", selectControl(SWAP_AUDIO_OPTIONS, String(gp.audio_mode || SWAP_AUDIO_OPTIONS[0]),
-        v => { gp.audio_mode = v; touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
-        "保留原声 = 成片用源片原声（对白/音效不变，推荐；同时把原声作为 <Video 1> 音轨参考）。\n"
-        + "使用生成音轨 = 用模型重新生成的声音（台词/节奏可能与原片不同）。静音 = 不要音轨。"));
+    c.append(makeSectionTitle("声音"));
+    c.append(field("声音来源", selectControl(["使用原声", "生成音频"], String(gp.audio_mode || "使用原声"),
+        v => { gp.audio_mode = v; showAudioHint(); touch(); })));
+    const audioHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
+    c.append(audioHint);
+    function showAudioHint() {
+        const gen = String(gp.audio_mode || "使用原声") === "生成音频";
+        audioHint.textContent = gen
+            ? "解码模型生成的音轨（需要接「音频VAE」）。源片原声依旧不参与参考编码。\n"
+              + "注意：模型生成的音频是它自己「编」的，与源片对白/音效无关。"
+            : "用源片原声：原声不参与参考编码，只在最后按帧号精确切给每段落盘（对白/音效原样保留）。\n"
+              + "此时不需要接「音频VAE」，latent 里的音频也完全不解码。";
+    }
+    showAudioHint();
 
     c.append(makeSectionTitle("参考与放大"));
     c.append(field("参考图放大", stepperControl(Number(gp.scale_factor ?? 1.0),
@@ -5120,82 +5138,48 @@ function renderSwapVideoParamsPanel(c, s, node) {
         + "必须 > 1.0 才有提清晰度的意义；< 1.0 等于降级，会更糊。\n"
         + "想省时间：把「百万像素」降到 0.5，二采面积倍数保持 2.0 → 二采 1.0MP（参考工作流同款）。"));
 
-    c.append(makeSectionTitle("安全阀"));
-    c.append(field("最大段数", stepperControl(Number(gp.max_segments ?? 60),
-        { min: 1, max: 200, step: 1 }, v => { gp.max_segments = Math.round(v); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "源片切出的段数超过它就直接报错（避免误接一部两小时的片子跑一晚上）。"));
-    c.append(field("源片缓存阈值", stepperControl(Number(gp.source_cache_gb ?? 8),
-        { min: 0, max: 512, step: 1 }, v => { gp.source_cache_gb = Math.round(v); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
-        "源片超过这么多 GB 就转成 uint8 缓存，常驻内存降到 1/4（长片不容易爆内存）。\n"
-        + "0 = 不转换。换算：GB ≈ 帧数 × 宽 × 高 × 12 / 1e9。"));
+}
+
+function renderSwapSavePanel(c, s, node) {
+    // 🎭 人物替换：落盘恒为「逐段落盘」（长片必须分块解码，否则整片 IMAGE 会爆内存），
+    //    合并交给下游「XB-BOX - 🎬 视频批量拼接」，所以这里没有保存模式开关。
+    c.append(makeSectionTitle("保存"));
+    c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 10px 172px;line-height:1.8;white-space:pre-line;",
+        "本节点恒为逐段落盘：短片（≤ 约 50 秒）落 1 个文件；更长的片按解码块切成多个文件，\n"
+        + "每块解完立刻写盘并释放内存 —— 内存不随片长增长，5 分钟、10 分钟都跑得动。\n\n"
+        + "要把分段拼成一整条：把输出端口「批量视频」接到「XB-BOX - 🎬 视频批量拼接」，\n"
+        + "勾选「拼接保存」（stream copy 无损，不重新编码）；不想留分段就再勾「拼接后删除分段视频」。"));
+    const _pfxW = (node?.widgets || []).find((w) => w.name === "story_name");
+    const _pfx = jzlSplitOutPrefix(String(_pfxW?.value ?? "") || "视频/人物替换");
+    c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 8px 172px;line-height:1.8;",
+        "落盘：「分段输出」= 文件夹/视频名称 → output/" + (_pfx.dir ? _pfx.dir + "/" : "")
+        + _pfx.name + "_2次生成分段1_00001.mp4"));
 }
 
 function renderSwapSeamSection(c, s, node) {
-    // 🎭 人物替换独有：分段衔接。放在「100% 复刻的采样解码设置」之后，
-    //    语义与「无限时长衔接」同源，但接的是「上一段生成结果」而不是新剧情。
+    // 🎭 人物替换独有的「分段衔接」：只有「重叠帧数」一个旋钮。
+    //    整片是一次采样跑完的，重叠区只在窗口之间做混合，不再有「上段传递下段」。
     const sd = s.sample_decode || (s.sample_decode = {});
     const seam = sd.seam || (sd.seam = {});
     const touch = () => { try { node?.__jzlUpdateDisplay?.(); } catch (_) {} };
 
     c.append(makeSectionTitle("分段衔接"));
-    c.append(field("启用衔接", checkboxControl(seam.enabled !== false,
-        "开：第 2 段起先接住上一段的结尾画面再往下生成，段与段之间不跳。关：每段单独生成",
-        v => { seam.enabled = !!v; touch(); })));
     c.append(field("重叠帧数", selectControl(SWAP_WINDOW_OPTIONS, Number(seam.window ?? 22),
         v => { seam.window = Number(v); touch(); })));
     c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
-        "上一段结尾的多少帧，既钉成本段开头、又在成片里丢掉（两头用同一段帧）。\n"
-        + "22 帧 = 参考工作流同值。越大越稳、越慢；必须是 5/22/39/56 且小于每段帧数。"));
-    c.append(field("参考帧数", stepperControl(Number(seam.ref_video_tail ?? 0),
-        { min: 0, max: 600, step: 17 }, v => { seam.ref_video_tail = Math.max(0, Math.round(v)); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "给模型看多少帧源片当参考。0 = 整段都给（动作最准、最慢）；填 39~56 只看开头一小段，省显存。"));
-    c.append(field("引导来源", selectControl(
-        [{ value: "pixels", label: "像素尾帧（推荐）" },
-         { value: "latent", label: "latent 尾帧（旧，二采会糊）" }],
-        String(seam.guide_mode || "pixels"), v => {
-            seam.guide_mode = v;
-            touch();
-        })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "衔接画面按像素传还是按 latent 传。像素会按本段分辨率重新编码，所以清晰。"));
-    c.append(field("二采钉帧", checkboxControl(seam.pin_second !== false,
-        "二采也按二采分辨率重新接一次；关掉只有一采接着，二采会糊",
-        v => { seam.pin_second = !!v; touch(); })));
-
-    // ── 段间配色（逐通道常量补偿 + 亮度渐变）──
-    const col = seam.color || (seam.color = {});
-    c.append(makeSectionTitle("段间配色"));
-    c.append(field("启用配色", checkboxControl(col.enabled !== false,
-        "用「上段结尾均值 vs 本段开头均值」算一个逐通道固定偏移，整段加上去 → 段与段之间不串色",
-        v => { col.enabled = !!v; touch(); })));
-    c.append(field("补偿强度", stepperControl(Number(col.strength ?? 0.8),
-        { min: 0.0, max: 1.0, step: 0.05 }, v => { col.strength = v; touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "只补一部分（0.8 = 补八成），留一点自然差异，避免整段被推成另一个色调。"));
-    c.append(field("单通道上限", stepperControl(Number(col.max_offset ?? 16),
-        { min: 0, max: 64, step: 1 }, v => { col.max_offset = Math.round(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "8bit 单位，默认 16。超过它就说明不是色彩漂移而是换了场景，硬拉会毁画面。"));
-    c.append(field("差异阈值", stepperControl(Number(col.guard ?? 32),
-        { min: 0, max: 128, step: 1 }, v => { col.guard = Math.round(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "三通道平均差超过它就直接跳过补偿（判定为场景/灯光真的变了，不该对齐）。"));
-    c.append(field("亮度过渡帧", stepperControl(Number(col.ramp ?? 12),
-        { min: 0, max: 24, step: 1 }, v => { col.ramp = Math.round(v); touch(); })));
-    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;",
-        "配色之后再补一层亮度渐变，把开头这么多帧朝上段末帧亮度过渡。0 = 关。"));
-
+        "相邻两个窗口重叠多少帧。重叠区里两个窗口的预测按斜坡加权平均，所以看不出接缝。\n"
+        + "只能选 5 / 22 / 39 / 56（和模型的 17 帧分组对齐）。默认 22；接缝仍看得出就加到 39。"));
+    const gp = sd.gen_params || (sd.gen_params = {});
+    c.append(field("只重跑第几段", stepperControl(Number(gp.retake ?? 0) || 0,
+        { min: 0, max: 200, step: 1 },
+        v => { gp.retake = Math.max(0, Math.round(Number(v) || 0)); touch(); })));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "0 = 跑整片（默认）。填 N = 只重算第 N 段，只落盘这一个片段，拿它替换成片里对应的那一段。\n"
+        + "重算时会自动带上左右两个邻居做重叠混合，所以和相邻段能接得上。"));
     c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;white-space:pre-line;",
-        "帧账（严格不缺帧、不多帧）：\n"
-        + "· 第 1 段：生成 = align(段长)，全部保留。\n"
-        + "· 之后每段：生成 = align(段长 + 重叠)，丢掉开头「重叠」帧，补出来的余量从尾部丢掉 → 正好落盘 段长。\n"
-        + "· 例：124 + 22 → align = 158 → 丢 22 = 136 → 尾丢 12 → 落盘 124。\n"
-        + "钉住的正是被丢掉的那 22 帧，所以模型输出的第 1 帧直接接在钉住内容的下一帧 → 接缝平顺。\n"
-        + "⚠️ 衔接画面会压住定妆图：模型会顺着「上一段的脸」往下演。若发现越往后越不像 <Picture 1>，"
-        + "先把「启用衔接」关掉对比一次 —— 这说明问题在换人本身（参考图/放大倍数/提示词），不在衔接。"));
+        "怎么跑的：整片 latent 一次采样；每一步都把它切成若干个「≤ 每段时长」的窗口，\n"
+        + "每个窗口用自己的参考视频切片 + 定妆图 + 提示词预测，再在重叠区混合成一整片。\n"
+        + "窗口之间不传递任何已生成的画面 → 不会越往后越不像；每个模型只加载一次 → 不会越跑越慢。"));
 }
 
 function renderSwapPrefPanel(c, s, d, node) {
@@ -5207,54 +5191,309 @@ function renderSwapPrefPanel(c, s, d, node) {
     renderSwapSeamSection(c, s, node);
 }
 
-function renderSwapHelpPanel(c) {
-    const p = (txt, style) => c.append(el("p", style || "margin:6px 0;line-height:1.8;font-size:13px;color:var(--fg-color,var(--jz-text));", txt));
-    const h = (txt) => c.append(el("div", "margin:14px 0 6px;font-size:14px;font-weight:700;color:var(--jz-warn);", txt));
-    c.append(el("div", "font-size:15px;font-weight:700;color:var(--fg-color,var(--jz-text-strong));margin-bottom:6px;", "🎭 MiniMax-H3 人物替换 · 使用说明"));
-    p("把一段已有视频里的演员换成你给的定妆图（不是局部换脸，而是逐段重生成：动作/机位/场景保留、人换掉）。长视频自动分段、自动衔接，成片时长恒等于源片。");
+function renderSwapPromptPanel(c, s, d, node) {
+    // 📝 提示词预设：LLM 增强开关（最顶）→ 提示词来源 → skill → LLM 后端/参数 → 使用说明（折叠）
+    const pc = s.prompt_cfg || (s.prompt_cfg = {});
+    const touch = () => { try { node?.__jzlUpdateDisplay?.(); } catch (_) {} };
+    const commit = () => {
+        try { c.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
+        touch();
+    };
+
+    // ── ① LLM 增强（最顶开关）──
+    c.append(makeSectionTitle("LLM 增强"));
+    const useCb = checkboxControl(pc.use_llm === true, "启用 LLM 增强提示词", (v) => {
+        pc.use_llm = !!v;
+        if (!pc.use_llm) pc.source = "系统默认";
+        syncSource();
+        commit();
+    });
+    c.append(field("启用", useCb));
+    c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "开：把「视频描述 + 图片描述」交给 LLM，由它写完整的 H3 提示词。\n"
+        + "关：用内置系统默认提示词（把两段描述填进 detailed_description），不需要任何模型，最快。"));
+
+    // ── ② 提示词来源（LLM 关闭时禁用并强制「系统默认」）──
+    c.append(makeSectionTitle("提示词来源"));
+    const srcSel = selectControl(["系统默认", "内置skill", "自定义skill"],
+        String(pc.source || "系统默认"), (v) => {
+            pc.source = v;
+            syncSource();
+            commit();
+        });
+    const srcRow = field("来源", srcSel);
+    c.append(srcRow);
+    const srcHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
+    c.append(srcHint);
+
+    // 自定义 skill 下拉
+    const skillList = (d?.prompt_skills && d.prompt_skills.length) ? d.prompt_skills : [];
+    const skillBox = el("div", "");
+    const skillSel = selectControl(skillList.length ? skillList : ["（skills/jzl 下没有 .md）"],
+        String(pc.skill || (skillList[0] || "")), (v) => {
+            pc.skill = String(v).startsWith("（") ? "" : v;
+            commit();
+        });
+    skillBox.append(field("自定义 skill", skillSel));
+    skillBox.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "读取 skills/jzl/*.md（与「✨ MiniMax-skill加载」同一目录）。整份文件作为 LLM 的设定词。"));
+    c.append(skillBox);
+
+    const syncSource = () => {
+        const on = pc.use_llm === true;
+        srcSel.disabled = !on;
+        srcRow.style.opacity = on ? "" : "0.5";
+        if (!on) {
+            pc.source = "系统默认";
+            srcSel.value = "系统默认";
+        }
+        skillBox.style.display = (on && pc.source === "自定义skill") ? "block" : "none";
+        srcHint.textContent =
+            !on ? "LLM 关闭时固定用「系统默认」，此下拉不可操作。"
+            : pc.source === "系统默认" ? "内置模板：把「视频描述 / 图片描述」填进 detailed_description 段。"
+            : pc.source === "内置skill" ? "内置 skill「人物替换提示词.md」作为 LLM 设定词，由 LLM 写提示词。"
+            : "用你选的 skill 作为 LLM 设定词，由 LLM 写提示词。";
+    };
+
+    // ── ③ LLM 后端 ──
+    const llm = pc.llm || (pc.llm = {});
+    const apiCfg = pc.api || (pc.api = {});   // 注意：不能叫 api，会遮蔽 ComfyUI 的 fetchApi 模块
+    c.append(makeSectionTitle("LLM 后端"));
+    const backendRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;");
+    const backendCbs = [];
+    const mkBackend = (val, label) => {
+        const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
+        const cb = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
+        cb.type = "checkbox";
+        cb.checked = (String(pc.llm_backend || "").includes("api") ? "在线API [api]" : "本地模型 [local]") === val;
+        cb.addEventListener("change", () => {
+            if (cb.checked) {
+                pc.llm_backend = val;
+                backendCbs.forEach((x) => { if (x !== cb) x.checked = false; });
+                syncBackend();
+                commit();
+            } else if (backendCbs.every((x) => !x.checked)) {
+                cb.checked = true;
+            }
+        });
+        lab.append(cb, el("span", "", label));
+        backendRow.append(lab);
+        backendCbs.push(cb);
+    };
+    c.append(field("后端", backendRow));
+
+    // 本地：官方「Load CLIP」+「Generate Text」（models/text_encoders ∪ models/clip）
+    const localBox = el("div", "");
+    const clipModels = (d?.all_clip_models && d.all_clip_models.length) ? d.all_clip_models
+        : ((d?.clip_models && d.clip_models.length) ? d.clip_models : ["（models/text_encoders 与 models/clip 里没有模型）"]);
+    if (!llm.clip_name && clipModels.length && !String(clipModels[0]).startsWith("（")) llm.clip_name = clipModels[0];
+    const clipTypes = (d?.clip_types && d.clip_types.length) ? d.clip_types : ["qwen_image"];
+    localBox.append(field("CLIP 模型", selectControl(clipModels, String(llm.clip_name || clipModels[0]),
+        (v) => { llm.clip_name = String(v).startsWith("（") ? "" : v; commit(); })));
+    localBox.append(field("CLIP 类型", selectControl(clipTypes, String(llm.clip_type || "qwen_image"),
+        (v) => { llm.clip_type = v; commit(); })));
+    localBox.append(field("max_length", numberControl(llm.max_length ?? 2048, { min: 1, max: 32768, step: 1 },
+        (v) => { llm.max_length = Math.round(v); })));
+    localBox.append(field("temperature", numberControl(llm.temperature ?? 0.7, { min: 0.01, max: 2, step: 0.01 },
+        (v) => { llm.temperature = v; })));
+    localBox.append(field("top_k", numberControl(llm.top_k ?? 64, { min: 0, max: 1000, step: 1 },
+        (v) => { llm.top_k = Math.round(v); })));
+    localBox.append(field("top_p", numberControl(llm.top_p ?? 0.95, { min: 0, max: 1, step: 0.01 },
+        (v) => { llm.top_p = v; })));
+    localBox.append(field("min_p", numberControl(llm.min_p ?? 0.05, { min: 0, max: 1, step: 0.01 },
+        (v) => { llm.min_p = v; })));
+    localBox.append(field("repetition_penalty", numberControl(llm.repetition_penalty ?? 1.05, { min: 0, max: 5, step: 0.01 },
+        (v) => { llm.repetition_penalty = v; })));
+    localBox.append(field("presence_penalty", numberControl(llm.presence_penalty ?? 0.0, { min: 0, max: 5, step: 0.01 },
+        (v) => { llm.presence_penalty = v; })));
+    localBox.append(field("seed", numberControl(llm.seed ?? 0, { min: 0, max: 4294967295, step: 1 },
+        (v) => { llm.seed = Math.round(v); })));
+    localBox.append(field("thinking", checkboxControl(llm.thinking === true, "模型支持时开启 thinking（推理模式）",
+        (v) => { llm.thinking = !!v; })));
+    localBox.append(field("默认模板", checkboxControl(llm.use_default_template !== false, "用模型自带的 chat 模板（关掉则 system_prompt 被忽略）",
+        (v) => { llm.use_default_template = !!v; })));
+    localBox.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+        "与官方「Load CLIP」+「Generate Text」同一条链路：模型来自 models/text_encoders，**类型必须与模型配套**（选错会加载失败）。\n"
+        + "建议用 qwen3vl_4b_* 这类小模型写提示词（快、省显存）；qwen3vl_32b_minimax_h3_* 是主模型配套的大 CLIP，也能生成但很慢很吃显存。\n"
+        + "生成完会自动把文本编码器从显存退回，不占用后面视频模型的显存。"));
+    c.append(localBox);
+
+    // 在线 API
+    const apiBox = el("div", "");
+    apiBox.append(field("服务商", selectControl(OPTIONS.providers, String(apiCfg.provider || OPTIONS.providers[0]),
+        (v) => { apiCfg.provider = v; })));
+    apiBox.append(field("模型", textControl(apiCfg.model || "deepseek-flash", "deepseek-flash…",
+        (v) => { apiCfg.model = v; })));
+    apiBox.append(field("API Key", passwordControl(apiCfg.api_key || "", "sk-…（已隐藏）",
+        (v) => { apiCfg.api_key = v; })));
+    apiBox.append(field("Base URL", textControl(apiCfg.base_url || "https://apiCfg.deepseek.com", "https://apiCfg.deepseek.com",
+        (v) => { apiCfg.base_url = v; })));
+    apiBox.append(field("temperature", numberControl(apiCfg.temperature ?? 0.6, { min: 0, max: 2, step: 0.01 },
+        (v) => { apiCfg.temperature = v; })));
+    apiBox.append(field("max_tokens", numberControl(apiCfg.max_tokens ?? 81920, { min: 1, max: 262144, step: 1 },
+        (v) => { apiCfg.max_tokens = Math.round(v); })));
+    apiBox.append(field("thinking", selectControl(["disabled", "enabled"], apiCfg.thinking || "disabled",
+        (v) => { apiCfg.thinking = v; })));
+    c.append(apiBox);
+
+    const syncBackend = () => {
+        const isApi = String(pc.llm_backend || "").includes("api");
+        localBox.style.display = isApi ? "none" : "block";
+        apiBox.style.display = isApi ? "block" : "none";
+    };
+    mkBackend("本地模型 [local]", "本地模型");
+    mkBackend("在线API [api]", "在线API");
+    syncBackend();
+    syncSource();
+
+    // ── ④ LLM 验证：只跑提示词生成（不跑视频、不进队列）──
+    c.append(makeSectionTitle("LLM 验证"));
+    const btnValidate = el("button",
+        "background:var(--jz-accent-bg);color:var(--jz-on-accent);border:1px solid #5b9bd5;border-radius:5px;"
+        + "padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;line-height:1.4;",
+        "🧪 LLM 验证");
+    btnValidate.type = "button";
+    btnValidate.title = "只跑一次提示词生成（用当前面板配置 + 节点里的两段描述），不加载视频模型、不进队列";
+    btnValidate.addEventListener("mousedown", (e) => e.stopPropagation());
+    const btnCopy = el("button",
+        "background:var(--jz-bg-raise);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:5px;"
+        + "padding:4px 12px;font-size:12px;cursor:pointer;white-space:nowrap;line-height:1.4;",
+        "📋 复制");
+    btnCopy.type = "button";
+    btnCopy.title = "把下面的提示词复制到剪贴板";
+    btnCopy.addEventListener("mousedown", (e) => e.stopPropagation());
+    const valRow = el("div", "display:flex;align-items:center;gap:8px;margin:0 0 8px 172px;flex-wrap:wrap;");
+    const valState = el("span", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));", "");
+    valRow.append(btnValidate, btnCopy, valState);
+    c.append(valRow);
+
+    btnCopy.addEventListener("click", async () => {
+        const txt = previewBox.value || "";
+        if (!txt) { valState.textContent = "没有可复制的内容（先点「🧪 LLM 验证」）"; return; }
+        try {
+            await navigator.clipboard.writeText(txt);
+            valState.textContent = "📋 已复制";
+            valState.style.color = "var(--jz-ok, #57d977)";
+            setTimeout(() => { if (valState.textContent === "📋 已复制") valState.textContent = ""; }, 1500);
+        } catch (_) {
+            previewBox.select();
+            try { document.execCommand("copy"); valState.textContent = "📋 已复制"; } catch (__) {
+                valState.textContent = "复制失败，请手动 Ctrl+C";
+            }
+        }
+    });
+
+    const previewBox = document.createElement("textarea");
+    previewBox.readOnly = true;
+    previewBox.spellcheck = false;
+    previewBox.placeholder = "点「🧪 LLM 验证」后，这里显示最终要喂给模型的提示词（只读）。";
+    previewBox.style.cssText = "width:100%;height:220px;box-sizing:border-box;resize:vertical;"
+        + "background:var(--jz-bg-raise);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;"
+        + "padding:8px;font-size:12px;line-height:1.55;font-family:ui-monospace,Consolas,monospace;"
+        + "overflow:auto;white-space:pre-wrap;";
+    previewBox.addEventListener("mousedown", (e) => e.stopPropagation());
+    c.append(previewBox);
+
+    btnValidate.addEventListener("click", async () => {
+        if (btnValidate.disabled) return;
+        const wOf = (n) => (node?.widgets || []).find((w) => w && w.name === n);
+        const msW = wOf("manager_settings");
+        // 用「当前面板里的实时配置」而不是已保存的 widget 值：改了面板没保存也能验证
+        let payloadCfg = null;
+        try { payloadCfg = JSON.stringify(pruneSwapSettings(s)); } catch (_) { payloadCfg = null; }
+        if (!payloadCfg) {
+            try { payloadCfg = String(readWidgetValue(msW) ?? ""); } catch (_) { payloadCfg = ""; }
+        }
+        const vd = String(readWidgetValue(wOf("video_desc")) ?? "");
+        const im = String(readWidgetValue(wOf("image_desc")) ?? "");
+        btnValidate.disabled = true;
+        btnValidate.style.opacity = "0.6";
+        valState.style.color = "var(--jz-warn)";
+        const t0 = Date.now();
+        // 本地 CLIP 生成 2048 token 能跑一两分钟，超过 fetchApi 默认 60s 会被前端掐断（Fetch timeout）
+        const tick = setInterval(() => {
+            valState.textContent = `生成中… ${((Date.now() - t0) / 1000).toFixed(0)}s`
+                + `（本地 CLIP 首次加载较慢，别关面板）`;
+        }, 1000);
+        valState.textContent = "生成中… 0s（本地 CLIP 首次加载较慢，别关面板）";
+        try {
+            const resp = await api.fetchApi("/jzl/swap_prompt_preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ manager_settings: payloadCfg, video_desc: vd, image_desc: im }),
+                timeoutMs: null,   // 关掉前端 60s 超时：这条请求要等文本编码器出完整段提示词
+            });
+            const data = await resp.json().catch(() => ({}));
+            const secs = ((Date.now() - t0) / 1000).toFixed(1);
+            if (data && data.ok) {
+                previewBox.value = String(data.prompt || "");
+                valState.textContent = `✅ ${data.source || ""}${data.use_llm ? "（LLM）" : "（模板）"}`
+                    + ` · ${String(data.prompt || "").length} 字 · ${secs}s`;
+                valState.style.color = "var(--jz-ok)";
+            } else {
+                previewBox.value = "❌ " + String((data && data.error) || "未知错误");
+                valState.textContent = `❌ 失败 · ${secs}s`;
+                valState.style.color = "#e55";
+            }
+        } catch (err) {
+            previewBox.value = "❌ " + String(err && err.message ? err.message : err);
+            valState.textContent = "❌ 请求失败";
+            valState.style.color = "#e55";
+        } finally {
+            clearInterval(tick);
+            btnValidate.disabled = false;
+            btnValidate.style.opacity = "";
+        }
+    });
+
+    // ── ⑤ 使用说明（折叠，避免占满面板）──
+    const det = document.createElement("details");
+    det.style.cssText = "margin:16px 0 8px;";
+    const sum = document.createElement("summary");
+    sum.textContent = "📖 节点使用说明（点开）";
+    sum.style.cssText = "cursor:pointer;font-size:14px;font-weight:700;color:var(--jz-warn);";
+    det.appendChild(sum);
+    const body = el("div", "");
+    det.appendChild(body);
+    c.append(det);
+    const p = (txt) => body.append(el("p", "margin:6px 0;line-height:1.8;font-size:13px;color:var(--fg-color,var(--jz-text));", txt));
+    const h = (txt) => body.append(el("div", "margin:12px 0 6px;font-size:13px;font-weight:700;color:var(--jz-warn);", txt));
 
     h("① 接线");
-    p("源视频 ← 「加载视频 / GetVideoComponents」的 IMAGE 输出（按 24fps 解释，非 24fps 请先转码）");
-    p("源视频原声 ← 同一条时间轴上的 AUDIO（「保留原声」时必需）");
-    p("定妆图 ref_image_0..8 ← 新演员参考图（<Picture 1..9>），建议正面清晰、单人");
-    p("主模型 / CLIP / 视觉VAE / 音频VAE ← 与导演台一致；建议用 ref2va 变体模型");
-    p("端口顺序：主模型 → CLIP → 视觉VAE → 音频VAE → 源视频 → 源视频原声 → 定妆图；提示词在最底部。");
+    p("源视频 ← 「加载视频 / GetVideoComponents」的 IMAGE 输出（按 24fps 解释。源片不是 24fps 时，节点会用原声真实时长自动反推帧率并升/降帧，时长不变）。");
+    p("源视频原声 ← 同一条时间轴上的 AUDIO。它不参与参考编码，只在「声音来源 = 使用原声」时按帧号切给每段落盘。");
+    p("定妆图 ref_image_0..8 ← 新演员参考图（<Picture 1..9>），建议正面清晰、单人。");
+    p("主模型 / CLIP / 视觉VAE ← 与导演台一致，建议用 ref2va 变体模型。音频VAE 只在「声音来源 = 生成音频」时需要。");
+    p("输出只有一个端口「批量视频」：每段一个 VIDEO，接「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条。");
 
-    h("② 四个按钮");
-    p("🎨 视频参数设置：画幅/像素、每段时长、音频方式、参考图放大、二采放大、最大段数");
-    p("🎭 采样解码设置：与「短剧导演台」100% 相同（采样分类/种子/一采/二采/SelfLift/解码），"
-        + "末尾多一段本节点独有的「分段衔接」：重叠帧数 / 参考帧数");
-    p("🎬 生成视频管理：输出名称（output/jzl/{名称}/）、保存方式、本批视频宫格预览");
-    p("📖 节点使用说明：本页");
-    p("保存后重新执行节点生效（「自动保存」开着时改完即存）。提示词固定在最底部的大输入框里。");
+    h("② 两个描述 + 三种提示词来源");
+    p("🎬 视频描述：源视频里发生了什么（人物/动作/场景/镜头/光线/节奏）。");
+    p("🖼 图片描述：参考图里的人长什么样（脸型/发型/服装/配饰/配色/气质），越具体越像。");
+    p("系统默认：内置 ===H3_PROMPT=== 模板，把两段描述填进 detailed_description 段，不需要任何模型。");
+    p("内置skill / 自定义skill：把 skill 文件当 LLM 设定词，让 LLM 依据两段描述写完整提示词（需要配好 LLM 后端）。");
+    p("LLM 关闭时「提示词来源」自动锁回「系统默认」且不可操作；LLM 调用失败会自动回退系统默认并打警告，不会中断生成。");
 
-    h("③ 提示词怎么写（换人不生效多半是这里）");
-    p("模型按 ===H3_PROMPT=== 结构理解提示词，三段缺一不可：subject_definitions 定义 <Subject 1> = <Picture 1>；"
-        + "retention_analysis 逐项写明「什么保留、什么替换」；detailed_description 描述画面。");
-    p("只写一句「把 <Video 1> 里的人物换成 <Picture 1>」基本没用：源片参考有几百个 token，"
-        + "一句指令压不过它，模型会直接照抄原人物。默认提示词已经写好，一般不用改。");
-    p("想更准就像这样把新角色写具体（越具体越像）：<Subject 1> 是 <Picture 1> 中的女性，及腰黑色长直发、"
-        + "浅棕色眼瞳、米白色针织衫、细框眼镜。");
-    p("⭐ 参考图比什么都重要：优先用「三视图角色卡」（正面/侧面/背面全身 + 头部特写并排），"
-        + "单张半身照的换人成功率明显更低；图里只有一个人、脸要清晰。");
-    p("🔍 想确认「是换人不行还是衔接不行」：把「每段视频时长」调到比源片还长 → 整段只生成 1 段，"
-        + "此时完全没有衔接。1 段都换不掉 = 问题在参考图/放大倍数/提示词；1 段能换、多段越往后越不像 = "
-        + "衔接把上一段的脸带偏了（关衔接或把重叠帧数降到 5 对比）。");
+    h("③ 怎么跑的（进度条为什么是 12 格）");
+    p("整片只有一条降噪轨迹：4 个采样步。每一步内部按顺序算 3 个窗口，所以进度条总数 = 步数 × 段数 = 12 格，右侧实时显示「步 k/4｜段 i/3」。");
+    p("每个窗口用自己的「源片同名段」+ 定妆图 + 提示词各预测一次，再在重叠区按斜坡权重混合回整片，混合后的 latent 就是下一步的输入。");
+    p("窗口之间不传递任何已解码画面 → 不会越往后越不像；模型只加载一次（VAE 一次、文本编码器一次）→ 不会越跑越慢。");
+    p("长片（超过 1200 帧）自动分块解码：每块往前多解 34 帧上下文再丢掉，解完立刻写盘并释放，内存不随片长增长。");
 
-    h("④ 为什么接缝比「无限时长」稳");
-    p("无限时长没有真值，段 2+ 只能靠上段尾帧往下编 → 会缓慢漂移；换人有逐帧真值：每段都重新对位同一段源片（<Video 1>），"
-        + "跑道那几十帧的源片正好是上一段已产出的内容 → 同一条时间轴、不累积误差。衔接只负责「画面不跳」。");
+    h("④ 调参经验");
+    p("脸不像 → 参考图放大 2.0~3.0、百万像素 0.6~1.0、二采面积倍数 1.5~2.0。");
+    p("接缝跳一下 → 重叠帧数加到 39。");
+    p("某一段不满意 → 「只重跑第几段」填那一段的序号，单独重算后替换。");
+    p("动作对不上 → 采样步数 8~10。");
+    p("太慢 / 爆显存 → 每段时长改 8 秒、二采先关掉只跑一采；源片是 1080p 时建议在加载端先缩到 720p 附近。");
 
-    h("⑤ 调参经验");
-    p("脸不像 → 参考图放大 1.5~2.0、百万像素 0.6~1.0、二采面积倍数 1.5~2.0");
-    p("接缝跳一下 → 重叠帧数加到 39；或每段时长改 8 秒（接缝更少）");
-    p("动作对不上 → 参考帧数设 0、采样步数 8~10");
-    p("太慢 / 爆显存 → 参考帧数 39~56、段长 8~10 秒、二采先只跑一采看效果");
+    h("⑤ 落盘与命名");
+    p("「分段输出」= 文件名前缀，写法「文件夹/视频名称」：填 视频/人物替换 → 落盘到 output/视频/，文件名 人物替换_2次生成分段1_00001.mp4；只写一个词就直接落在 output 根目录。");
+    p("同一前缀连续跑会依次变成 分段2、分段3…，批次号也会 +1，不会覆盖上一次结果。");
 
     h("⑥ 已知取舍");
     p("H3 是整帧重生成：背景/道具会被重画（招牌字、路人、光线可能变）。要「只换人不换景」需要掩码回流后处理（后续版本）。");
-    p("换人后口型由模型重新生成，与原台词不保证逐字对位 —— 所以默认「保留原声」只换画面。");
-    p("成本：每段都带整段参考视频时约等于同长度再算一遍（≈2×），可用「参考帧数」压到 1.2~1.3×。");
+    p("换人后口型由模型重新生成，与原台词不保证逐字对位 —— 所以默认「使用原声」只换画面。");
+    p("时间随段数线性增长：耗时 ≈ 步数 × 段数 × 单窗单步耗时（画布越小越快）。");
 }
 
 function renderVideoParamsPanel(c, s, node) {
@@ -5343,9 +5582,23 @@ function renderPrefPanel(c, s, d, node) {
         modeRow.append(lab);
         modeCbs.push(cb);
     };
-    c.append(field("采样分类", modeRow));
-    mkModeCb("常规采样", "常规采样：K采样器 + 可选二次采样（现有链路）");
-    mkModeCb("SelfLift采样", "SelfLift采样：低分辨率前缀 → 提升 → 高分辨率收尾（内置 SelfLift，替代二次采样）");
+    // 🎭 人物替换不提供采样分类：整片用「联合窗口采样」（每步按窗口分别预测再混合），
+    //    SelfLift 的渐进分辨率要求整段同一分辨率 → 与本节点不兼容，面板里直接不给这个选项
+    const isSwapPref = !!node && node.type === SWAP_NODE_TYPE;
+    if (isSwapPref) {
+        p.sample_mode = "常规采样";
+        c.append(makeSectionTitle("采样分类"));
+        c.append(field("采样分类", el("div", "font-size:13px;color:var(--fg-color,var(--jz-text));padding:6px 10px;"
+            + "background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));"
+            + "border-radius:4px;", "常规采样（本节点固定）")));
+        c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+            "整片一次采样，每一步把画面切成若干窗口分别预测、再在重叠区混合 → 每个窗口的参考视频都对得上。\n"
+            + "SelfLift 的渐进分辨率（整段先低分辨率再提升）插不进这种逐窗口混合，所以这里不提供。"));
+    } else {
+        c.append(field("采样分类", modeRow));
+        mkModeCb("常规采样", "常规采样：K采样器 + 可选二次采样（现有链路）");
+        mkModeCb("SelfLift采样", "SelfLift采样：低分辨率前缀 → 提升 → 高分辨率收尾（内置 SelfLift，替代二次采样）");
+    }
 
     // 随机种子：常规采样与 SelfLift 采样共用（两种分类下都生效）
     c.append(makeSectionTitle("随机种子"));
@@ -5876,32 +6129,35 @@ function renderVideoManagerPanel(c, node, settings, d) {
         try { notify(msg, isErr ? "error" : "success"); } catch (_) {}
     };
     const AUTO_VAL = "__auto__";
-    let refresh = null;   // 「📥 加载视频」的刷新函数（下面赋值；输出名称改动时也要触发）
-    // ── 🎭 人物替换：输出名称（落盘目录 output/jzl/{输出名称}/）放在最前面 ──
-    //    该节点把 story_name 从节点表面收进本面板（与导演台把故事名收进「运行参数设置」同一做法）
+    let refresh = null;   // 「📥 加载视频」的刷新函数（下面赋值；分段输出改动时也要触发）
+    // ── 🎭 人物替换：「分段输出」= 文件名前缀「文件夹/视频名称」，放在最前面 ──
+    //    例：视频/人物替换 → 落盘到 output/视频/，文件名以「人物替换」开头
     if (node?.type === SWAP_NODE_TYPE) {
         const nameW = (node?.widgets || []).find((x) => x.name === "story_name");
         const nameInp = el("input", "flex:1 1 0;min-width:0;");
         nameInp.className = "jzl-input";
         nameInp.type = "text";
-        nameInp.value = String(readWidgetValue(nameW) ?? "") || "人物替换";
-        nameInp.placeholder = "人物替换";
-        nameInp.title = "落盘目录：output/jzl/{输出名称}/（下方宫格按此名称加载本批视频）";
+        nameInp.value = String(readWidgetValue(nameW) ?? "") || "视频/人物替换";
+        nameInp.placeholder = "视频/人物替换";
+        nameInp.title = "文件名前缀：前段是 output 下的文件夹，末段是视频名称。例：视频/人物替换 → output/视频/人物替换_…mp4";
         nameInp.addEventListener("mousedown", (e) => e.stopPropagation());
         nameInp.addEventListener("change", () => {
-            const val = String(nameInp.value || "").trim() || "人物替换";
+            const val = String(nameInp.value || "").trim() || "视频/人物替换";
             if (nameW) setWidgetValue(nameW, val);
             try { node?.__jzlUpdateDisplay?.(); } catch (_) {}
             try { c.dispatchEvent(new Event("change", { bubbles: true })); } catch (_) {}
-            if (refresh) refresh();   // 换名字后立刻切到该目录的视频
+            if (refresh) refresh();   // 换前缀后立刻切到该目录的视频
         });
-        const nameRow = field("输出名称", nameInp);
-        nameRow.title = "换人成片与各分段都落在 output/jzl/{输出名称}/";
-        c.append(nameRow);
-        c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.6;",
-            "落盘目录：output/jzl/{输出名称}/。「生成视频查看器」读同名文件夹即可看到本批结果。"));
+        c.append(field("分段输出", nameInp));
+        const shown = jzlSplitOutPrefix(String(readWidgetValue(nameW) ?? "") || "视频/人物替换");
+        c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+            "写法：文件夹/视频名称。例 视频/人物替换 →\n"
+            + `  文件夹：output/${shown.dir ? shown.dir + "/" : ""}\n`
+            + `  文件名：${shown.name}_2次生成分段1_00001.mp4\n`
+            + "下方宫格按同一前缀加载本批结果；只写一个词则直接落在 output 根目录。"));
     }
-    // ── 保存模式：默认「分段保存」，可勾选「拼接保存」「拼接保存后删除分段视频」──
+    // ── 保存模式（仅其它节点；🎭 人物替换恒为逐段落盘，合并交给「视频批量拼接」）──
+    if (node?.type !== SWAP_NODE_TYPE) {
     if (!settings.save) settings.save = { mode: "分段保存", auto_save: false, auto_merge: false, auto_merge_delete: false };
     const save = settings.save;
     const saveBox = el("div", "display:flex;align-items:center;gap:10px;margin:0 0 4px;flex-wrap:wrap;");
@@ -5937,6 +6193,7 @@ function renderVideoManagerPanel(c, node, settings, d) {
     c.append(saveBox);
     c.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 10px 56px;line-height:1.6;",
         "Max 恒定：每段【调度→编码→采样→解码】完成立即 ffmpeg 落盘 output/jzl/{故事名}/ 并释放显存/内存（跑 N 段与 1 段占用不叠加）。分段保存为必选项（恒保留本批各段）；勾选拼接保存=生成后另把本批分段读盘 concat 合并为一个完整视频；再勾选删除分段=合并成功后清理本批各分段 mp4。"));
+    }
 
     // ── 📥 加载视频：自动识别（跟随节点故事名）/ 选择已识别文件夹，6 列宫格 ──
     const top = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;");
@@ -5951,7 +6208,7 @@ function renderVideoManagerPanel(c, node, settings, d) {
     rf.addEventListener("mousedown", (e) => e.stopPropagation());
     rf.addEventListener("click", () => { say("正在刷新…"); refresh && refresh(); });
     top.append(sel, rf);
-    top.append(el("span", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));", "目录：output/jzl/{故事名}/（每行 6 列）"));
+    top.append(el("span", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));", node?.type === SWAP_NODE_TYPE ? "目录：output/{文件夹}/，文件名以「视频名称」开头（每行 6 列）" : "目录：output/jzl/{故事名}/（每行 6 列）"));
     c.append(top);
     // 6 列宫格（行数按视频数量自动换行，行高自适应）
     const grid = el("div", "display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;align-content:start;min-height:120px;");
@@ -5966,7 +6223,8 @@ function renderVideoManagerPanel(c, node, settings, d) {
             return;
         }
         try {
-            const resp = await api.fetchApi(`/jzl/generated_videos?story_name=${encodeURIComponent(sn)}`);
+            const resp = await api.fetchApi(`/jzl/generated_videos?story_name=${encodeURIComponent(sn)}`
+            + (node?.type === SWAP_NODE_TYPE ? "&prefix=1" : ""));
             const data = await resp.json().catch(() => ({}));
             const vids = (data && data.ok && data.videos) || [];
             if (!vids.length) {
@@ -6141,10 +6399,13 @@ function buildModal(node, data, panelId) {
             if (node?.type === SWAP_NODE_TYPE) renderSwapVideoParamsPanel(panelBox, settings, node);
             else renderVideoParamsPanel(panelBox, settings, node);
             break;
-        case "save_settings": renderSaveSettingsPanel(panelBox, settings, node, d); break;
+        case "save_settings":
+            if (node?.type === SWAP_NODE_TYPE) renderSwapSavePanel(panelBox, settings, node);
+            else renderSaveSettingsPanel(panelBox, settings, node, d);
+            break;
         case "video_manager": renderVideoManagerPanel(panelBox, node, settings, d); break;
         case "help":
-            if (node?.type === SWAP_NODE_TYPE) renderSwapHelpPanel(panelBox);
+            if (node?.type === SWAP_NODE_TYPE) renderSwapPromptPanel(panelBox, settings, d, node);
             else renderHelpPanel(panelBox);
             break;
         default: renderAutoSave(panelBox, settings);
@@ -6358,7 +6619,7 @@ function swapLooksLikePrompt(v) {
 //  ② 端口顺序归位（旧工作流按自身 inputs 顺序还原，会和 schema 顺序不一致 → 强制排成标准顺序）
 //  ③ widget 值按名纠正：旧版 widgets_values = [prompt, story_name, display_info, manager_settings]，
 //     新版 = [story_name, manager_settings, prompt] → 旧工作流载入后整体错位一格
-//     （典型症状：提示词框里显示一串 {"auto_save":...} JSON，输出名称变成提示词正文）
+//     （典型症状：提示词框里显示一串 {"auto_save":...} JSON，分段输出变成提示词正文）
 const SWAP_INPUT_ORDER = ["model", "clip", "vae", "audio_vae", "source_video", "source_audio",
     "ref_images", "story_name", "manager_settings", "prompt"];
 
@@ -6482,7 +6743,7 @@ function setupSwapNode(self) {
         { label: "🎨 视频参数设置", panel: "video_params" },
         { label: "🎭 采样解码设置", panel: "preference" },
         { label: "🎬 生成视频管理", panel: "video_manager" },
-        { label: "📖 节点使用说明", panel: "help" },
+        { label: "📝 提示词预设", panel: "help" },
     ];
     for (const b of buttons) {
         const btn = document.createElement("button");
@@ -6500,63 +6761,77 @@ function setupSwapNode(self) {
     }
     container.appendChild(grid);
 
-    // 两行方案信息（只读）：第 1 行＝画布/段长/衔接；第 2 行＝音频/二采/采样/输出名称
+    // 两行方案信息（只读）：第 1 行＝画布/段长/衔接；第 2 行＝音频/二采/采样/分段输出
     const infoRow = el("div", "flex:0 0 auto;font-size:11px;color:var(--jz-warn);line-height:1.55;white-space:pre-line;"
         + "overflow:hidden;min-height:28px;word-break:break-all;", "");
-    infoRow.title = "当前方案（只读）：画布 / 每段帧数 / 分段衔接 / 音频 / 二采 / 采样步数 / 输出名称 —— 在四个按钮面板里修改";
+    infoRow.title = "当前方案（只读）：画布 / 每段帧数 / 分段衔接 / 音频 / 二采 / 采样步数 / 分段输出 —— 在四个按钮面板里修改";
     infoRow.addEventListener("mousedown", (e) => e.stopPropagation());
     container.appendChild(infoRow);
     self.__jzlSwapInfo = infoRow;
 
-    // ── 提示词（DOM textarea，flex:1 占满剩余高度；隐藏原生 prompt widget 由这里代理）──
+    // ── 提示词（两栏 DOM textarea：视频描述 / 图片描述；代理原生 video_desc / image_desc widget）──
     // 与导演台同一套做法：原生 widget 的渲染高度跟着节点乱跳，改成自己的 textarea 才能「跟着节点变高」。
-    const promptLabel = el("div", "flex:0 0 auto;font-size:12px;color:var(--jz-text-dim);", "📝 提示词");
-    promptLabel.title = "换人提示词。占位符：{seg} 本段序号 / {total} 总段数 / {start} 起始帧 / {frames} 本段帧数";
-    promptLabel.addEventListener("mousedown", (e) => e.stopPropagation());
-    container.appendChild(promptLabel);
-
-    const promptWrap = el("div", "flex:1 1 auto;min-height:60px;display:flex;position:relative;");
-    promptWrap.setAttribute("data-capture-wheel", "true");   // 滚轮归本框（不被画布缩放抢走）
-    const promptTa = document.createElement("textarea");
-    promptTa.className = "jzl-input";
-    promptTa.spellcheck = false;
-    promptTa.placeholder = "用 ===H3_PROMPT=== 结构写：subject_definitions 里定义 <Subject 1> = <Picture 1>，"
-        + "retention_analysis 写明「长相/服装换 <Picture 1>、动作/场景保留 <Video 1>」…";
-    promptTa.style.cssText = "width:100%;height:100%;box-sizing:border-box;resize:none;"
-        + "background:var(--jz-bg-raise);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;"
-        + "padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;overflow-y:auto;white-space:pre-wrap;";
-    promptTa.addEventListener("mousedown", (e) => e.stopPropagation());
-    promptWrap.appendChild(promptTa);
-    container.appendChild(promptWrap);
-
-    const promptW = () => (self.widgets || []).find((w) => w && w.name === "prompt");
-    // 隐藏原生 prompt widget（值仍照常序列化 → 执行端读到的还是它）
-    const hideNativePrompt = () => {
-        const pw = promptW();
-        if (!pw) return;
-        pw.hidden = true;
-        if (!pw.options) pw.options = {};
-        pw.options.hidden = true;
-        try { delete pw.computeSize; } catch (_) { pw.computeSize = undefined; }
-        pw.computeSize = () => [0, -4];
+    const descWrap = el("div", "flex:1 1 auto;min-height:90px;display:flex;flex-direction:column;gap:4px;");
+    const mkDesc = (label, wname, placeholder, tip) => {
+        const lb = el("div", "flex:0 0 auto;font-size:12px;color:var(--jz-text-dim);", label);
+        lb.title = tip;
+        lb.addEventListener("mousedown", (e) => e.stopPropagation());
+        const box = el("div", "flex:1 1 auto;min-height:40px;display:flex;position:relative;");
+        box.setAttribute("data-capture-wheel", "true");   // 滚轮归本框（不被画布缩放抢走）
+        const ta = document.createElement("textarea");
+        ta.className = "jzl-input";
+        ta.spellcheck = false;
+        ta.placeholder = placeholder;
+        ta.style.cssText = "width:100%;height:100%;box-sizing:border-box;resize:none;"
+            + "background:var(--jz-bg-raise);color:var(--jz-text);border:1px solid var(--jz-border);border-radius:4px;"
+            + "padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;overflow-y:auto;white-space:pre-wrap;";
+        ta.addEventListener("mousedown", (e) => e.stopPropagation());
+        box.appendChild(ta);
+        descWrap.append(lb, box);
+        return { ta, wname };
     };
-    hideNativePrompt();
+    const videoField = mkDesc("🎬 视频描述", "video_desc",
+        "这段源视频里发生了什么：人物、动作、场景、镜头、光线、节奏…",
+        "开启「📝 提示词预设 → 启用 LLM 增强提示词」时，它连同「图片描述」一起交给 LLM 写完整 H3 提示词；关闭时填进内置模板");
+    const imageField = mkDesc("🖼 图片描述", "image_desc",
+        "参考图里的人长什么样：脸型、发型、发色、服装、配饰、配色、年龄气质…（越具体越像）",
+        "描述得越具体，换人越像");
+    container.appendChild(descWrap);
+
+    const descFields = [videoField, imageField];
+    const widgetOf = (name) => (self.widgets || []).find((w) => w && w.name === name);
+    // 隐藏原生 widget（值仍照常序列化 → 执行端读到的还是它）
+    const hideNativeDesc = () => {
+        for (const f of descFields) {
+            const w = widgetOf(f.wname);
+            if (!w) continue;
+            w.hidden = true;
+            if (!w.options) w.options = {};
+            w.options.hidden = true;
+            try { delete w.computeSize; } catch (_) { w.computeSize = undefined; }
+            w.computeSize = () => [0, -4];
+        }
+    };
+    hideNativeDesc();
     // widget → textarea（工作流载入 / 修复后回填）
     const syncPromptFromWidget = () => {
-        const pw = promptW();
-        const v = String(readWidgetValue(pw) ?? "");
-        if (promptTa.value !== v) promptTa.value = v;
+        for (const f of descFields) {
+            const v = String(readWidgetValue(widgetOf(f.wname)) ?? "");
+            if (f.ta.value !== v) f.ta.value = v;
+        }
     };
     // textarea → widget（用户输入）
-    promptTa.addEventListener("input", () => {
-        const pw = promptW();
-        if (pw) setWidgetValue(pw, promptTa.value);
-        try { self.graph?.setDirtyCanvas?.(true, false); } catch (_) {}
-    });
-    promptTa.addEventListener("change", () => {
-        const pw = promptW();
-        if (pw) setWidgetValue(pw, promptTa.value);
-    });
+    for (const f of descFields) {
+        f.ta.addEventListener("input", () => {
+            const w = widgetOf(f.wname);
+            if (w) setWidgetValue(w, f.ta.value);
+            try { self.graph?.setDirtyCanvas?.(true, false); } catch (_) {}
+        });
+        f.ta.addEventListener("change", () => {
+            const w = widgetOf(f.wname);
+            if (w) setWidgetValue(w, f.ta.value);
+        });
+    }
     self.__jzlSwapSyncPrompt = syncPromptFromWidget;
     syncPromptFromWidget();
 
@@ -6618,27 +6893,25 @@ function setupSwapNode(self) {
         }
         const f = swapFrameLen(gp.segment || "固定5秒");
         const up = Number(gp.upscale_scale ?? 2.0);
-        const isSL = String(sd.sample_mode || "常规采样") === "SelfLift采样";
+        // 本节点固定常规采样（联合窗口采样）：即便旧工作流里存着「SelfLift采样」也按常规显示
+        // 本节点固定常规采样（联合窗口采样）：旧工作流里存的「SelfLift采样」一律按常规显示
         const secTgt = String(gp.second_mode || "放大倍数") === "目标分辨率";
         const secOn = sec.enabled !== false;
-        const secTxt = isSL ? "跳过(SelfLift)"
-            : (!secOn ? "关闭"
-                : (secTgt ? `${gp.second_width ?? 1280}×${gp.second_height ?? 704}`
-                          : `面积×${up.toFixed(2)}`));
-        const seamTxt = seam.enabled === false ? "关闭" : `重叠${seam.window ?? 22}帧`;
-        const guideTxt = String(seam.guide_mode || "pixels") === "latent" ? "latent(旧)" : "像素";
+        const secTxt = !secOn ? "关闭"
+            : (secTgt ? `${gp.second_width ?? 1280}×${gp.second_height ?? 704}`
+                      : `面积×${up.toFixed(2)}`);
+        const seamTxt = `重叠${seam.window ?? 22}帧`;
+        const guideTxt = String(seam.transport || "prefix") === "keyframe" ? "keyframe(旧)" : "遮罩前缀";
         const pinTxt = seam.pin_second === false ? "1采" : "1采+2采";
-        const audioTxt = String(gp.audio_mode || "保留原声（推荐）").replace("（推荐）", "");
-        const sampTxt = isSL
-            ? `SelfLift ${sd.selflift?.steps ?? 8}步/${sd.scheduler || "simple"}`
-            : `${sd.sampler || "res_multistep"} ${sd.steps ?? 5}步/${sd.scheduler || "simple"}`;
+        const repairTxt = { auto: "自动", color: "调色", off: "关" }[String(seam.repair || "auto")] || "自动";
+        const sampTxt = `${sd.sampler || "res_multistep"} ${sd.steps ?? 5}步/${sd.scheduler || "simple"}`;
         const seedTxt = String(sd.seed_mode || "fixed") === "randomize" ? "随机" : String(sd.seed ?? 0);
         const nameTxt = storyName() || "人物替换";
         infoRow.innerHTML =
             `画布：${dv(canvasTxt)} 丨 每段：${dv(`${f}帧/${(f / 24).toFixed(2)}秒`)}`
-            + ` 丨 衔接：${dv(seamTxt)} 丨 引导：${dv(guideTxt)}·${dv(pinTxt)}`
+            + ` 丨 衔接：${dv(seamTxt)} 丨 通道：${dv(guideTxt)}·${dv(pinTxt)} 丨 修复：${dv(repairTxt)}`
             + `\n参考图：${dv(`放大${Number(gp.scale_factor ?? 1).toFixed(1)}×`)} 丨 二采：${dv(secTxt)} 丨 采样：${dv(sampTxt)}`
-            + ` 丨 音频：${dv(audioTxt)} 丨 种子：${dv(seedTxt)} 丨 输出：${dv(nameTxt)}`;
+            + ` 丨 种子：${dv(seedTxt)} 丨 输出：${dv(nameTxt)}`;
     };
     self.__jzlUpdateDisplay = updateDisplay;
     setTimeout(updateDisplay, 0);

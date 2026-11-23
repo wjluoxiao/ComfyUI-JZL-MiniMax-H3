@@ -37,6 +37,36 @@
 
 ---
 
+## MinimaxH3LatentUpscaler2D（MiniMax H3 latent 放大节点 · 2D 架构）
+
+| 项 | 内容 |
+|---|---|
+| 文件 | `jzl_h3_latent_upscaler_2d.py`（上游路径 `nodes/minimax_h3_latent_upscaler_2d.py`） |
+| 来源 | https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler （与 3D 同一仓库） |
+| 协议 | **MIT License**，Copyright (c) 2026 LBH-123-AI<br>协议全文：`docs/third_party/Comfyui_Minimax_h3_latent_Upscaler_LICENSE.txt` |
+| 取用版本 | 上游 2D 节点（2026-11-10 版，与本机安装副本一致），文件 SHA-256 `6CD97F6DCE1891BDA1C06BCC1ECAE19C900E02ECFF99407984B889A98C84ACF6` |
+| 依赖 | `einops`（已写入 `requirements.txt`；缺它时只影响 2D 权重，3D 权重照常可用） |
+
+**本地改动**：仅在本文件顶部追加「来源 / 协议 / 版本」说明注释，代码本体未作任何修改。
+
+**用途**：`*_2d_conv_*` 那套权重（`resizer.*` + 独立 `temporal_blocks`）与 3D 那套网络结构不同，
+内置 3D 加载器读不了它的 state_dict。本插件把 2D 实现也内置了一份，由
+`nodes_asset_manager.py::_run_upscaler()` 按权重键名自动分派：
+
+- `resizer.*` / `*.temporal_blocks.*` → `MinimaxH3LatentUpscalerNode2D`（本文件）
+- `conv_in.weight` → `MinimaxH3LatentUpscaler3D`（3D 文件）
+
+**独立性**：与 3D 一致 —— **不导出** `NODE_CLASS_MAPPINGS`，只内部调用；用户装不装
+「Comfyui_Minimax_h3_latent_Upscaler」都不影响本插件（找不到内置副本时才回落到全局注册表）。
+
+**模型权重仍需自行下载**：`minimax_h3_latent_upscaler_2d_conv_v1_{fp32.pth,fp16,bf16.safetensors}`
+放到 `ComfyUI/models/latent_upscale_models/`（可与 3D 权重放同一目录）。
+
+**代码查找顺序**（`nodes_asset_manager.py` 的 `_import_upscaler_2d()`）：
+内置副本 → 按文件加载 → ComfyUI 全局注册表，全失败时报错说明缺什么。
+
+---
+
 ## comfyui-SelfLift（SelfLift 渐进分辨率采样）
 
 | 项 | 内容 |
