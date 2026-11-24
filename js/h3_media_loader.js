@@ -24,6 +24,14 @@ const IMG_COUNT = 9;
 const AUDIO_COUNT = 3;
 const VIDEO_COUNT = 3;
 
+// 三个模块：顺序可拖拽调整，数量可选，可整块隐藏（至少留一个）
+const KIND_ORDER = ["image", "audio", "video"];
+const KIND_META = {
+    image: { icon: "🖼️", label: "参考图", ratio: "1 / 1", options: [1, 2, 4, 6, 9], max: 9 },
+    audio: { icon: "🎧", label: "参考音频", ratio: "2 / 1", options: [1, 2, 3], max: 3 },
+    video: { icon: "🎬", label: "参考视频", ratio: "1 / 1", options: [1, 2, 3], max: 3 },
+};
+
 const ACCEPT = {
     image: "image/*",
     audio: "audio/*",
@@ -176,7 +184,12 @@ function notify(msg, isError = false) {
 
 function defaultSettings() {
     return {
-        version: 1,
+        version: 2,
+        layout: {
+            order: [...KIND_ORDER],
+            counts: { image: IMG_COUNT, audio: AUDIO_COUNT, video: VIDEO_COUNT },
+            hidden: { image: false, audio: false, video: false },
+        },
         images: Array.from({ length: IMG_COUNT }, () => ({ path: "", enabled: true })),
         audios: Array.from({ length: AUDIO_COUNT }, () => ({
             path: "", enabled: true, start: 0, duration: 0,
@@ -187,6 +200,32 @@ function defaultSettings() {
     };
 }
 
+// 布局归一化：顺序必须是三个模块的一个排列；数量只能是允许档位；至少保留一个模块可见
+function normalizeLayout(raw) {
+    const src = (raw && typeof raw === "object") ? raw : {};
+
+    let order = Array.isArray(src.order) ? src.order.filter((k) => KIND_ORDER.includes(k)) : [];
+    order = [...new Set(order)];
+    for (const k of KIND_ORDER) if (!order.includes(k)) order.push(k);
+    if (order.length !== KIND_ORDER.length) order = [...KIND_ORDER];
+
+    const rawCounts = (src.counts && typeof src.counts === "object") ? src.counts : {};
+    const counts = {};
+    for (const k of KIND_ORDER) {
+        const opts = KIND_META[k].options;
+        const n = clamp(Math.round(toNum(rawCounts[k], opts[opts.length - 1])), opts[0], opts[opts.length - 1]);
+        // 吸附到最近的合法档位（如 3 → 2、7 → 6），不要粗暴退回最大值
+        counts[k] = opts.reduce((best, o) => (Math.abs(o - n) < Math.abs(best - n) ? o : best), opts[0]);
+    }
+
+    const rawHidden = (src.hidden && typeof src.hidden === "object") ? src.hidden : {};
+    const hidden = {};
+    for (const k of KIND_ORDER) hidden[k] = rawHidden[k] === true;
+    if (KIND_ORDER.every((k) => hidden[k])) hidden[order[0]] = false;   // 至少保留一个
+
+    return { order, counts, hidden };
+}
+
 function normalizeSettings(raw) {
     const base = defaultSettings();
     let src = raw;
@@ -194,6 +233,8 @@ function normalizeSettings(raw) {
         try { src = raw.trim() ? JSON.parse(raw) : {}; } catch (_) { src = {}; }
     }
     if (!src || typeof src !== "object") src = {};
+
+    base.layout = normalizeLayout(src.layout);
 
     const fill = (list, defs, map) => {
         const arr = Array.isArray(list) ? list : [];
@@ -242,6 +283,20 @@ function persistSettings(node) {
     const st = node.__h3m;
     if (!st) return;
     setWidgetValue(node, st.widget, JSON.stringify(st.settings));
+}
+
+// 当前布局（顺序 / 数量 / 是否隐藏）—— 会随工作流保存，不会被重绘冲掉
+function getLayout(node) {
+    const s = readSettings(node);
+    if (!s.layout) s.layout = normalizeLayout(null);
+    return s.layout;
+}
+
+// 网格列数：1/2 个一行铺满；4 个 2 列（2×2）；3/6/9 个 3 列
+function gridColumns(count) {
+    if (count <= 1) return 1;
+    if (count === 2 || count === 4) return 2;
+    return 3;
 }
 
 // ── 上传 / 预览地址 ───────────────────────────────────────
@@ -826,8 +881,6 @@ function renderVideoSlot(node, index, cell) {
 
 // ── 槽位渲染分发 ─────────────────────────────────────────
 
-const KIND_COUNT = { image: IMG_COUNT, audio: AUDIO_COUNT, video: VIDEO_COUNT };
-
 // 重绘前必须把旧播放器停掉：脱离 DOM 的 <audio>/<video> 仍会继续播放，
 // 造成「改了音频时长，旧的那条还在放被裁掉的部分」这种假象。
 function stopMediaIn(el) {
@@ -849,6 +902,8 @@ function slotCell(node, kind, index) {
 function renderSlot(node, kind, index) {
     const cell = slotCell(node, kind, index);
     if (!cell) return;
+    const layout = getLayout(node);
+    if (layout.hidden[kind] || index >= layout.counts[kind]) return;
     stopMediaIn(cell);
     if (kind === "image") renderImageSlot(node, index, cell);
     else if (kind === "audio") renderAudioSlot(node, index, cell);
@@ -856,9 +911,12 @@ function renderSlot(node, kind, index) {
     node.setDirtyCanvas?.(true, true);
 }
 
+// 只渲染「当前布局里真正存在」的槽位
 function renderAllSlots(node) {
-    for (const kind of ["image", "audio", "video"]) {
-        for (let i = 0; i < KIND_COUNT[kind]; i++) renderSlot(node, kind, i);
+    const layout = getLayout(node);
+    for (const kind of layout.order) {
+        if (layout.hidden[kind]) continue;
+        for (let i = 0; i < layout.counts[kind]; i++) renderSlot(node, kind, i);
     }
     // 重绘后内容高度可能变化（无滚动条模式）→ 让节点高度重新贴合
     setTimeout(() => {
@@ -1007,6 +1065,224 @@ function openParamDialog(node, kind, index) {
     setTimeout(() => { try { first?.input.focus(); first?.input.select?.(); } catch (_) {} }, 30);
 }
 
+// ── 界面设置（右击菜单）──────────────────────────────────────
+
+const LAYOUT_DIALOG_ID = "jzl-h3m-layout-dialog";
+
+function closeLayoutDialog() {
+    document.getElementById(LAYOUT_DIALOG_ID)?.remove();
+}
+
+// 应用布局：写回 settings.layout → 持久化 → 重建面板 → 重绘 → 高度贴合
+function applyLayout(node, layout) {
+    const st = node.__h3m;
+    if (!st) return;
+    const settings = readSettings(node);
+    settings.layout = normalizeLayout(layout);
+    persistSettings(node);
+    fillBody(node);
+    renderAllSlots(node);
+    const layoutNow = getLayout(node);
+    if (st.dom && st.dom.element) {
+        // 顺序/数量变化后整体高度要重算（可能变高或变矮）
+        setTimeout(() => { try { st.fitPanelHeight?.(); } catch (_) {} }, 60);
+        setTimeout(() => { try { st.fitPanelHeight?.(); } catch (_) {} }, 320);
+    }
+    node.setDirtyCanvas?.(true, true);
+    return layoutNow;
+}
+
+function openLayoutDialog(node) {
+    closeLayoutDialog();
+    const layout = JSON.parse(JSON.stringify(getLayout(node)));   // 草稿，点确定才落库
+    const original = JSON.stringify(layout);
+
+    const overlay = el("div", [
+        "position:fixed", "inset:0", "background:rgba(0,0,0,.55)", "z-index:99999",
+        "display:flex", "align-items:center", "justify-content:center",
+    ].join(";"));
+    overlay.id = LAYOUT_DIALOG_ID;
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) closeLayoutDialog(); });
+
+    const panel = el("div", [
+        "background:var(--jz-bg)", "border:1px solid var(--jz-border)",
+        "border-radius:10px", "padding:16px", "width:430px", "max-width:94vw",
+        "box-shadow:0 12px 40px rgba(0,0,0,.6)", "color:var(--jz-text)",
+    ].join(";"));
+    overlay.appendChild(panel);
+
+    panel.appendChild(el("div", "font-size:14px;font-weight:600;color:var(--jz-text-strong);margin-bottom:2px;", "⚙️ 界面设置"));
+    panel.appendChild(el("div",
+        "font-size:11px;color:var(--jz-text-dim);margin-bottom:12px;line-height:1.4;",
+        "拖动 ⋮⋮ 交换三个模块的上下顺序；点数字改该模块槽位数量；关闭开关可整块隐藏（至少保留一个）。设置会随工作流保存。"));
+
+    const listEl = el("div", "display:flex;flex-direction:column;gap:8px;");
+    panel.appendChild(listEl);
+
+    let dragKind = null;
+
+    const moveTo = (kind, targetIndex) => {
+        const from = layout.order.indexOf(kind);
+        if (from < 0 || from === targetIndex) return false;
+        layout.order.splice(from, 1);
+        layout.order.splice(targetIndex, 0, kind);
+        return true;
+    };
+
+    const renderRows = () => {
+        listEl.innerHTML = "";
+        layout.order.forEach((kind, idx) => {
+            const meta = KIND_META[kind];
+            const isHidden = !!layout.hidden[kind];
+
+            const row = el("div", [
+                "display:flex", "align-items:center", "gap:8px",
+                "padding:8px 10px", "border-radius:8px",
+                "border:1px solid var(--jz-border)", "background:var(--jz-bg-soft)",
+                isHidden ? "opacity:.5" : "",
+                dragKind === kind ? "border-color:var(--jz-btn-primary);box-shadow:0 0 0 1px var(--jz-btn-primary)" : "",
+            ].join(";"));
+            row.dataset.h3mRow = kind;
+
+            const handle = el("div", [
+                "flex:0 0 auto", "width:18px", "height:26px", "display:flex",
+                "align-items:center", "justify-content:center",
+                "cursor:grab", "color:var(--jz-text-dim)", "font-size:13px",
+                "user-select:none", "touch-action:none",
+            ].join(";"), "⋮⋮");
+            handle.title = "按住拖动，交换模块上下顺序";
+            row.appendChild(handle);
+
+            row.appendChild(el("div", "flex:0 0 84px;font-size:12px;color:var(--jz-text-strong);",
+                `${meta.icon} ${meta.label}`));
+
+            const chips = el("div", "flex:1 1 auto;display:flex;gap:5px;flex-wrap:wrap;");
+            for (const opt of meta.options) {
+                const on = layout.counts[kind] === opt;
+                const chip = el("button", [
+                    "min-width:26px", "height:22px", "padding:0 7px", "border-radius:6px",
+                    "font-size:11px", "line-height:1", "cursor:pointer",
+                    "border:1px solid " + (on ? "var(--jz-btn-primary)" : "var(--jz-border)"),
+                    "background:" + (on ? "var(--jz-btn-primary)" : "var(--jz-bg-deep)"),
+                    "color:" + (on ? "#fff" : "var(--jz-text)"),
+                ].join(";"), String(opt));
+                chip.title = `${meta.label}槽位数量：${opt}`;
+                chip.addEventListener("click", () => {
+                    layout.counts[kind] = opt;
+                    renderRows();
+                });
+                chips.appendChild(chip);
+            }
+            row.appendChild(chips);
+
+            // 显隐开关
+            const eye = el("button", [
+                "flex:0 0 auto", "height:22px", "padding:0 8px", "border-radius:6px",
+                "font-size:11px", "line-height:1", "cursor:pointer",
+                "border:1px solid " + (isHidden ? "var(--jz-border)" : "var(--jz-btn-ok)"),
+                "background:" + (isHidden ? "var(--jz-bg-deep)" : "var(--jz-btn-ok)"),
+                "color:" + (isHidden ? "var(--jz-text-dim)" : "#fff"),
+            ].join(";"), isHidden ? "已隐藏" : "显示中");
+            eye.title = "关闭后将整块隐藏（至少保留一个模块）";
+            eye.addEventListener("click", () => {
+                if (!isHidden) {
+                    const visible = KIND_ORDER.filter((k) => !layout.hidden[k]);
+                    if (visible.length <= 1) {
+                        notify("至少保留一个模块，不能全部关闭", true);
+                        return;
+                    }
+                }
+                layout.hidden[kind] = !isHidden;
+                renderRows();
+            });
+            row.appendChild(eye);
+
+            handle.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                dragKind = kind;
+                try { handle.setPointerCapture?.(e.pointerId); } catch (_) {}
+                renderRows();
+            });
+
+            listEl.appendChild(row);
+        });
+    };
+
+    renderRows();
+
+    // 拖动定位：按指针所在的行实时换位（window 监听，行重绘也不会断）
+    const onMove = (e) => {
+        if (!dragKind) return;
+        const rows = [...listEl.querySelectorAll("[data-h3m-row]")];
+        let targetIndex = rows.length - 1;
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i].getBoundingClientRect();
+            if (e.clientY < r.top + r.height / 2) { targetIndex = i; break; }
+        }
+        if (moveTo(dragKind, targetIndex)) renderRows();
+    };
+    const onUp = () => {
+        if (!dragKind) return;
+        dragKind = null;
+        renderRows();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+
+    const cleanup = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+    };
+
+    const btnRow = el("div", "display:flex;align-items:center;gap:8px;margin-top:14px;");
+    const reset = el("button", [
+        "height:28px", "padding:0 12px", "border-radius:6px",
+        "border:1px solid var(--jz-border)", "background:var(--jz-bg-raise)",
+        "color:var(--jz-text)", "font-size:12px", "cursor:pointer",
+    ].join(";"), "恢复默认");
+    reset.title = "顺序恢复为 图片 → 音频 → 视频，数量 9 / 3 / 3，全部显示";
+    reset.addEventListener("click", () => {
+        const def = normalizeLayout(null);
+        layout.order = def.order;
+        layout.counts = def.counts;
+        layout.hidden = def.hidden;
+        renderRows();
+    });
+    btnRow.appendChild(reset);
+    btnRow.appendChild(el("div", "flex:1 1 auto;"));
+
+    const cancel = el("button", [
+        "height:28px", "padding:0 14px", "border-radius:6px",
+        "border:1px solid var(--jz-border)", "background:var(--jz-bg-raise)",
+        "color:var(--jz-text)", "font-size:12px", "cursor:pointer",
+    ].join(";"), "取消");
+    cancel.addEventListener("click", () => { cleanup(); closeLayoutDialog(); });
+
+    const ok = el("button", [
+        "height:28px", "padding:0 16px", "border-radius:6px",
+        "border:1px solid var(--jz-border)", "background:var(--jz-btn-primary)",
+        "color:#fff", "font-size:12px", "cursor:pointer",
+    ].join(";"), "确定");
+    ok.addEventListener("click", () => {
+        cleanup();
+        closeLayoutDialog();
+        if (JSON.stringify(layout) === original) return;   // 没改就不动，避免无谓重排
+        applyLayout(node, layout);
+    });
+    btnRow.appendChild(cancel);
+    btnRow.appendChild(ok);
+    panel.appendChild(btnRow);
+
+    const onKey = (e) => {
+        if (e.key === "Escape") { cleanup(); closeLayoutDialog(); window.removeEventListener("keydown", onKey); }
+    };
+    window.addEventListener("keydown", onKey);
+
+    document.body.appendChild(overlay);
+}
+
 // ── 节点装配 ─────────────────────────────────────────────
 
 function sectionTitle(text) {
@@ -1016,18 +1292,19 @@ function sectionTitle(text) {
     ].join(";"), text);
 }
 
-function gridStyle() {
+function gridStyle(count) {
     return [
-        "flex:0 0 auto", "display:grid", "grid-template-columns:repeat(3, minmax(0,1fr))",
+        "flex:0 0 auto", "display:grid",
+        `grid-template-columns:repeat(${gridColumns(count)}, minmax(0,1fr))`,
         "gap:6px",
     ].join(";");
 }
 
-function buildSlotGrid(node, kind, count, cellStyle) {
-    const grid = el("div", gridStyle());
+function buildSlotGrid(node, kind, count) {
+    const grid = el("div", gridStyle(count));
     node.__h3m.cells[kind] = [];
     for (let i = 0; i < count; i++) {
-        const cell = slotShell([`aspect-ratio:${cellStyle}`, "width:100%"]);
+        const cell = slotShell([`aspect-ratio:${KIND_META[kind].ratio}`, "width:100%"]);
         bindDropTarget(node, cell, kind, i);
         cell.addEventListener("mousedown", (e) => {
             // 左键点空白处 = 选/换素材（开关、按钮自己 stopPropagation）
@@ -1045,6 +1322,45 @@ function buildSlotGrid(node, kind, count, cellStyle) {
     return grid;
 }
 
+function headStatusText(layout) {
+    const parts = [];
+    for (const k of layout.order) {
+        if (layout.hidden[k]) continue;
+        parts.push(`${layout.counts[k]} ${KIND_META[k].label}`);
+    }
+    return `${parts.join(" 丨 ")} → ref2va 参考总线`;
+}
+
+// 按当前布局重建面板内容（顺序 / 数量 / 隐藏都在这里生效）
+function fillBody(node) {
+    const st = node.__h3m;
+    const body = st?.body;
+    if (!body) return;
+    body.innerHTML = "";
+    st.cells = { image: [], audio: [], video: [] };
+
+    const layout = getLayout(node);
+    for (const kind of layout.order) {
+        if (layout.hidden[kind]) continue;
+        const count = layout.counts[kind];
+        const meta = KIND_META[kind];
+        const sec = el("div", "flex:0 0 auto;display:flex;flex-direction:column;gap:4px;");
+        sec.dataset.h3mSection = kind;
+        sec.appendChild(sectionTitle(
+            count > 1 ? `${meta.icon} ${meta.label} 1–${count}` : `${meta.icon} ${meta.label}`
+        ));
+        sec.appendChild(buildSlotGrid(node, kind, count));
+        body.appendChild(sec);
+    }
+
+    if (st.status) {
+        st.status.textContent = headStatusText(layout);
+        st.status.title = "执行后显示实际载入数量";
+        st.status.style.color = "";
+    }
+    st.renderedLayoutSig = JSON.stringify(layout);
+}
+
 function buildPanel(node) {
     const container = el("div", [
         "width:100%", "height:100%", "display:flex", "flex-direction:column", "gap:6px",
@@ -1060,20 +1376,19 @@ function buildPanel(node) {
     const status = el("div", [
         "flex:1 1 auto", "font-size:10px", "color:var(--jz-text-dim)",
         "white-space:nowrap", "overflow:hidden", "text-overflow:ellipsis", "text-align:right",
-    ].join(";"), "9 图 丨 3 音频 丨 3 视频 → ref2va 参考总线");
+    ].join(";"), headStatusText(getLayout(node)));
     status.title = "执行后显示实际载入数量";
     head.appendChild(status);
     node.__h3m.status = status;
     container.appendChild(head);
 
-    container.appendChild(sectionTitle("🖼️ 参考图 1–9"));
-    container.appendChild(buildSlotGrid(node, "image", IMG_COUNT, "1 / 1"));
+    const body = el("div", [
+        "flex:1 1 auto", "min-height:0", "display:flex", "flex-direction:column", "gap:6px",
+    ].join(";"));
+    node.__h3m.body = body;
+    container.appendChild(body);
 
-    container.appendChild(sectionTitle("🎧 参考音频 1–3"));
-    container.appendChild(buildSlotGrid(node, "audio", AUDIO_COUNT, "2 / 1"));
-
-    container.appendChild(sectionTitle("🎬 参考视频 1–3"));
-    container.appendChild(buildSlotGrid(node, "video", VIDEO_COUNT, "1 / 1"));
+    fillBody(node);
 
     return container;
 }
@@ -1107,6 +1422,8 @@ function setupMediaLoader(node) {
     });
     if (dom) {
         try { delete dom.computeSize; } catch (_) { dom.computeSize = undefined; }
+        // 只让 media_settings 进 widgets_values：DOM 面板本身不落盘（否则会多一个空条目）
+        dom.serialize = false;
         dom.options = dom.options || {};
         dom.options.serialize = false;
         dom.options.getMinHeight = () => 900;
@@ -1256,16 +1573,32 @@ function setupMediaLoader(node) {
     };
 }
 
-// 工作流载入后 widgets_values 是异步还原的 → 重新读一次并整体重绘
+// 工作流载入后 widgets_values 是异步还原的 → 重新读一次
 // （只在配置真的变化时才重绘：避免重复渲染把正在加载的 <audio>/<video> 请求打断）
 function refreshFromWidget(node) {
-    if (!node.__h3m) return;
-    node.__h3m.widget = getSettingsWidget(node) || node.__h3m.widget;
-    const next = normalizeSettings(readWidgetValue(node.__h3m.widget));
-    const prevSig = JSON.stringify(node.__h3m.settings || {});
+    const st = node.__h3m;
+    if (!st) return;
+    const widget = getSettingsWidget(node) || st.widget;
+    if (!widget) return;
+    const raw = readWidgetValue(widget);
+    // 工作流还没把 widgets_values 还原进来（空串）→ 不拿默认布局去覆盖，
+    // 否则会出现「先闪成默认 9/3/3，再跳回自己保存的布局」这种跳变
+    if (typeof raw === "string" && !raw.trim()) return;
+    st.widget = widget;
+    const next = normalizeSettings(raw);
+    const prevSig = JSON.stringify(st.settings || {});
     const nextSig = JSON.stringify(next);
-    node.__h3m.settings = next;
+    st.settings = next;
     if (prevSig === nextSig) return;
+
+    // 布局（顺序/数量/隐藏）变了 → 面板结构要重建，不能只重绘槽位
+    const layoutSig = JSON.stringify(next.layout);
+    if (layoutSig !== st.renderedLayoutSig) {
+        fillBody(node);
+        renderAllSlots(node);
+        setTimeout(() => { try { st.fitPanelHeight?.(); } catch (_) {} }, 60);
+        return;
+    }
     renderAllSlots(node);
 }
 
@@ -1292,6 +1625,25 @@ app.registerExtension({
             [0, 120, 400].forEach((ms) => setTimeout(() => {
                 try { refreshFromWidget(self); } catch (_) {}
             }, ms));
+            return r;
+        };
+
+        // 右击菜单 → 界面设置
+        const prevMenu = nodeType.prototype.getExtraMenuOptions;
+        nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
+            const r = prevMenu?.apply(this, arguments);
+            if (!Array.isArray(options)) return r;
+            options.push(null);   // 分隔线
+            options.push({
+                content: "⚙️ 界面设置",
+                callback: () => {
+                    try {
+                        if (this.__h3m) openLayoutDialog(this);
+                    } catch (err) {
+                        console.error("[JZL-素材加载] 界面设置打开失败", err);
+                    }
+                },
+            });
             return r;
         };
     },

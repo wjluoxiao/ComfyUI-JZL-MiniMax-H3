@@ -33,15 +33,66 @@ IMAGE_COUNT = 9
 AUDIO_COUNT = 3
 VIDEO_COUNT = 3
 
+# 布局（由前端「界面设置」写入，随工作流保存）
+KIND_ORDER = ("image", "audio", "video")
+KIND_LABELS = {"image": "参考图", "audio": "参考音频", "video": "参考视频"}
+# 每类槽位可选数量档位（与前端「界面设置」一致）；槽位数组始终按上限长度保存，
+# 只改「用几个」不丢已有素材，数量调回去素材还在。
+KIND_COUNT_OPTIONS = {
+    "image": (1, 2, 4, 6, 9),
+    "audio": (1, 2, 3),
+    "video": (1, 2, 3),
+}
+
 # 抽帧硬上限：防止误填（如 cap=0 且视频极长）时一次性吃光内存
 MAX_VIDEO_FRAMES_HARD = 6000
 
 
 # ── 配置 JSON：解析 / 归一化（前端写什么进来都不能把后端弄崩） ─────────────
 
+def _default_layout():
+    return {
+        "order": list(KIND_ORDER),
+        "counts": {k: KIND_COUNT_OPTIONS[k][-1] for k in KIND_ORDER},
+        "hidden": {k: False for k in KIND_ORDER},
+    }
+
+
+def _snap_count(value, options):
+    """把任意数字吸附到最近的可选档位（如 3 → 2，7 → 6），而不是粗暴地退回最大值。"""
+    n = _as_int(value, options[-1], options[0], options[-1])
+    return min(options, key=lambda o: (abs(o - n), o))
+
+
+def _parse_layout(raw):
+    """布局归一化：顺序=三模块的一个排列；数量=允许档位；至少保留一个模块可见。"""
+    src = raw if isinstance(raw, dict) else {}
+
+    order = []
+    raw_order = src.get("order")
+    if isinstance(raw_order, (list, tuple)):
+        for k in raw_order:
+            if isinstance(k, str) and k in KIND_ORDER and k not in order:
+                order.append(k)
+    for k in KIND_ORDER:
+        if k not in order:
+            order.append(k)
+
+    raw_counts = src.get("counts") if isinstance(src.get("counts"), dict) else {}
+    counts = {k: _snap_count(raw_counts.get(k), KIND_COUNT_OPTIONS[k]) for k in KIND_ORDER}
+
+    raw_hidden = src.get("hidden") if isinstance(src.get("hidden"), dict) else {}
+    hidden = {k: _as_bool(raw_hidden.get(k), False) for k in KIND_ORDER}
+    if all(hidden.values()):
+        hidden[order[0]] = False
+
+    return {"order": order, "counts": counts, "hidden": hidden}
+
+
 def _default_settings():
     return {
-        "version": 1,
+        "version": 2,
+        "layout": _default_layout(),
         "images": [{"path": "", "enabled": True} for _ in range(IMAGE_COUNT)],
         "audios": [{"path": "", "enabled": True, "start": 0.0, "duration": 0.0}
                    for _ in range(AUDIO_COUNT)],
@@ -138,7 +189,8 @@ def parse_settings(raw):
         "cap": _as_int(it.get("cap"), 0, 0),
     } for it in _slot_list(data, "videos", VIDEO_COUNT)]
 
-    return {"version": 1, "images": images, "audios": audios, "videos": videos}
+    return {"version": 2, "layout": _parse_layout(data.get("layout")),
+            "images": images, "audios": audios, "videos": videos}
 
 
 # ── 文件定位 / 加载 ────────────────────────────────────────────────
@@ -445,76 +497,85 @@ class JZL_MiniMaxH3MediaLoader:
 
     def load(self, media_settings=""):
         cfg = parse_settings(media_settings)
+        layout = cfg["layout"]
+        counts = layout["counts"]
+        hidden = layout["hidden"]
         bus = {key: None for key in BUS_KEYS}
         report = {"image": [0, 0], "audio": [0, 0], "video": [0, 0]}  # [载入数, 启用数]
         errors = []
 
-        # 9 张参考图 → ref_image_0..8
-        for i, item in enumerate(cfg["images"]):
-            enabled = item["enabled"]
-            path = resolve_media_path(item["path"])
-            if enabled:
-                report["image"][1] += 1
-            if not enabled or not path:
-                if enabled and item["path"]:
-                    errors.append("图片%d：文件不存在（%s）" % (i + 1, item["path"]))
-                continue
-            try:
-                bus["ref_image_%d" % i] = load_image(path)
-                report["image"][0] += 1
-            except Exception as exc:
-                errors.append("图片%d：%s" % (i + 1, exc))
+        # 参考图 → ref_image_0..8（只取布局里启用的前 N 个；整块隐藏则全部留空）
+        if not hidden["image"]:
+            for i, item in enumerate(cfg["images"][:counts["image"]]):
+                enabled = item["enabled"]
+                path = resolve_media_path(item["path"])
+                if enabled:
+                    report["image"][1] += 1
+                if not enabled or not path:
+                    if enabled and item["path"]:
+                        errors.append("图片%d：文件不存在（%s）" % (i + 1, item["path"]))
+                    continue
+                try:
+                    bus["ref_image_%d" % i] = load_image(path)
+                    report["image"][0] += 1
+                except Exception as exc:
+                    errors.append("图片%d：%s" % (i + 1, exc))
 
-        # 3 段参考视频 → ref_video_0..2 + ref_video_audio_0..2
-        for i, item in enumerate(cfg["videos"]):
-            enabled = item["enabled"]
-            path = resolve_media_path(item["path"])
-            if enabled:
-                report["video"][1] += 1
-            if not enabled or not path:
-                if enabled and item["path"]:
-                    errors.append("视频%d：文件不存在（%s）" % (i + 1, item["path"]))
-                continue
-            try:
-                bus["ref_video_%d" % i] = load_video_frames(
-                    path, force_rate=item["force_rate"], skip=item["skip"],
-                    width=item["width"], height=item["height"], cap=item["cap"])
-                report["video"][0] += 1
-            except Exception as exc:
-                errors.append("视频%d：%s" % (i + 1, exc))
-            # 音轨跟着画面裁：跳过帧数 / 帧数上限 换算成秒，视频裁到哪音轨裁到哪
-            # （否则画面只取 5 帧、声音却是整段，下游会以为「帧数上限没生效」）
-            try:
-                rate = video_effective_rate(path, item["force_rate"])
-                a_start = (item["skip"] / rate) if rate > 0 else 0.0
-                a_dur = (item["cap"] / rate) if (item["cap"] > 0 and rate > 0) else 0.0
-                bus["ref_video_audio_%d" % i] = load_video_audio(
-                    path, start_time=a_start, duration=a_dur)
-            except Exception:
-                bus["ref_video_audio_%d" % i] = None
+        # 参考视频 → ref_video_0..2 + ref_video_audio_0..2
+        if not hidden["video"]:
+            for i, item in enumerate(cfg["videos"][:counts["video"]]):
+                enabled = item["enabled"]
+                path = resolve_media_path(item["path"])
+                if enabled:
+                    report["video"][1] += 1
+                if not enabled or not path:
+                    if enabled and item["path"]:
+                        errors.append("视频%d：文件不存在（%s）" % (i + 1, item["path"]))
+                    continue
+                try:
+                    bus["ref_video_%d" % i] = load_video_frames(
+                        path, force_rate=item["force_rate"], skip=item["skip"],
+                        width=item["width"], height=item["height"], cap=item["cap"])
+                    report["video"][0] += 1
+                except Exception as exc:
+                    errors.append("视频%d：%s" % (i + 1, exc))
+                # 音轨跟着画面裁：跳过帧数 / 帧数上限 换算成秒，视频裁到哪音轨裁到哪
+                # （否则画面只取 5 帧、声音却是整段，下游会以为「帧数上限没生效」）
+                try:
+                    rate = video_effective_rate(path, item["force_rate"])
+                    a_start = (item["skip"] / rate) if rate > 0 else 0.0
+                    a_dur = (item["cap"] / rate) if (item["cap"] > 0 and rate > 0) else 0.0
+                    bus["ref_video_audio_%d" % i] = load_video_audio(
+                        path, start_time=a_start, duration=a_dur)
+                except Exception:
+                    bus["ref_video_audio_%d" % i] = None
 
-        # 3 段独立音频 → ref_audio_0..2
-        for i, item in enumerate(cfg["audios"]):
-            enabled = item["enabled"]
-            path = resolve_media_path(item["path"])
-            if enabled:
-                report["audio"][1] += 1
-            if not enabled or not path:
-                if enabled and item["path"]:
-                    errors.append("音频%d：文件不存在（%s）" % (i + 1, item["path"]))
-                continue
-            try:
-                bus["ref_audio_%d" % i] = load_audio(path, start=item["start"],
-                                                     duration=item["duration"])
-                report["audio"][0] += 1
-            except Exception as exc:
-                errors.append("音频%d：%s" % (i + 1, exc))
+        # 独立音频 → ref_audio_0..2
+        if not hidden["audio"]:
+            for i, item in enumerate(cfg["audios"][:counts["audio"]]):
+                enabled = item["enabled"]
+                path = resolve_media_path(item["path"])
+                if enabled:
+                    report["audio"][1] += 1
+                if not enabled or not path:
+                    if enabled and item["path"]:
+                        errors.append("音频%d：文件不存在（%s）" % (i + 1, item["path"]))
+                    continue
+                try:
+                    bus["ref_audio_%d" % i] = load_audio(path, start=item["start"],
+                                                         duration=item["duration"])
+                    report["audio"][0] += 1
+                except Exception as exc:
+                    errors.append("音频%d：%s" % (i + 1, exc))
 
-        summary = "图片 %d/%d 丨 音频 %d/%d 丨 视频 %d/%d" % (
-            report["image"][0], report["image"][1],
-            report["audio"][0], report["audio"][1],
-            report["video"][0], report["video"][1],
-        )
+        # 摘要按「顺序 + 只有显示的模块」输出，与节点面板上看到的一致
+        parts = []
+        for kind in layout["order"]:
+            if hidden[kind]:
+                continue
+            parts.append("%s %d/%d" % (KIND_LABELS[kind],
+                                       report[kind][0], report[kind][1]))
+        summary = " 丨 ".join(parts) if parts else "（未启用任何模块）"
         print("[JZL-素材加载] %s（数字为 载入/启用）" % summary)
         for err in errors[:10]:
             print("[JZL-素材加载] ⚠️ %s" % err)
