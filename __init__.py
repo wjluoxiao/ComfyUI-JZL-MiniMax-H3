@@ -766,8 +766,16 @@ async def jzl_manager_get(request):
         # 「生成设定 → 语义修正」适配器下拉：models/semantic_bridge/ 下的 .safetensors
         semantic_bridge_adapters = _semantic_bridge_adapters()
         # 🎭 人物替换「📝 提示词预设」的自定义 skill 下拉：skills/jzl/*.md
-        from .nodes_skill import _skill_files as _jzl_skill_files
+        from .nodes_skill import _skill_dirs as _jzl_skill_dirs, _skill_files as _jzl_skill_files
         prompt_skills = [f for f in _jzl_skill_files() if not f.startswith("（")]
+        # skill 实际所在目录：面板用它显示完整路径（优先已存在的那个）
+        prompt_skills_dir = ""
+        for _d in _jzl_skill_dirs():
+            if os.path.isdir(_d):
+                prompt_skills_dir = _d
+                break
+        if not prompt_skills_dir:
+            prompt_skills_dir = _jzl_skill_dirs()[-1]
         # 本地文本生成的 CLIP 类型：直接取官方 CLIPLoader 的下拉（保持与官方同源）
         try:
             import nodes as _cnodes
@@ -813,6 +821,7 @@ async def jzl_manager_get(request):
         "selflift_upscaler_models": selflift_upscaler_models,
         "semantic_bridge_adapters": semantic_bridge_adapters,
         "prompt_skills": prompt_skills,
+        "prompt_skills_dir": prompt_skills_dir,
         "clip_types": clip_types,
         "all_clip_models": all_clip_models,
     })
@@ -1491,6 +1500,56 @@ async def jzl_swap_prompt_preview(request):
         traceback.print_exc()
         return web.json_response(
             {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+
+@PromptServer.instance.routes.post("/jzl/swap_skill_import")
+async def jzl_swap_skill_import(request):
+    """🎭 人物替换「自定义skill → 📂 加载 skill 文件」：把本地 .md/.txt 存进 skills/jzl。
+
+    返回 {ok, id(文件名), path(绝对路径), items(目录下全部 skill 文件名)}，
+    前端用它设为当前 skill 并显示完整路径。
+    """
+    try:
+        from .nodes_skill import _skill_dirs as _jzl_skill_dirs, _skill_files as _jzl_skill_files
+        post = await request.post()
+        file = post.get("file")
+        if not file or not getattr(file, "file", None):
+            return web.json_response({"ok": False, "error": "未收到文件"}, status=400)
+        filename = os.path.basename(str(file.filename or "").strip()) or "自定义skill.md"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in (".md", ".markdown", ".txt"):
+            return web.json_response({"ok": False, "error": "只支持 .md / .markdown / .txt"}, status=400)
+        target = ""
+        for _d in _jzl_skill_dirs():
+            if os.path.isdir(_d):
+                target = _d
+                break
+        if not target:
+            target = _jzl_skill_dirs()[-1]
+        os.makedirs(target, exist_ok=True)
+        out = os.path.join(target, filename)
+        base, _e = os.path.splitext(filename)
+        n = 2
+        while os.path.exists(out):          # 同名不覆盖，自动加序号
+            out = os.path.join(target, f"{base}_{n}{_e}")
+            n += 1
+        raw = file.file.read(1_048_576)      # 上限 1 MB
+        text = _jzl_decode_text(raw)
+        if not text.strip():
+            return web.json_response({"ok": False, "error": "文件内容为空或无法解码（需 UTF-8 / GBK 文本）"},
+                                     status=400)
+        with open(out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        return web.json_response({
+            "ok": True,
+            "id": os.path.basename(out),
+            "path": out,
+            "items": [f for f in _jzl_skill_files() if not f.startswith("（")],
+        })
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return web.json_response({"ok": False, "error": f"导入失败：{exc}"}, status=500)
 
 
 @PromptServer.instance.routes.get("/jzl/skills")

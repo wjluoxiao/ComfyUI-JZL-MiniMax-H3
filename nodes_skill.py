@@ -7,14 +7,22 @@ from comfy_api.latest import io
 
 
 _BUNDLED_SKILL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills", "jzl")
-_PREFERRED_SKILL_DIR = r"Z:\AI_work\ComfyUI\custom_nodes\ComfyUI-JZL-MiniMax-H3\skills\jzl"
+# 历史版本把 skill 目录写死成了某个安装路径；仅当它确实存在且与插件自身目录不同时才作为附加目录，
+# 顺序上**插件自身目录优先**（运行时就是当前安装，跨机器安装也能正确读写）。
+_LEGACY_SKILL_DIR = r"Z:\AI_work\ComfyUI\custom_nodes\ComfyUI-JZL-MiniMax-H3\skills\jzl"
 _SKILL_EXTENSIONS = {".md", ".txt"}
 _MAX_SKILL_BYTES = 1024 * 1024
 _EMPTY_SKILL = "（未找到 .md/.txt skill 文件）"
 
 
 def _skill_dirs():
-    return [_PREFERRED_SKILL_DIR, _BUNDLED_SKILL_DIR]
+    dirs = [_BUNDLED_SKILL_DIR]
+    try:
+        if os.path.isdir(_LEGACY_SKILL_DIR) and os.path.normcase(_LEGACY_SKILL_DIR) != os.path.normcase(_BUNDLED_SKILL_DIR):
+            dirs.append(_LEGACY_SKILL_DIR)
+    except Exception:
+        pass
+    return dirs
 
 
 def _skill_files():

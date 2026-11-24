@@ -204,18 +204,52 @@ class _WindowProgress:
         self.n_win = max(1, int(n_win))
         self.done = 0
         self.step = 0
+        self.step_times = []
         self.bar = tqdm(total=self.steps * self.n_win, smoothing=1.0, disable=bool(disable),
                         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]")
 
     def __iter__(self):
+        import time as _t
         for i in range(self.steps):
             self.step = i
             self._set_note(0)
+            t0 = _t.time()
             yield i
             target = (i + 1) * self.n_win
             if self.done < target:                       # 兜底：窗口没 tick 满就补齐
                 self.bar.update(target - self.done)
                 self.done = target
+            self._report_step(i, _t.time() - t0)
+
+    @staticmethod
+    def _fmt(sec):
+        sec = float(sec)
+        if sec < 60:
+            return f"{sec:.1f} 秒"
+        m, s = divmod(int(round(sec)), 60)
+        if m < 60:
+            return f"{m} 分 {s} 秒"
+        h, m = divmod(m, 60)
+        return f"{h} 小时 {m} 分"
+
+    def _report_step(self, index, secs):
+        """每步结束打一行：本步耗时 + 每段耗时 + 已用 + 预计剩余。
+
+        采样是「每步把 N 段全算一遍」，所以这里按**步**报进度（绝不谎报「第 i/N 段采样完成」）；
+        段粒度的完成情况在日志的其它位置（逐段落盘）体现。
+        """
+        try:
+            self.step_times.append(float(secs))
+            left = self.steps - (index + 1)
+            avg = sum(self.step_times) / len(self.step_times)
+            eta = avg * left
+            tail = (f"｜已用 {self._fmt(sum(self.step_times))}"
+                    + (f"｜预计剩余 {self._fmt(eta)}" if left > 0 else "｜采样收尾"))
+            self.write(f"[JZL-{self.tag}]   第 {index + 1}/{self.steps} 步完成"
+                       f"｜本步 {self._fmt(secs)}（{self.n_win} 段 × {secs / self.n_win:.1f} 秒/段）"
+                       f"{tail}")
+        except Exception:
+            pass
 
     def _set_note(self, window_index):
         seg = f"段 {window_index}/{self.n_win}" if window_index else f"{self.n_win} 段并行"

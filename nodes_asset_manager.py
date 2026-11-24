@@ -47,7 +47,6 @@ from .nodes import (
     REF_IMAGE_SHORT_EDGE,
     _empty_av_latent,
     _resize,
-    adapt_canvas,
     temporal_shape,
     align_frame_count,
 )
@@ -952,15 +951,42 @@ def _check_official_drift():
         print("[JZL-管理器]    这很可能就是「只有别人的电脑报错」的原因，请把这几行连同完整日志回传。")
 
 
+def _shrink_size(w, h, ratio):
+    """(w,h) × ratio 后按 32 对齐（用于「编码设置」里的输入视频缩小 / 文本视觉缩小）。
+
+    ratio=1.0 时原样返回（保证默认行为与不设该选项完全一致）；下限 32 像素。
+    """
+    try:
+        k = float(ratio if ratio is not None else 1.0)
+    except Exception:
+        k = 1.0
+    if abs(k - 1.0) < 1e-9:
+        return int(w), int(h)
+    nw = max(CANVAS_MULTIPLE, int(round(int(w) * k / CANVAS_MULTIPLE)) * CANVAS_MULTIPLE)
+    nh = max(CANVAS_MULTIPLE, int(round(int(h) * k / CANVAS_MULTIPLE)) * CANVAS_MULTIPLE)
+    return nw, nh
+
+
 def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
                          ref_images=None, ref_videos=None, ref_video_audios=None,
                          ref_audios=None, ref_image_size="match", ref_scale=1.0,
-                         slot_names=None, probe=None, defer=None, ref_video_fps=24.0):
+                         slot_names=None, probe=None, defer=None, ref_video_fps=24.0,
+                         video_shrink=1.0, vision_shrink=1.0):
     """复刻官方 MiniMaxH3ReferenceToVideo 编码（va2va / ref2va）。
 
     slot_names/probe：可选，用于回填「真实调用信息」——probe 会被写入
     {"images": [(槽位名, 0基图序号)], "videos": [(槽位名, <Video N> 的 N)], "audios": [(槽位名, <Audio N> 的 N)]}，
     记录的是**实际进入编码的项**（被跳过的项不会出现），供调用方打印真实调用结果。
+
+    video_shrink / vision_shrink：**编码设置**用的比例（相对「生成分辨率」，1.0 = 同尺寸）。
+    · video_shrink 只影响**送进 VAE 的参考视频编码画布**（= 生成画布 × 该比例，32 对齐）：
+      参考块自带 latent_h/latent_w，所以缩小完全合法，DiT 只是拿到更小的参考块；
+      编码/采样开销 ∝ 短边²，×0.5 ≈ 快 4 倍。
+    · vision_shrink 只影响**送进文本编码器(Qwen)的参考帧**（= 编码尺寸 × 该比例）：
+      视觉 token 随面积下降，文本编码这一步（多窗口时能占几分钟）会明显变快；DiT 参考 latent 不受影响。
+    · MiniMax-H3 的 VAE **本身已经内置空间分块 + 17 帧时间分块**（`first_stage_model.tiling=True`），
+      官方「VAE Encode (Tiled)」的 tile 参数对它不生效（`encode_tiled()` 直接 return self.encode(x)）。
+      所以想给高分辨率源片提速，只能从"喂进去的画面分辨率"入手 —— 就是上面这两个比例（+ 参考图放大）。
 
     defer：传一个 list 时**只做 VAE 部分**，把 (clip, prompt, ref_items, ref_blocks) 追加进去并
     返回 (None, latent)。调用方之后再统一调用 `_cond_from_parts` 完成文本编码 ——
@@ -994,10 +1020,10 @@ def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
             continue
         h, w = img.shape[1], img.shape[2]
         if ref_image_size == "match":
-            # 面积倍率：参考图最终像素面积 = 生成画布面积 × ref_scale。
-            # 只受绝对上限约束（短边 ≤ REF_IMAGE_SHORT_EDGE）。不能写成 min(1.0, ...)：
-            # 照片比画布大时那样会让 ref_scale 完全失效，加倍数没有任何效果。
-            scale = math.sqrt(ref_scale * (width * height) / float(w * h))
+            # 「参考图片放大」= 相对生成分辨率的**线性倍率**：
+            # 图片等比缩放到「面积 = 画布面积 × ref_scale²」（同宽高比时正好是各边 × ref_scale）。
+            # 只受绝对上限约束（短边 ≤ REF_IMAGE_SHORT_EDGE）；不能写成 min(1.0, ...)，否则放大无效。
+            scale = float(ref_scale) * math.sqrt((width * height) / float(w * h))
             scale = min(scale, max(1.0, REF_IMAGE_SHORT_EDGE / float(min(w, h))))
         else:
             scale = min(1.0, REF_IMAGE_SHORT_EDGE / min(w, h))
@@ -1005,7 +1031,10 @@ def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
         th = max(CANVAS_MULTIPLE, round(h * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
         resized = _resize(img[:1], tw, th, "disabled")
         z = vae.encode(resized)
-        ref_items.append({"type": "image", "data": resized})
+        # 文本编码用的视觉图：按 vision_shrink 相对「编码尺寸」缩小（不影响 DiT 的 latent）
+        vw_, vh_ = _shrink_size(tw, th, vision_shrink)
+        vis = resized if (vw_, vh_) == (tw, th) else _resize(resized, vw_, vh_, "disabled")
+        ref_items.append({"type": "image", "data": vis})
         ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": z})
         if probe is not None:
             probe["images"].append((_nm(_in_names, pos), len(probe["images"])))
@@ -1017,11 +1046,9 @@ def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
         if video_frames is None:
             continue
         soundtrack = ref_video_audios[pos] if pos < len(ref_video_audios) else None
-        vh, vw = video_frames.shape[1], video_frames.shape[2]
-        cw, ch = adapt_canvas(vw, vh)
-        if vw * vh < cw * ch:
-            cw = max(CANVAS_MULTIPLE, round(vw / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
-            ch = max(CANVAS_MULTIPLE, round(vh / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
+        # 「输入视频缩小」= 参考视频的编码画布 = 生成画布 × video_shrink（32 对齐）。
+        # 生成画布本身由调用方决定（本节点传进来的参考帧已按画布切好）。
+        cw, ch = _shrink_size(width, height, video_shrink)
         frames = _resize(video_frames, cw, ch, "disabled")
         if frames.shape[0] > frame_count:
             frames = frames[:frame_count]
@@ -1047,6 +1074,9 @@ def _encode_ref_to_video(clip, vae, audio_vae, prompt, width, height, length,
             _stride = min(_stride, max(1, int(frames.shape[0]) // 4))
         sample_idx = list(range(0, frames.shape[0], _stride))
         qwen_frames = frames[sample_idx]
+        _vw, _vh = _shrink_size(cw, ch, vision_shrink)   # 文本视觉缩小（DiT 参考 latent 不受影响）
+        if (_vw, _vh) != (cw, ch):
+            qwen_frames = _resize(qwen_frames, _vw, _vh, "disabled")
         ref_items.append({"type": "video", "data": qwen_frames,
                           "timestamps": [i * _stride / _fps for i in range(len(sample_idx))]})
         ref_blocks.append({"kind": "video_audio" if ref_audio_t else "video",

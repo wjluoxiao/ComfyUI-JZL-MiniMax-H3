@@ -39,12 +39,17 @@ class SwapPromptPresetTest(unittest.TestCase):
         self.assertFalse(pc.get("use_llm"))
         self.assertEqual(pc.get("source"), "系统默认")
 
-    def test_llm_off_forces_system_default(self):
+    def test_llm_flag_derived_from_source(self):
+        """LLM 开关由「提示词来源」派生：只有系统默认才不调 LLM，旧的 use_llm 字段不再能改来源。"""
         cfg = _MOD._parse_swap_settings('{"prompt_cfg": {"use_llm": false, "source": "内置skill"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], "内置skill")
+        self.assertTrue(cfg["prompt_cfg"]["use_llm"])
+        cfg = _MOD._parse_swap_settings('{"prompt_cfg": {"use_llm": true, "source": "系统默认"}}')
         self.assertEqual(cfg["prompt_cfg"]["source"], "系统默认")
+        self.assertFalse(cfg["prompt_cfg"]["use_llm"])
 
     def test_llm_on_keeps_source(self):
-        for src in ("内置skill", "自定义skill", "系统默认"):
+        for src in ("内置skill", "自定义skill"):
             cfg = _MOD._parse_swap_settings(
                 '{"prompt_cfg": {"use_llm": true, "source": "%s"}}' % src)
             self.assertEqual(cfg["prompt_cfg"]["source"], src)
@@ -63,69 +68,87 @@ class SwapPromptPresetTest(unittest.TestCase):
         self.assertNotIn("{image_desc}", out)
         self.assertNotIn("\n\n\n", out)
 
-    def test_builtin_skill_available(self):
+    def test_builtin_skills_all_available(self):
         files = _SKILL._skill_files()
-        self.assertIn("人物替换提示词.md", files)
-        self.assertIn("===H3_PROMPT===", _SKILL._read_skill("人物替换提示词.md"))
+        for name in ("人物替换提示词.md", "动物替换提示词.md",
+                     "非活物替换提示词.md", "多人替换提示词.md"):
+            self.assertIn(name, files)
+            self.assertIn("===H3_PROMPT===", _SKILL._read_skill(name))
 
-    def test_animal_skill_available_and_loadable(self):
-        files = _SKILL._skill_files()
-        self.assertIn("动物替换提示词.md", files)
-        self.assertIn(_MOD.ANIMAL_SOURCE, _MOD.PROMPT_SOURCES)
-        self.assertIn("===H3_PROMPT===", _SKILL._read_skill(_MOD.BUILTIN_ANIMAL_SKILL))
+    def test_builtin_skill_names_match_files(self):
+        """每个内置 skill 名都必须能真的读到文件（否则 LLM 分支会静默回退）。"""
+        self.assertEqual(set(_MOD.BUILTIN_SKILLS),
+                         {"人物替换", "动物替换", "非活物替换", "多人替换"})
+        for name, (fname, _tpl, _lead) in _MOD.BUILTIN_SKILLS.items():
+            self.assertIn("===H3_PROMPT===", _SKILL._read_skill(fname), name)
 
     def test_animal_skill_forbids_adding_a_second_animal(self):
-        """skill 必须明确「替换」而不是「加入/互动」——这是这个 skill 的唯一目的。"""
         text = _SKILL._read_skill(_MOD.BUILTIN_ANIMAL_SKILL)
         for needle in ("替代", "不出现第二只动物", "不出现任何人类", "互动"):
             self.assertIn(needle, text)
 
-    def test_animal_source_falls_back_to_animal_template(self):
-        out = _MOD._build_swap_prompt({"use_llm": False, "source": _MOD.ANIMAL_SOURCE},
-                                      "男人坐在桌前喝水", "一只狸花猫，带白手套")
-        # 必须是「动物替换」模板，不能退回人物模板（否则会写出人类角色）
-        self.assertIn("动物", out)
-        self.assertIn("不出现第二只动物", out)
-        self.assertIn("狸花猫", out)
-        self.assertNotIn("{video_desc}", out)
-        self.assertNotIn("<Subject 1> 是 <Picture 1> 中的人物", out)
-
-    def test_animal_source_kept_when_llm_on(self):
-        cfg = _MOD._parse_swap_settings(
-            '{"prompt_cfg": {"use_llm": true, "source": "内置skill·动物"}}')
-        self.assertEqual(cfg["prompt_cfg"]["source"], _MOD.ANIMAL_SOURCE)
-
-    def test_inanimate_skill_available_and_loadable(self):
-        files = _SKILL._skill_files()
-        self.assertIn("非活物替换提示词.md", files)
-        self.assertIn(_MOD.INANIMATE_SOURCE, _MOD.PROMPT_SOURCES)
+    def test_inanimate_skill_forbids_prop_and_alive(self):
         text = _SKILL._read_skill(_MOD.BUILTIN_INANIMATE_SKILL)
-        self.assertIn("===H3_PROMPT===", text)
-        # 硬约束：替换 / 不变活物 / 不出现第二个同类物件 / 不是当道具
         for needle in ("替代", "非活物", "不出现第二个同类物件", "道具"):
             self.assertIn(needle, text)
 
-    def test_inanimate_source_falls_back_to_inanimate_template(self):
-        out = _MOD._build_swap_prompt({"use_llm": False, "source": _MOD.INANIMATE_SOURCE},
-                                      "男人坐在桌前喝水", "一只毛绒兔子玩偶，灰色绒毛、黑豆眼")
-        self.assertIn("非活物", out)
-        self.assertIn("毛绒兔子玩偶", out)
-        self.assertIn("不出现第二个同类物件", out)
-        # 不能退回人物模板
-        self.assertNotIn("<Subject 1> 是 <Picture 1> 中的人物", out)
-        self.assertNotIn("{video_desc}", out)
+    def test_multi_skill_keeps_headcount(self):
+        text = _SKILL._read_skill(_MOD.BUILTIN_MULTI_SKILL)
+        for needle in ("人数", "不混用", "<Subject 1>", "<Picture 2>"):
+            self.assertIn(needle, text)
 
-    def test_inanimate_source_kept_when_llm_on(self):
-        cfg = _MOD._parse_swap_settings(
-            '{"prompt_cfg": {"use_llm": true, "source": "内置skill·非活物"}}')
-        self.assertEqual(cfg["prompt_cfg"]["source"], _MOD.INANIMATE_SOURCE)
-
-    def test_three_builtin_kinds_map_to_distinct_templates(self):
-        """三种内置 skill 的兜底模板必须各不相同（别都退回人物模板）。"""
+    def test_each_builtin_has_distinct_fallback_template(self):
+        """四种内置 skill 的兜底模板必须各不相同（别都退回人物模板）。"""
         outs = {}
-        for src in ("内置skill", _MOD.ANIMAL_SOURCE, _MOD.INANIMATE_SOURCE):
-            outs[src] = _MOD._build_swap_prompt({"use_llm": False, "source": src}, "某人在做事", "某参考图")
-        self.assertEqual(len(set(outs.values())), 3)
+        for name in _MOD.BUILTIN_SKILLS:
+            outs[name] = _MOD._build_swap_prompt(
+                {"use_llm": False, "source": "内置skill", "builtin": name},
+                "某人在做事", "某参考图")
+        self.assertEqual(len(set(outs.values())), 4)
+        self.assertIn("人数", outs["多人替换"])
+
+    def test_branch_source_and_legacy_alias(self):
+        """来源是两分支；老工作流的「内置skill·动物」自动映射成 内置skill + builtin。"""
+        cfg = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "内置skill·动物"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], "内置skill")
+        self.assertEqual(cfg["prompt_cfg"]["builtin"], "动物替换")
+        cfg2 = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "内置skill", "builtin": "多人替换"}}')
+        self.assertEqual(cfg2["prompt_cfg"]["builtin"], "多人替换")
+        # 未知 builtin → 回退人物替换
+        cfg3 = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "内置skill", "builtin": "不存在"}}')
+        self.assertEqual(cfg3["prompt_cfg"]["builtin"], "人物替换")
+
+    def test_custom_skill_branch_kept(self):
+        cfg = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "自定义skill", "skill": "我的.md"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], "自定义skill")
+        self.assertEqual(cfg["prompt_cfg"]["skill"], "我的.md")
+
+    def test_system_default_branch_works_with_llm_on(self):
+        """「系统默认」恢复成可选分支：LLM 开着也能选它 → 只用模板、不调 LLM。"""
+        cfg = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "系统默认"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], "系统默认")
+        out = _MOD._build_swap_prompt(
+            {"use_llm": True, "source": "系统默认"}, "女子在雨夜街头撑伞", "黑色及腰长发")
+        self.assertIn("雨夜街头", out)
+        self.assertIn("===H3_PROMPT===", out)
+
+    def test_prompt_cfg_label(self):
+        self.assertIn("关", _MOD._prompt_cfg_label({"use_llm": False}))
+        self.assertIn("系统默认", _MOD._prompt_cfg_label({"use_llm": True, "source": "系统默认"}))
+        self.assertIn("多人替换", _MOD._prompt_cfg_label(
+            {"use_llm": True, "source": "内置skill", "builtin": "多人替换"}))
+        self.assertIn("我的.md", _MOD._prompt_cfg_label(
+            {"use_llm": True, "source": "自定义skill", "skill": "我的.md"}))
+
+    def test_fmt_secs(self):
+        self.assertEqual(_MOD._fmt_secs(49.6), "49.6 秒")
+        self.assertEqual(_MOD._fmt_secs(216), "3 分 36 秒")
+        self.assertEqual(_MOD._fmt_secs(4325), "1 小时 12 分")
 
     def test_schema_has_two_descriptions_last(self):
         schema = _MOD.JZL_MiniMaxCharacterSwap.define_schema()
