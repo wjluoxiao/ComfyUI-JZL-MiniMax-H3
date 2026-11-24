@@ -68,6 +68,65 @@ class SwapPromptPresetTest(unittest.TestCase):
         self.assertIn("人物替换提示词.md", files)
         self.assertIn("===H3_PROMPT===", _SKILL._read_skill("人物替换提示词.md"))
 
+    def test_animal_skill_available_and_loadable(self):
+        files = _SKILL._skill_files()
+        self.assertIn("动物替换提示词.md", files)
+        self.assertIn(_MOD.ANIMAL_SOURCE, _MOD.PROMPT_SOURCES)
+        self.assertIn("===H3_PROMPT===", _SKILL._read_skill(_MOD.BUILTIN_ANIMAL_SKILL))
+
+    def test_animal_skill_forbids_adding_a_second_animal(self):
+        """skill 必须明确「替换」而不是「加入/互动」——这是这个 skill 的唯一目的。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_ANIMAL_SKILL)
+        for needle in ("替代", "不出现第二只动物", "不出现任何人类", "互动"):
+            self.assertIn(needle, text)
+
+    def test_animal_source_falls_back_to_animal_template(self):
+        out = _MOD._build_swap_prompt({"use_llm": False, "source": _MOD.ANIMAL_SOURCE},
+                                      "男人坐在桌前喝水", "一只狸花猫，带白手套")
+        # 必须是「动物替换」模板，不能退回人物模板（否则会写出人类角色）
+        self.assertIn("动物", out)
+        self.assertIn("不出现第二只动物", out)
+        self.assertIn("狸花猫", out)
+        self.assertNotIn("{video_desc}", out)
+        self.assertNotIn("<Subject 1> 是 <Picture 1> 中的人物", out)
+
+    def test_animal_source_kept_when_llm_on(self):
+        cfg = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "内置skill·动物"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], _MOD.ANIMAL_SOURCE)
+
+    def test_inanimate_skill_available_and_loadable(self):
+        files = _SKILL._skill_files()
+        self.assertIn("非活物替换提示词.md", files)
+        self.assertIn(_MOD.INANIMATE_SOURCE, _MOD.PROMPT_SOURCES)
+        text = _SKILL._read_skill(_MOD.BUILTIN_INANIMATE_SKILL)
+        self.assertIn("===H3_PROMPT===", text)
+        # 硬约束：替换 / 不变活物 / 不出现第二个同类物件 / 不是当道具
+        for needle in ("替代", "非活物", "不出现第二个同类物件", "道具"):
+            self.assertIn(needle, text)
+
+    def test_inanimate_source_falls_back_to_inanimate_template(self):
+        out = _MOD._build_swap_prompt({"use_llm": False, "source": _MOD.INANIMATE_SOURCE},
+                                      "男人坐在桌前喝水", "一只毛绒兔子玩偶，灰色绒毛、黑豆眼")
+        self.assertIn("非活物", out)
+        self.assertIn("毛绒兔子玩偶", out)
+        self.assertIn("不出现第二个同类物件", out)
+        # 不能退回人物模板
+        self.assertNotIn("<Subject 1> 是 <Picture 1> 中的人物", out)
+        self.assertNotIn("{video_desc}", out)
+
+    def test_inanimate_source_kept_when_llm_on(self):
+        cfg = _MOD._parse_swap_settings(
+            '{"prompt_cfg": {"use_llm": true, "source": "内置skill·非活物"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], _MOD.INANIMATE_SOURCE)
+
+    def test_three_builtin_kinds_map_to_distinct_templates(self):
+        """三种内置 skill 的兜底模板必须各不相同（别都退回人物模板）。"""
+        outs = {}
+        for src in ("内置skill", _MOD.ANIMAL_SOURCE, _MOD.INANIMATE_SOURCE):
+            outs[src] = _MOD._build_swap_prompt({"use_llm": False, "source": src}, "某人在做事", "某参考图")
+        self.assertEqual(len(set(outs.values())), 3)
+
     def test_schema_has_two_descriptions_last(self):
         schema = _MOD.JZL_MiniMaxCharacterSwap.define_schema()
         names = [getattr(i, "name", None) or getattr(i, "id", None) or "" for i in schema.inputs]

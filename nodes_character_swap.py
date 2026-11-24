@@ -137,10 +137,95 @@ DEFAULT_PROMPT = (
 )
 
 # 提示词来源（「📝 提示词预设 → 提示词来源」下拉）
-PROMPT_SOURCES = ("系统默认", "内置skill", "自定义skill")
+PROMPT_SOURCES = ("系统默认", "内置skill", "内置skill·动物", "内置skill·非活物", "自定义skill")
 BUILTIN_SWAP_SKILL = "人物替换提示词.md"
+BUILTIN_ANIMAL_SKILL = "动物替换提示词.md"
+BUILTIN_INANIMATE_SKILL = "非活物替换提示词.md"
+ANIMAL_SOURCE = "内置skill·动物"
+INANIMATE_SOURCE = "内置skill·非活物"
 
+# 动物拟人替换的兜底模板（LLM 不可用 / 生成失败时用）：
+# 与人物模板的关键差别 —— 明确「人类主体被整体替换掉、画面里不再有人、也不多出一只动物」。
+DEFAULT_ANIMAL_PROMPT = (
+    "[SHOT_START]\n"
+    "\n"
+    "===H3_PROMPT===\n"
+    "subject_definitions:\n"
+    "<Subject 1> 是 <Picture 1> 中的动物。物种、品种、毛色、花纹、体型、耳朵与尾巴形态、眼睛、"
+    "配饰与配色全部以 <Picture 1> 为准；<Picture 1> 只是参考图，不作为画面内容单独出现。"
+    "<Subject 1> 在本段视频里**替代 <Video 1> 中原本的那一个人类角色**，以拟人化方式表演："
+    "保留动物的外观与毛发质感，采用人类的站姿、手势、步态与表情。\n"
+    "\n"
+    "summary:\n"
+    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里唯一的人类主体"
+    "整体替换为 <Subject 1>（<Picture 1> 中的动物），由它拟人化地完成同一段表演，其余一律沿用 <Video 1>。"
+    "画面中不出现任何人类，也不出现第二只动物。\n"
+    "\n"
+    "retention_analysis:\n"
+    "<Picture 1>: fully_preserved —— 物种、毛色花纹、体型、耳朵尾巴形态、眼神、配饰与配色。\n"
+    "<Video 1>: attribute_transfer —— 动作、姿态、表情、口型开合与停顿、走位、时机、机位、景别、景深、镜头运动；\n"
+    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调、构图与遮挡关系；\n"
+    "            replaced —— 画面里的人类主体被 <Subject 1> 完全取代（同位置、同轮廓比例、同遮挡关系），"
+    "替换后画面内不再有人。\n"
+    "\n"
+    "detailed_description:\n"
+    "<Subject 1> 以 <Video 1> 中那个人物的同一姿态、同一动作节奏、同一表情完成整段拟人化表演："
+    "直立或按其原本姿势站立、用前肢做出对应的手势、头部与眼神随台词变化，口型开合与停顿与 <Video 1> 一致；"
+    "镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 <Video 1> 一致。"
+    "只替换主体本身：人类角色整体换成 <Picture 1> 的动物，动作与场景不换；"
+    "画面中只有这一只动物，没有人类，也没有第二只动物。\n"
+    "{video_desc}"
+    "{image_desc}"
+    "\n"
+    "[Shot 1] 沿用 <Video 1> 的表演与运镜，由 <Subject 1> 拟人化完成。\n"
+    "\n"
+    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
+    "\n"
+    "non_diegetic_music: N/A\n"
+    "[SHOT_END]"
+)
 
+# 非活物（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…）替换的兜底模板。
+# 关键差别：主体是无生命的物件 → 必须写清「保持材质、由它占住原主体位置、做同一套动作」，
+# 且不能留下人类/动物本体，也不能把它当成道具塞进画面里。
+DEFAULT_INANIMATE_PROMPT = (
+    "[SHOT_START]\n"
+    "\n"
+    "===H3_PROMPT===\n"
+    "subject_definitions:\n"
+    "<Subject 1> 是 <Picture 1> 中的非活物／人工造物（玩偶、毛绒玩具、木头人、火柴人、机器人、砖头人……按实际写清）。"
+    "外形、材质、颜色、纹理、比例、结构细节（关节、缝线、螺丝、砖块堆叠、木纹、毛绒质感）与配饰全部以 <Picture 1> 为准；"
+    "<Picture 1> 只是参考图，不作为画面内容单独出现。<Subject 1> 在本段视频里**替代 <Video 1> 中原本的那个主体**"
+    "（无论原本是人还是动物），占住它的位置、做出它的动作，但一直保持自己无生命的材质与结构。\n"
+    "\n"
+    "summary:\n"
+    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里唯一的主体"
+    "整体替换为 <Subject 1>（<Picture 1> 中的非活物），由它以拟人化方式完成同一段表演，其余一律沿用 <Video 1>。"
+    "画面中不出现原本的人类或动物，也不出现第二个同类物件。\n"
+    "\n"
+    "retention_analysis:\n"
+    "<Picture 1>: fully_preserved —— 外形、材质、颜色、纹理、比例、结构细节与配饰。\n"
+    "<Video 1>: attribute_transfer —— 动作、姿态、节奏、走位、时机、机位、景别、景深、镜头运动；\n"
+    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调、构图与遮挡关系；\n"
+    "            replaced —— 画面里的主体被 <Subject 1> 完全取代（同位置、同轮廓比例、同遮挡关系），"
+    "替换后画面内不再有人类和动物。\n"
+    "\n"
+    "detailed_description:\n"
+    "<Subject 1> 以 <Video 1> 中那个主体的同一姿态、同一动作节奏完成整段拟人化表演："
+    "按自身结构活动（玩偶/木偶靠关节摆动、火柴人靠细线状肢体、机器人靠机械关节、砖头人靠砖块层层堆叠位移），"
+    "动作幅度与 <Video 1> 一致；不做人类式的皮肤、肌肉或毛发变化，材质始终保持 <Picture 1> 的样子。"
+    "镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 <Video 1> 一致。"
+    "只替换主体本身，动作与场景不换；画面中只有这一个物件，没有人类、没有动物，也没有第二个同类物件。\n"
+    "{video_desc}"
+    "{image_desc}"
+    "\n"
+    "[Shot 1] 沿用 <Video 1> 的表演与运镜，由 <Subject 1> 拟人化完成。\n"
+    "\n"
+    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
+    "\n"
+    "non_diegetic_music: N/A\n"
+    "[SHOT_END]"
+)
 def _fill_desc(template, video_desc, image_desc):
     """把「视频描述 / 图片描述」填进模板；空的就整行去掉，不留空段落。"""
     out = str(template or "")
@@ -353,23 +438,52 @@ def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
     return text
 
 
+# 提示词来源 → (内置 skill 文件, 兜底模板, LLM 指令里的一段额外约束)
+_SOURCE_KINDS = {
+    "内置skill": (BUILTIN_SWAP_SKILL, None, None),
+    ANIMAL_SOURCE: (
+        BUILTIN_ANIMAL_SKILL, DEFAULT_ANIMAL_PROMPT,
+        "请根据下面的素材描述，写一段用于「**用参考图中的动物替换视频里的那个人**」的 MiniMax-H3 提示词。\n"
+        "重点：这是**替换**，不是加入 —— 原本那个人完全消失，由这只动物占住他的位置、拟人化地做同样的动作；\n"
+        "画面里不能出现人类，也不能出现第二只动物，更不能写成动物与人互动。",
+    ),
+    INANIMATE_SOURCE: (
+        BUILTIN_INANIMATE_SKILL, DEFAULT_INANIMATE_PROMPT,
+        "请根据下面的素材描述，写一段用于「**用参考图中的非活物（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…）"
+        "替换视频里的主体**」的 MiniMax-H3 提示词。\n"
+        "重点：这是**替换**，不是加入、不是当道具 —— 原本那个人（或动物）完全消失，由这个物件占住他的位置、"
+        "以自身结构做同一套拟人化动作；材质始终保持参考图的样子（毛绒/木质/塑料/金属/砖块），\n"
+        "不能长出人类或动物的皮肤毛发、不能有人类的手脚，画面里不能再有原本的人类/动物，也不能出现第二个同类物件。",
+    ),
+}
+
+
 def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG):
     """按「📝 提示词预设」产出最终提示词。
 
     系统默认 = 内置模板 + 用户填的「视频描述 / 图片描述」；
-    内置skill / 自定义skill = 把 skill 当 LLM 设定词，让 LLM 依据两段描述写 H3 提示词。
+    内置skill / 内置skill·动物 / 内置skill·非活物 / 自定义skill = 把 skill 当 LLM 设定词，由 LLM 写提示词。
     """
     source = str(prompt_cfg.get("source") or "系统默认")
-    fallback = _fill_desc(DEFAULT_PROMPT, video_desc, image_desc)
+    kind = _SOURCE_KINDS.get(source)
+    template = (kind[1] if kind else None) or DEFAULT_PROMPT
+    fallback = _fill_desc(template, video_desc, image_desc)
     if not bool(prompt_cfg.get("use_llm")) or source == "系统默认":
         return fallback
-    skill = _load_swap_skill(
-        BUILTIN_SWAP_SKILL if source == "内置skill" else (prompt_cfg.get("skill") or ""), tag)
+    if kind:
+        skill_name, _tpl, _lead = kind
+    else:
+        skill_name = prompt_cfg.get("skill") or ""     # 自定义skill
+    skill = _load_swap_skill(skill_name, tag)
     if not skill:
         return fallback
-    v = str(video_desc or "").strip() or "（用户未填写，请按通用换人场景处理）"
-    i = str(image_desc or "").strip() or "（用户未填写，请按通用换人场景处理）"
-    user_msg = ("请根据下面的素材描述，写一段用于「把视频里的人换成参考图中的人」的 MiniMax-H3 提示词。\n"
+    _miss = ("（用户未填写，请按通用替换场景处理）" if kind
+             else "（用户未填写，请按通用换人场景处理）")
+    v = str(video_desc or "").strip() or _miss
+    i = str(image_desc or "").strip() or _miss
+    lead = (kind[2] if kind else
+            "请根据下面的素材描述，写一段用于「把视频里的人换成参考图中的人」的 MiniMax-H3 提示词。")
+    user_msg = (f"{lead}\n"
                 "必须严格使用 ===H3_PROMPT=== 结构，并用 [SHOT_START] / [SHOT_END] 包裹。\n\n"
                 f"【视频描述】\n{v}\n\n【图片描述】\n{i}")
     text = _swap_llm_call(prompt_cfg, skill, user_msg, tag)
@@ -579,7 +693,7 @@ _SWAP_DEFAULTS = {
     # 📝 提示词预设：LLM 增强 + 提示词来源
     "prompt_cfg": {
         "use_llm": False,
-        "source": "系统默认",              # 系统默认 | 内置skill | 自定义skill
+        "source": "系统默认",              # 系统默认 | 内置skill | 内置skill·动物 | 自定义skill
         "skill": "",                       # 自定义 skill 文件名（skills/jzl/*.md）
         "llm_backend": "在线API [api]",    # 本地模型 [local] | 在线API [api]
         # 本地文本生成 = 官方「Load CLIP」+「Generate Text」（CLIP 文本编码器，不是 gguf）
