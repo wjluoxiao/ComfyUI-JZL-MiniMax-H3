@@ -39,7 +39,7 @@ KIND_LABELS = {"image": "参考图", "audio": "参考音频", "video": "参考�
 # 每类槽位可选数量档位（与前端「界面设置」一致）；槽位数组始终按上限长度保存，
 # 只改「用几个」不丢已有素材，数量调回去素材还在。
 KIND_COUNT_OPTIONS = {
-    "image": (1, 2, 4, 6, 9),
+    "image": (1, 2, 3, 4, 6, 8, 9),
     "audio": (1, 2, 3),
     "video": (1, 2, 3),
 }
@@ -97,7 +97,8 @@ def _default_settings():
         "audios": [{"path": "", "enabled": True, "start": 0.0, "duration": 0.0}
                    for _ in range(AUDIO_COUNT)],
         "videos": [{"path": "", "enabled": True, "force_rate": 0.0, "skip": 0,
-                    "width": 0, "height": 0, "cap": 0} for _ in range(VIDEO_COUNT)],
+                    "width": 0, "height": 0, "cap": 0, "audio_enabled": True}
+                   for _ in range(VIDEO_COUNT)],
     }
 
 
@@ -187,6 +188,8 @@ def parse_settings(raw):
         "width": _as_int(it.get("width"), 0, 0),
         "height": _as_int(it.get("height"), 0, 0),
         "cap": _as_int(it.get("cap"), 0, 0),
+        # 旧工作流没有该字段 → 默认开启（保持原有行为）
+        "audio_enabled": _as_bool(it.get("audio_enabled"), True),
     } for it in _slot_list(data, "videos", VIDEO_COUNT)]
 
     return {"version": 2, "layout": _parse_layout(data.get("layout")),
@@ -507,7 +510,7 @@ class JZL_MiniMaxH3MediaLoader:
         # 参考图 → ref_image_0..8（只取布局里启用的前 N 个；整块隐藏则全部留空）
         if not hidden["image"]:
             for i, item in enumerate(cfg["images"][:counts["image"]]):
-                enabled = item["enabled"]
+                enabled = True   # 槽位不再支持「禁用」：界面已改为「加载/替换」，禁用会在总线留空洞
                 path = resolve_media_path(item["path"])
                 if enabled:
                     report["image"][1] += 1
@@ -524,7 +527,7 @@ class JZL_MiniMaxH3MediaLoader:
         # 参考视频 → ref_video_0..2 + ref_video_audio_0..2
         if not hidden["video"]:
             for i, item in enumerate(cfg["videos"][:counts["video"]]):
-                enabled = item["enabled"]
+                enabled = True   # 槽位不再支持「禁用」：界面已改为「加载/替换」，禁用会在总线留空洞
                 path = resolve_media_path(item["path"])
                 if enabled:
                     report["video"][1] += 1
@@ -541,6 +544,11 @@ class JZL_MiniMaxH3MediaLoader:
                     errors.append("视频%d：%s" % (i + 1, exc))
                 # 音轨跟着画面裁：跳过帧数 / 帧数上限 换算成秒，视频裁到哪音轨裁到哪
                 # （否则画面只取 5 帧、声音却是整段，下游会以为「帧数上限没生效」）
+                # audio_enabled=False → 该槽位直接传 None；键名固定是 ref_video_audio_i，
+                # 只把这一格清空，其他视频的音轨仍然落在自己原来的槽位上（不会前移）。
+                if not item["audio_enabled"]:
+                    bus["ref_video_audio_%d" % i] = None
+                    continue
                 try:
                     rate = video_effective_rate(path, item["force_rate"])
                     a_start = (item["skip"] / rate) if rate > 0 else 0.0
@@ -553,7 +561,7 @@ class JZL_MiniMaxH3MediaLoader:
         # 独立音频 → ref_audio_0..2
         if not hidden["audio"]:
             for i, item in enumerate(cfg["audios"][:counts["audio"]]):
-                enabled = item["enabled"]
+                enabled = True   # 槽位不再支持「禁用」：界面已改为「加载/替换」，禁用会在总线留空洞
                 path = resolve_media_path(item["path"])
                 if enabled:
                     report["audio"][1] += 1

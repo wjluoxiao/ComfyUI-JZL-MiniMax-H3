@@ -104,7 +104,7 @@ _JZL_IMPORT_GROUPS = (
                                   "_read_asset_settings", "_write_asset_settings",
                                   "_read_manager_settings", "_write_manager_settings",
                                   "_resolve_asset_path", "_safe_story_name", "_load_last_script")),
-        (".nodes_character_swap", ("JZL_MiniMaxCharacterSwap",)),
+        (".nodes_character_swap", ("JZL_MiniMaxCharacterSwap", "JZL_MiniMaxVideoEdit")),
     )),
     ("音乐", False, (
         (".nodes_music", ("JZL_MiniMaxMusicCaption", "JZL_MiniMaxMusicCaptionDuet")),
@@ -276,6 +276,7 @@ _JZL_NODE_TABLE = (
     ("JZL_MiniMaxAssetManagerMax", "JZL - 🤖 MiniMax-H3短剧导演台Max"),
     ("JZL_MiniMaxAssetManagerInfinite", "JZL - 🤖 MiniMax-H3无限时长"),
     ("JZL_MiniMaxCharacterSwap", "JZL - 🎭 MiniMax-H3人物替换"),
+    ("JZL_MiniMaxVideoEdit", "JZL - 🎭 MiniMax-H3视频编辑"),
     ("JZL_MiniMaxAssetManagerShortDrama", "JZL - 🤖 MiniMax-H3短剧导演台"),
     ("JZL_MiniMaxAssetManagerMini", "JZL - 🤖 MiniMax-H3短剧导演台Mini"),
     ("JZL_MiniMaxVideoSaveDistributor", "JZL - 💾 视频保存分配"),

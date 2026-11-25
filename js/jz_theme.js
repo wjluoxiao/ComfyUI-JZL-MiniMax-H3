@@ -34,6 +34,8 @@ const PALETTE = {
     "--jz-tint-error": ["#7a2a2a", "#fdeaea"],
     "--jz-panel-2": ["#2f3540", "#eceef2"],
     "--jz-inset": ["#141414", "#f5f6f8"],
+    // 与提示词输入框一致的底色（ComfyUI 用 --comfy-input-bg，这里是兜底值）
+    "--jz-surface": ["#222222", "#ffffff"],
     "--jz-float": ["#2a2a2e", "#ffffff"],
     "--jz-btn-warn": ["#b45309", "#c2410c"],
     "--jz-btn-primary": ["#2d5a88", "#1f6fd0"],

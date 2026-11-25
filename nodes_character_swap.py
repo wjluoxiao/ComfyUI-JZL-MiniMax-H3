@@ -79,17 +79,18 @@ TAG = "人物替换"
 DEFAULT_OUT_PREFIX = "视频/人物替换"
 
 
-def _resolve_out_prefix(prefix, out_root):
+def _resolve_out_prefix(prefix, out_root, fallback_name="人物替换"):
     """把「视频/人物替换」拆成 (落盘目录, 文件名前缀)。
 
     前几段是 output 下的相对目录（可多级），最后一段是文件名前缀。
     `..` / 盘符 / 前导斜杠都会被丢掉，保证不会写到 output 之外。
+    fallback_name：前缀被清空时的兜底文件名（人物替换 / 视频编辑 各自用自己那个）。
     """
     raw = str(prefix or "").replace("\\", "/").strip().strip("/")
     parts = [_safe_story_name(p) for p in raw.split("/")
              if p and p not in (".", "..") and not p.endswith(":")]
     if not parts:
-        return out_root, _safe_story_name(DEFAULT_OUT_PREFIX.split("/")[-1])
+        return out_root, _safe_story_name(fallback_name)
     name = parts[-1]
     sub = os.path.join(out_root, *parts[:-1]) if len(parts) > 1 else out_root
     return sub, name
@@ -1425,7 +1426,8 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
             use_second = False
 
         out_root = os.path.abspath(folder_paths.get_output_directory())
-        out_dir, safe_story = _resolve_out_prefix(story_name, out_root)
+        out_dir, safe_story = _resolve_out_prefix(
+            story_name, out_root, getattr(cls, "OUT_FALLBACK", DEFAULT_OUT_PREFIX.split("/")[-1]))
         os.makedirs(out_dir, exist_ok=True)
         batch = _next_batch(out_dir, safe_story)
         counter0 = _next_counter(out_dir, f"{safe_story}_{batch}次生成分段")
@@ -1737,3 +1739,115 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                   f"「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条", flush=True)
         return io.NodeOutput(videos, ui={"jzl_swap_prompt": [prompt],
                                          "jzl_swap_seed": [str(seed_i)]})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  🎬 视频编辑（JZL_MiniMaxVideoEdit）
+#  与「🎭 人物替换」1:1 同一套实现，唯一区别是**素材怎么进来**：
+#    人物替换要接 4 类端口（模型 / 源视频 / 源原声 / 定妆图×9）；
+#    视频编辑只要一条「素材总线」—— 内部就是 ref2va 参考总线（解包）那 18 个端口，
+#    所以把「JZL - 📥 MiniMax 素材加载」接上来，视频 / 原声 / 图片一次全进。
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEFAULT_VIDEO_EDIT_OUT_PREFIX = "视频/视频编辑"
+
+# ref2va 参考总线的端口名（与 nodes_ref2va_bus.BUS_KEYS 完全一致；tests 里有对拍用例防漂移）
+_BUS_IMAGE_KEYS = tuple(f"ref_image_{i}" for i in range(9))
+_BUS_VIDEO_KEYS = tuple(f"ref_video_{i}" for i in range(3))
+_BUS_VIDEO_AUDIO_KEYS = tuple(f"ref_video_audio_{i}" for i in range(3))
+_BUS_AUDIO_KEYS = tuple(f"ref_audio_{i}" for i in range(3))
+
+
+def _bus_media(bus):
+    """把 ref2va 参考总线拆成「源视频 / 源原声 / 定妆图」三样。
+
+    取第一个非空的 ref_video_N 当要编辑的源片（通常就是「素材加载」的视频1），
+    与它同槽位的 ref_video_audio_N 就是源原声；参考图按 1~9 原样交出去（None 由上游跳过）。
+    返回 (源视频, 源原声, 参考图 dict, 源视频槽位下标)。
+    """
+    bus = bus if isinstance(bus, dict) else {}
+    ref_images = {k: bus.get(k) for k in _BUS_IMAGE_KEYS}
+    source_video, source_audio, slot = None, None, -1
+    for i, key in enumerate(_BUS_VIDEO_KEYS):
+        video = bus.get(key)
+        if video is None:
+            continue
+        source_video, source_audio, slot = video, bus.get(_BUS_VIDEO_AUDIO_KEYS[i]), i
+        break
+    return source_video, source_audio, ref_images, slot
+
+
+class JZL_MiniMaxVideoEdit(JZL_MiniMaxCharacterSwap):
+    """视频编辑：整片一次采样 + 逐窗口重叠混合，素材全部从「ref2va 参考总线」进。"""
+
+    # 前缀被清空时的兜底文件名（人物替换 → 视频编辑）
+    OUT_FALLBACK = "视频编辑"
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="JZL_MiniMaxVideoEdit",
+            display_name="JZL - 🎭 MiniMax-H3视频编辑",
+            category="JZL/MiniMax",
+            description=("与「🎭 MiniMax-H3人物替换」1:1 同一套流程（整片一次采样、逐窗口重叠混合、"
+                         "长片分块解码逐段落盘、保留原声），素材改为从一条「素材总线」进："
+                         "把「JZL - 📥 MiniMax 素材加载」接上，源视频 / 原声 / 定妆图 一次全部带进来。"),
+            inputs=[
+                io.Model.Input("model", display_name="主模型"),
+                io.Clip.Input("clip", display_name="CLIP"),
+                io.Vae.Input("vae", display_name="视觉VAE"),
+                io.Vae.Input("audio_vae", display_name="音频VAE（生成音频时才要）", optional=True,
+                    tooltip="「🎨 视频参数设置 → 声音来源」选「生成音频」时必须接，用来解码模型音轨；"
+                            "选「使用原声」时完全不使用它（latent 音频不解码），可以留空。"),
+                io.Custom("JZL_REF2VA_BUS").Input("bus", display_name="素材总线",
+                    tooltip="接「JZL - 📥 MiniMax 素材加载」的输出。\n"
+                            "视频1 → 要编辑的源视频（同槽位的音轨 → 源原声）；图片 1~9 → 替换/编辑用的定妆图。\n"
+                            "（内部已完成 ref2va参考总线（解包），不需要再单独接解包节点）"),
+                io.String.Input("story_name", default=DEFAULT_VIDEO_EDIT_OUT_PREFIX, display_name="分段输出",
+                    tooltip="文件名前缀，格式「文件夹/视频名称」，例如 视频/视频编辑 → "
+                            "落盘到 output/视频/ 下，文件名以 视频编辑 开头。（在「🎬 生成视频管理」面板里修改）"),
+                io.String.Input("manager_settings", display_name="节点配置", multiline=True,
+                    socketless=True, default="",
+                    tooltip="本节点完整配置 JSON（由 🎨 视频参数设置 / 🎭 采样解码设置 / 🎬 生成视频管理 写入），随工作流保存"),
+                io.String.Input("video_desc", multiline=True, default="",
+                    display_name="视频描述",
+                    tooltip="这段源视频里发生了什么：主体/动作/场景/镜头/光线/节奏。\n"
+                            "「📝 提示词预设 → 提示词来源」选「内置skill / 自定义skill」时会交给 LLM 写完整提示词；"
+                            "选「系统默认」时被填进内置模板的 detailed_description 段。"),
+                io.String.Input("image_desc", multiline=True, default="",
+                    display_name="图片描述",
+                    tooltip="参考图里的主体长什么样：发型/脸型/服装/配饰/配色/年龄气质。越具体越像。"),
+            ],
+            outputs=[
+                io.Video.Output(
+                    "videos", display_name="批量视频", is_output_list=True,
+                    tooltip="本次落盘的每一段（VIDEO 指向文件，不占内存）。"
+                            "直接接「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条。"),
+            ],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, bus=None, video_desc="", image_desc="",
+                story_name=DEFAULT_VIDEO_EDIT_OUT_PREFIX, manager_settings="",
+                model=None, clip=None, vae=None, audio_vae=None) -> io.NodeOutput:
+        # 整段流程复用父类（1:1 同一套实现）；把日志标签临时切成「视频编辑」，
+        # 否则这个节点跑起来满屏都是「人物替换」，排障时容易看错节点。
+        global TAG
+        _saved_tag, TAG = TAG, "视频编辑"
+        try:
+            source_video, source_audio, ref_images, slot = _bus_media(bus)
+            if source_video is None:
+                raise ValueError("「素材总线」里没有源视频：请把「JZL - 📥 MiniMax 素材加载」的"
+                                 "「视频1」（或任一视频槽位）填上素材后再运行")
+            n_img = sum(1 for v in ref_images.values() if v is not None)
+            print(f"[JZL-{TAG}] 素材总线：源视频 = 视频{slot + 1}"
+                  f"｜源原声 = {'有' if source_audio is not None else '无'}"
+                  f"｜参考图 {n_img} 张", flush=True)
+            return super().execute(
+                source_video=source_video, video_desc=video_desc, image_desc=image_desc,
+                story_name=story_name, manager_settings=manager_settings,
+                ref_images=ref_images, source_audio=source_audio,
+                model=model, clip=clip, vae=vae, audio_vae=audio_vae)
+        finally:
+            TAG = _saved_tag

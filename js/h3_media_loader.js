@@ -23,11 +23,13 @@ const VIDEO_THUMB = "/jzl/asset_video_thumb";
 const IMG_COUNT = 9;
 const AUDIO_COUNT = 3;
 const VIDEO_COUNT = 3;
+// 面板的设计宽度：节点宽度 ÷ 它 = 整体缩放比（zoom），实现「等比例变大」
+const PANEL_BASE_W = 750;
 
 // 三个模块：顺序可拖拽调整，数量可选，可整块隐藏（至少留一个）
 const KIND_ORDER = ["image", "audio", "video"];
 const KIND_META = {
-    image: { icon: "🖼️", label: "参考图", ratio: "1 / 1", options: [1, 2, 4, 6, 9], max: 9 },
+    image: { icon: "🖼️", label: "参考图", ratio: "1 / 1", options: [1, 2, 3, 4, 6, 8, 9], max: 9 },
     audio: { icon: "🎧", label: "参考音频", ratio: "2 / 1", options: [1, 2, 3], max: 3 },
     video: { icon: "🎬", label: "参考视频", ratio: "1 / 1", options: [1, 2, 3], max: 3 },
 };
@@ -60,6 +62,13 @@ const VIDEO_FIELDS = [
         hint: "0 = 不限制（后端另有 6000 帧安全上限）；视频音轨同步裁到相同长度",
     },
 ];
+
+// 视频卡片额外带一个「音轨」开关（不进数字字段列表，单独渲染一行）
+const VIDEO_AUDIO_FIELD = {
+    key: "audio_enabled",
+    label: "视频音轨",
+    hint: "关闭后该视频的 ref_video_audio_N 传 None（槽位不会挪位，其他视频的音轨不受影响）",
+};
 
 const AUDIO_FIELDS = [
     {
@@ -196,6 +205,7 @@ function defaultSettings() {
         })),
         videos: Array.from({ length: VIDEO_COUNT }, () => ({
             path: "", enabled: true, force_rate: 0, skip: 0, width: 0, height: 0, cap: 0,
+            audio_enabled: true,
         })),
     };
 }
@@ -246,22 +256,24 @@ function normalizeSettings(raw) {
 
     base.images = fill(src.images, base.images, (it) => ({
         path: String(it.path || ""),
-        enabled: it.enabled !== false,
+        enabled: true,
     }));
     base.audios = fill(src.audios, base.audios, (it) => ({
         path: String(it.path || ""),
-        enabled: it.enabled !== false,
+        enabled: true,
         start: Math.max(0, toNum(it.start, 0)),
         duration: Math.max(0, toNum(it.duration, 0)),
     }));
     base.videos = fill(src.videos, base.videos, (it) => ({
         path: String(it.path || ""),
-        enabled: it.enabled !== false,
+        enabled: true,
         force_rate: Math.max(0, toNum(it.force_rate, 0)),
         skip: Math.max(0, Math.round(toNum(it.skip, 0))),
         width: Math.max(0, Math.round(toNum(it.width, 0))),
         height: Math.max(0, Math.round(toNum(it.height, 0))),
         cap: Math.max(0, Math.round(toNum(it.cap, 0))),
+        // 旧工作流没有这个字段 → 默认开启（保持原有行为）
+        audio_enabled: it.audio_enabled !== false,
     }));
     return base;
 }
@@ -282,7 +294,9 @@ function readSettings(node) {
 function persistSettings(node) {
     const st = node.__h3m;
     if (!st) return;
-    setWidgetValue(node, st.widget, JSON.stringify(st.settings));
+    const json = JSON.stringify(st.settings);
+    st.lastRaw = json;   // 主动写入 → 同步看门狗不必再重读
+    setWidgetValue(node, st.widget, json);
 }
 
 // 当前布局（顺序 / 数量 / 是否隐藏）—— 会随工作流保存，不会被重绘冲掉
@@ -292,11 +306,10 @@ function getLayout(node) {
     return s.layout;
 }
 
-// 网格列数：1/2 个一行铺满；4 个 2 列（2×2）；3/6/9 个 3 列
+// 网格列数：按数量选最紧凑的排布（1→1列，8→4×2，3/6/9→3列，4→2×2）
+const GRID_COLUMNS = { 1: 1, 2: 2, 3: 3, 4: 2, 6: 3, 8: 4, 9: 3 };
 function gridColumns(count) {
-    if (count <= 1) return 1;
-    if (count === 2 || count === 4) return 2;
-    return 3;
+    return GRID_COLUMNS[count] || 3;
 }
 
 // ── 上传 / 预览地址 ───────────────────────────────────────
@@ -394,38 +407,92 @@ function numberBadge(text) {
     ].join(";"), text);
 }
 
-function toggleSwitch(enabled, onChange) {
+// 右上角按钮：空槽 →「加载」，已有素材 →「替换」
+function loadReplaceButton(hasMedia, onClick) {
     const btn = el("button", [
         "position:absolute", "right:5px", "top:5px", "z-index:4",
-        "width:32px", "height:17px", "padding:0", "border-radius:9px",
-        "border:1px solid rgba(255,255,255,.5)", "cursor:pointer",
-        "display:flex", "align-items:center", "transition:background .15s",
-        "background:rgba(0,0,0,.45)",
-    ].join(";"));
-    btn.title = "开启 / 关闭本槽位";
-    const knob = el("span", [
-        "width:13px", "height:13px", "border-radius:50%", "background:#fff",
-        "position:absolute", "left:2px", "transition:left .15s, background .15s",
-        "box-shadow:0 1px 3px rgba(0,0,0,.5)",
-    ].join(";"));
-    btn.appendChild(knob);
-    const paint = (on) => {
-        btn.style.background = on ? "rgba(45,160,95,.85)" : "rgba(0,0,0,.45)";
-        knob.style.left = on ? "16px" : "2px";
-        knob.style.background = on ? "#fff" : "rgba(255,255,255,.72)";
-    };
-    paint(!!enabled);
+        "height:18px", "padding:0 7px", "border-radius:5px",
+        "border:1px solid rgba(255,255,255,.42)",
+        "background:" + (hasMedia ? "rgba(35,100,170,.88)" : "rgba(0,0,0,.55)"),
+        "color:#fff", "font-size:10px", "line-height:1", "cursor:pointer",
+        "white-space:nowrap", "box-shadow:0 1px 3px rgba(0,0,0,.45)",
+    ].join(";"), hasMedia ? "替换" : "加载");
+    btn.title = hasMedia ? "替换当前素材（点击选择新文件）" : "加载素材（点击选择文件）";
+    btn.dataset.h3mAction = "1";
     btn.addEventListener("mousedown", (e) => e.stopPropagation());
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
     btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const next = !btn.__h3mOn;
-        btn.__h3mOn = next;
-        paint(next);
-        onChange(next);
+        onClick();
     });
-    btn.__h3mOn = !!enabled;
     return btn;
 }
+
+// 大图预览：图片点开后在遮罩里看原图（ESC / 点遮罩关闭）
+const IMAGE_VIEWER_ID = "jzl-h3m-image-viewer";
+
+function openImagePreview(path, name) {
+    document.getElementById(IMAGE_VIEWER_ID)?.remove();
+    const overlay = el("div", [
+        "position:fixed", "inset:0", "z-index:100001", "background:rgba(0,0,0,.88)",
+        "display:flex", "flex-direction:column", "align-items:center",
+        "justify-content:center", "gap:10px", "padding:24px", "box-sizing:border-box",
+    ].join(";"));
+    overlay.id = IMAGE_VIEWER_ID;
+    overlay.title = "点击空白处或按 ESC 关闭";
+
+    const img = el("img", [
+        "max-width:100%", "max-height:calc(100% - 44px)", "object-fit:contain",
+        "display:block", "border-radius:4px", "box-shadow:0 8px 40px rgba(0,0,0,.7)",
+        "background:#111",
+    ].join(";"));
+    img.src = `/jzl/asset_full?path=${encodeURIComponent(path)}`;
+    img.draggable = false;
+    img.addEventListener("mousedown", (e) => e.stopPropagation());
+    overlay.appendChild(img);
+
+    const bar = el("div", [
+        "position:absolute", "left:0", "right:0", "bottom:0", "height:38px",
+        "display:flex", "align-items:center", "gap:10px", "padding:0 16px",
+        "background:linear-gradient(0deg, rgba(0,0,0,.75), rgba(0,0,0,0))",
+        "color:#ddd", "font-size:11px",
+    ].join(";"));
+    const nameTxt = el("div", "flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;", name || "");
+    nameTxt.title = path;
+    bar.appendChild(nameTxt);
+    const closeBtn = el("button", [
+        "flex:0 0 auto", "height:22px", "padding:0 12px", "border-radius:6px",
+        "border:1px solid rgba(255,255,255,.35)", "background:rgba(0,0,0,.6)",
+        "color:#fff", "font-size:11px", "cursor:pointer",
+    ].join(";"), "关闭 (ESC)");
+    closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeImagePreview(); });
+    bar.appendChild(closeBtn);
+    overlay.appendChild(bar);
+
+    img.addEventListener("error", () => {
+        img.replaceWith(el("div", "color:#e08a8a;font-size:13px;", "图片无法打开：" + path));
+    });
+
+    overlay.addEventListener("mousedown", () => closeImagePreview());
+    document.body.appendChild(overlay);
+    window.addEventListener("keydown", imageViewerEsc, true);
+}
+
+function imageViewerEsc(e) {
+    if (e.key !== "Escape") return;
+    const box = document.getElementById(IMAGE_VIEWER_ID);
+    if (!box) return;
+    e.stopPropagation();
+    e.preventDefault();
+    closeImagePreview();
+}
+
+function closeImagePreview() {
+    window.removeEventListener("keydown", imageViewerEsc, true);
+    document.getElementById(IMAGE_VIEWER_ID)?.remove();
+}
+
 
 function clearButton(onClick) {
     const btn = el("button", [
@@ -447,7 +514,7 @@ function clearButton(onClick) {
 function slotShell(css) {
     const cell = el("div", [
         "position:relative", "border-radius:8px", "overflow:hidden",
-        "border:1px solid var(--jz-border)", "background:var(--jz-inset)",
+        "border:1px solid var(--jz-border)", "background:var(--jz-bg-raise)",
         "box-sizing:border-box", "cursor:pointer",
         ...css,
     ].join(";"));
@@ -461,11 +528,10 @@ function slotShell(css) {
 }
 
 function applyEnabledLook(cell, enabled, hasMedia) {
-    cell.style.opacity = enabled ? "1" : ".42";
-    cell.style.filter = enabled ? "none" : "grayscale(85%)";
-    cell.style.borderColor = hasMedia
-        ? (enabled ? "var(--jz-border)" : "var(--jz-border)")
-        : "var(--jz-border)";
+    // 槽位不再有「禁用」概念：所有素材都会传递，避免总线槽位出现空洞导致编号错位
+    cell.style.opacity = "1";
+    cell.style.filter = "none";
+    cell.style.borderColor = "var(--jz-border)";
 }
 
 // ── 图片槽位（正方形，长边自适应） ─────────────────────────
@@ -474,11 +540,13 @@ function renderImageSlot(node, index, cell) {
     const settings = readSettings(node);
     const item = settings.images[index];
     cell.innerHTML = "";
+    const hasMedia = !!item.path;
+    cell.__h3mHasMedia = hasMedia;
 
-    const box = el("div", "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0b0d;");
+    const box = el("div", "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--comfy-input-bg, var(--jz-surface));");
     cell.appendChild(box);
 
-    if (item.path) {
+    if (hasMedia) {
         const img = el("img", "max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;display:block;");
         img.src = previewUrl("image", item.path);
         img.draggable = false;
@@ -488,32 +556,35 @@ function renderImageSlot(node, index, cell) {
                 "图片无法预览\n" + fileNameOf(item.path)));
         };
         box.appendChild(img);
+        // 有素材：点击画面 = 打开大图预览（换素材用右上角「替换」按钮）
+        box.style.cursor = "zoom-in";
+        box.title = "点击查看大图";
+        box.addEventListener("mousedown", (e) => e.stopPropagation());
+        box.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openImagePreview(item.path, fileNameOf(item.path));
+        });
     } else {
         box.appendChild(el("div", "color:var(--jz-text-dim);font-size:12px;text-align:center;line-height:1.5;", "＋\n点击或拖入图片"));
     }
 
     // 文件名（底部渐隐条）
-    if (item.path) {
+    if (hasMedia) {
         const nameRow = el("div", [
             "position:absolute", "left:0", "right:0", "bottom:0", "z-index:2",
             "padding:8px 5px 3px", "font-size:10px", "color:#eaeaea", "line-height:1.2",
             "background:linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.72) 70%)",
             "white-space:nowrap", "overflow:hidden", "text-overflow:ellipsis",
-            "pointer-events:none",
+            "pointer-events:none", "padding-right:26px",
         ].join(";"), fileNameOf(item.path));
         nameRow.title = item.path;
         cell.appendChild(nameRow);
     }
 
     cell.appendChild(numberBadge(String(index + 1)));
-    cell.appendChild(toggleSwitch(item.enabled, (on) => {
-        const s = readSettings(node);
-        s.images[index].enabled = on;
-        persistSettings(node);
-        renderSlot(node, "image", index);
-    }));
+    cell.appendChild(loadReplaceButton(hasMedia, () => pickFile(node, "image", index)));
 
-    if (item.path) {
+    if (hasMedia) {
         const clr = clearButton(() => {
             const s = readSettings(node);
             s.images[index].path = "";
@@ -524,8 +595,8 @@ function renderImageSlot(node, index, cell) {
         cell.appendChild(clr);
     }
 
-    applyEnabledLook(cell, item.enabled, !!item.path);
-    cell.title = item.path ? `${item.path}\n点击可更换图片` : "点击选择图片（也可直接拖入）";
+    applyEnabledLook(cell, true, hasMedia);
+    cell.title = hasMedia ? `${item.path}\n点击查看大图 ｜ 右上角「替换」换图` : "点击选择图片（也可直接拖入）";
 }
 
 // ── 音频槽位（预览窗 2:1，带播放进度条） ────────────────────
@@ -534,17 +605,19 @@ function renderAudioSlot(node, index, cell) {
     const settings = readSettings(node);
     const item = settings.audios[index];
     cell.innerHTML = "";
+    const hasMedia = !!item.path;
+    cell.__h3mHasMedia = hasMedia;
 
     const body = el("div", [
         "position:absolute", "inset:0", "display:flex", "flex-direction:column",
-        "justify-content:center", "gap:4px", "padding:5px 8px 24px", "box-sizing:border-box",
-        "background:var(--jz-bg-soft)",
+        "justify-content:center", "gap:2px", "padding:5px 8px 23px", "box-sizing:border-box",
+        "background:var(--comfy-input-bg, var(--jz-surface))",
     ].join(";"));
     cell.appendChild(body);
 
-    // 第一行：文件名 + 播放进度时间（同一行，2:1 的矮窗口才放得下）
+    // 第一行：文件名（独占一行，右侧给「加载/替换」按钮留位）
     const nameRow = el("div", [
-        "display:flex", "align-items:baseline", "gap:6px", "min-width:0",
+        "display:flex", "align-items:baseline", "gap:6px", "min-width:0", "padding-right:44px",
     ].join(";"));
     const nameText = el("div", [
         "flex:1 1 auto", "min-width:0", "font-size:11px", "color:var(--jz-text)",
@@ -552,23 +625,19 @@ function renderAudioSlot(node, index, cell) {
     ].join(";"), item.path ? `🎧 ${fileNameOf(item.path)}` : "🎧 点击或拖入音频");
     nameText.title = item.path || "";
     nameRow.appendChild(nameText);
+    // 时长信息放到进度条下面（见下方 infoRow），这里先建好元素
     const timeRow = el("div", [
-        "flex:0 0 auto", "font-size:9px", "color:var(--jz-text-dim)",
-        "white-space:nowrap", "font-variant-numeric:tabular-nums",
+        "flex:1 1 auto", "min-width:0", "font-size:9px", "color:var(--jz-text-dim)",
+        "white-space:nowrap", "overflow:hidden", "text-overflow:ellipsis",
+        "font-variant-numeric:tabular-nums",
     ].join(";"), "");
-    nameRow.appendChild(timeRow);
     body.appendChild(nameRow);
 
-    if (!item.path) {
+    if (!hasMedia) {
         body.appendChild(el("div", "font-size:11px;color:var(--jz-text-dim);", "未载入素材"));
         cell.appendChild(numberBadge(String(index + 1)));
-        cell.appendChild(toggleSwitch(item.enabled, (on) => {
-            const s = readSettings(node);
-            s.audios[index].enabled = on;
-            persistSettings(node);
-            renderSlot(node, "audio", index);
-        }));
-        applyEnabledLook(cell, item.enabled, false);
+        cell.appendChild(loadReplaceButton(false, () => pickFile(node, "audio", index)));
+        applyEnabledLook(cell, true, false);
         return;
     }
 
@@ -593,7 +662,7 @@ function renderAudioSlot(node, index, cell) {
 
     const track = el("div", [
         "position:relative", "flex:1 1 auto", "min-width:0", "height:7px", "border-radius:4px",
-        "background:var(--jz-bg-deep)", "border:1px solid var(--jz-border)",
+        "background:rgba(0,0,0,.28)", "border:1px solid var(--jz-border)",
         "cursor:pointer", "overflow:hidden",
     ].join(";"));
     const trimRange = el("div", [
@@ -609,6 +678,13 @@ function renderAudioSlot(node, index, cell) {
     row.appendChild(track);
     body.appendChild(row);
 
+    // 第三行：时长 / 取用区间（放在进度条下面，宽度够，能显示完整信息）
+    const infoRow = el("div", [
+        "display:flex", "align-items:center", "min-width:0", "padding-left:25px",
+    ].join(";"));
+    infoRow.appendChild(timeRow);
+    body.appendChild(infoRow);
+
     const start = Math.max(0, toNum(item.start, 0));
     const dur = Math.max(0, toNum(item.duration, 0));
     // 试听区间：start ~ start+dur（dur=0 → 到结尾）。播放只能在这个窗口里跑。
@@ -621,7 +697,7 @@ function renderAudioSlot(node, index, cell) {
         const pct = total > 0 ? clamp((cur / total) * 100, 0, 100) : 0;
         fill.style.width = `${pct}%`;
         const trimTo = dur > 0 ? Math.min(total || (start + dur), start + dur) : total;
-        timeRow.textContent = `${fmtTime(cur)}/${fmtTime(total)} 取${trimNum(start)}–${trimTo.toFixed(2)}s`;
+        timeRow.textContent = `${fmtTime(cur)} / ${fmtTime(total)} · 取 ${trimNum(start)}–${trimTo.toFixed(2)}s`;
         timeRow.title = `播放进度 ${fmtTime(cur)} / ${fmtTime(total)}；实际取用 ${trimNum(start)}–${trimTo.toFixed(2)} 秒`;
     };
 
@@ -730,12 +806,7 @@ function renderAudioSlot(node, index, cell) {
     cell.appendChild(footer);
 
     cell.appendChild(numberBadge(String(index + 1)));
-    cell.appendChild(toggleSwitch(item.enabled, (on) => {
-        const s = readSettings(node);
-        s.audios[index].enabled = on;
-        persistSettings(node);
-        renderSlot(node, "audio", index);
-    }));
+    cell.appendChild(loadReplaceButton(true, () => pickFile(node, "audio", index)));
 
     const clr = clearButton(() => {
         const s = readSettings(node);
@@ -747,7 +818,11 @@ function renderAudioSlot(node, index, cell) {
     clr.style.bottom = "26px";
     cell.appendChild(clr);
 
-    applyEnabledLook(cell, item.enabled, true);
+    // 有素材：点卡片空白处 = 播放 / 暂停（按钮、进度条、设置按钮各自 stopPropagation）
+    cell.__h3mClick = () => {
+        playBtn.dispatchEvent(new MouseEvent("click", { bubbles: false }));
+    };
+    applyEnabledLook(cell, true, true);
     paintTime();
 }
 
@@ -759,41 +834,163 @@ function videoSpecText(item) {
     if (item.skip > 0) parts.push(`跳${item.skip}`);
     parts.push((item.width || item.height) ? `${item.width || "auto"}×${item.height || "auto"}` : "原尺寸");
     parts.push(item.cap > 0 ? `${item.cap}帧` : "不限帧");
+    parts.push(item.audio_enabled === false ? "音轨关" : "音轨开");
     return parts.join(" · ");
+}
+
+// 视频卡片内的播放控制条（对齐官方「加载视频」：播放键 + 进度条 + 时间 + 喇叭）
+function fmtClock(sec) {
+    const s = Number.isFinite(sec) && sec > 0 ? sec : 0;
+    const m = Math.floor(s / 60);
+    const rest = Math.floor(s - m * 60);
+    return `${m}:${rest < 10 ? "0" : ""}${rest}`;
+}
+
+function videoControlBar(video) {
+    const bar = el("div", [
+        "position:absolute", "left:0", "right:0", "bottom:0", "z-index:3",
+        "display:flex", "align-items:center", "gap:5px", "padding:3px 6px 4px",
+        "box-sizing:border-box",
+        "background:linear-gradient(0deg, rgba(0,0,0,.8) 0%, rgba(0,0,0,.42) 55%, rgba(0,0,0,0) 100%)",
+    ].join(";"));
+    // 控制条上的任何点击都不该冒泡给格子（否则会再触发一次播放/暂停）
+    ["pointerdown", "mousedown", "click"].forEach((ev) =>
+        bar.addEventListener(ev, (e) => e.stopPropagation()));
+
+    const playBtn = el("button", [
+        "flex:0 0 auto", "width:18px", "height:18px", "padding:0", "border-radius:50%",
+        "border:1px solid rgba(255,255,255,.35)", "background:rgba(0,0,0,.45)",
+        "color:#fff", "font-size:8px", "cursor:pointer", "line-height:1",
+        "display:flex", "align-items:center", "justify-content:center",
+    ].join(";"), "▶");
+    playBtn.title = "播放 / 暂停";
+
+    const track = el("div", [
+        "position:relative", "flex:1 1 auto", "min-width:0", "height:6px", "border-radius:4px",
+        "background:rgba(255,255,255,.28)", "cursor:pointer", "overflow:hidden",
+    ].join(";"));
+    const fill = el("div", [
+        "position:absolute", "top:0", "bottom:0", "left:0", "width:0%",
+        "background:#fff", "pointer-events:none",
+    ].join(";"));
+    track.appendChild(fill);
+
+    const timeTxt = el("div", [
+        "flex:0 0 auto", "font-size:9px", "color:#fff", "white-space:nowrap",
+        "font-variant-numeric:tabular-nums", "text-shadow:0 1px 2px rgba(0,0,0,.8)",
+    ].join(";"), "0:00 / 0:00");
+
+    const muteBtn = el("button", [
+        "flex:0 0 auto", "width:16px", "height:16px", "padding:0", "border:none",
+        "background:transparent", "color:#fff", "font-size:10px", "cursor:pointer",
+        "line-height:1", "text-shadow:0 1px 2px rgba(0,0,0,.8)",
+    ].join(";"), "🔊");
+    muteBtn.title = "预览静音（不影响传给编码节点的音频）";
+
+    const paint = () => {
+        const total = Number.isFinite(video.duration) ? video.duration : 0;
+        const cur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+        fill.style.width = `${total > 0 ? clamp((cur / total) * 100, 0, 100) : 0}%`;
+        timeTxt.textContent = `${fmtClock(cur)} / ${fmtClock(total)}`;
+    };
+
+    playBtn.addEventListener("click", () => {
+        if (video.paused) {
+            document.querySelectorAll("video[data-h3m-video]").forEach((v) => {
+                if (v !== video) { try { v.pause(); } catch (_) {} }
+            });
+            video.dataset.h3mVideo = "1";
+            video.play().catch(() => {});
+        } else {
+            video.pause();
+        }
+    });
+    muteBtn.addEventListener("click", () => {
+        video.muted = !video.muted;
+        muteBtn.textContent = video.muted ? "🔇" : "🔊";
+    });
+
+    let seeking = false;
+    const seek = (ev) => {
+        const total = Number.isFinite(video.duration) ? video.duration : 0;
+        const rect = track.getBoundingClientRect();
+        if (!total || !rect.width) return;
+        const ratio = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
+        try { video.currentTime = ratio * total; } catch (_) {}
+        paint();
+    };
+    track.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        seeking = true;
+        try { track.setPointerCapture?.(e.pointerId); } catch (_) {}
+        seek(e);
+    });
+    track.addEventListener("pointermove", (e) => { if (seeking) seek(e); });
+    const endSeek = (e) => {
+        seeking = false;
+        try { track.releasePointerCapture?.(e.pointerId); } catch (_) {}
+    };
+    track.addEventListener("pointerup", endSeek);
+    track.addEventListener("pointercancel", endSeek);
+
+    video.addEventListener("timeupdate", paint);
+    video.addEventListener("durationchange", paint);
+    video.addEventListener("loadedmetadata", paint);
+    video.addEventListener("play", () => { playBtn.textContent = "❚❚"; });
+    video.addEventListener("pause", () => { playBtn.textContent = "▶"; });
+    video.addEventListener("ended", () => { playBtn.textContent = "▶"; paint(); });
+
+    bar.appendChild(playBtn);
+    bar.appendChild(track);
+    bar.appendChild(timeTxt);
+    bar.appendChild(muteBtn);
+    paint();
+    return bar;
 }
 
 function renderVideoSlot(node, index, cell) {
     const settings = readSettings(node);
     const item = settings.videos[index];
     cell.innerHTML = "";
+    const hasMedia = !!item.path;
+    cell.__h3mHasMedia = hasMedia;
 
     const preview = el("div", [
         "position:absolute", "left:0", "right:0", "top:0", "bottom:22px",
         "display:flex", "align-items:center", "justify-content:center",
-        "background:#0b0b0d",
+        "background:var(--comfy-input-bg, var(--jz-surface))",
     ].join(";"));
     cell.appendChild(preview);
 
-    if (item.path) {
+    // 舞台只放媒体本体：编码不支持时只替换这里，控制条不受影响
+    const stage = el("div", "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;");
+    preview.appendChild(stage);
+
+    let videoEl = null;
+    let ctrlBar = null;
+
+    if (hasMedia) {
         const thumb = videoThumbUrl(item.path);
         const video = document.createElement("video");
         video.src = previewUrl("video", item.path);
         video.poster = thumb;
-        video.muted = true;
-        video.loop = true;
+        // 视频自带音轨要能听到：不能 muted，否则「视频没声音」
+        video.muted = false;
+        video.volume = 1;
         video.playsInline = true;
         video.preload = "metadata";
         video.dataset.h3mVideo = "1";
         video.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;";
-        preview.appendChild(video);
+        stage.appendChild(video);
+        videoEl = video;
 
         const playHint = el("div", [
             "position:absolute", "left:50%", "top:50%", "transform:translate(-50%,-50%)",
-            "width:38px", "height:38px", "border-radius:50%", "background:rgba(0,0,0,.5)",
-            "color:#fff", "font-size:15px", "display:flex", "align-items:center",
+            "width:34px", "height:34px", "border-radius:50%", "background:rgba(0,0,0,.45)",
+            "color:#fff", "font-size:13px", "display:flex", "align-items:center",
             "justify-content:center", "pointer-events:none", "z-index:2",
         ].join(";"), "▶");
-        preview.appendChild(playHint);
+        stage.appendChild(playHint);
 
         video.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -809,21 +1006,26 @@ function renderVideoSlot(node, index, cell) {
         });
         video.addEventListener("play", () => { playHint.style.display = "none"; });
         video.addEventListener("pause", () => { playHint.style.display = "flex"; });
+
+        ctrlBar = videoControlBar(video);
+        preview.appendChild(ctrlBar);
+
         // 浏览器不支持该编码（HEVC/H.265 等）→ 首帧缩略图兜底，预览窗不会空白
         video.addEventListener("error", () => {
-            preview.innerHTML = "";
+            if (ctrlBar) ctrlBar.style.display = "none";
+            stage.innerHTML = "";
             const poster = el("img", "max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;display:block;");
             poster.src = thumb;
             poster.draggable = false;
-            preview.appendChild(poster);
-            preview.appendChild(el("div", [
+            stage.appendChild(poster);
+            stage.appendChild(el("div", [
                 "position:absolute", "left:0", "right:0", "bottom:0", "z-index:2",
                 "padding:3px 5px", "font-size:9px", "color:#e8c98a", "text-align:center",
                 "background:linear-gradient(0deg, rgba(0,0,0,.75), rgba(0,0,0,0))",
             ].join(";"), "首帧预览（浏览器不解该编码，不影响使用）"));
         });
     } else {
-        preview.appendChild(el("div", "color:var(--jz-text-dim);font-size:12px;text-align:center;line-height:1.5;",
+        stage.appendChild(el("div", "color:var(--jz-text-dim);font-size:12px;text-align:center;line-height:1.5;",
             "＋\n点击或拖入视频"));
     }
 
@@ -831,7 +1033,7 @@ function renderVideoSlot(node, index, cell) {
     const footer = el("div", [
         "position:absolute", "left:0", "right:0", "bottom:0", "height:22px", "z-index:3",
         "display:flex", "align-items:center", "gap:4px", "padding:0 5px",
-        "box-sizing:border-box", "background:var(--jz-bg-soft)",
+        "box-sizing:border-box", "background:var(--jz-bg-raise)",
         "border-top:1px solid var(--jz-border)",
     ].join(";"));
     const spec = el("div", [
@@ -856,14 +1058,11 @@ function renderVideoSlot(node, index, cell) {
     cell.appendChild(footer);
 
     cell.appendChild(numberBadge(String(index + 1)));
-    cell.appendChild(toggleSwitch(item.enabled, (on) => {
-        const s = readSettings(node);
-        s.videos[index].enabled = on;
-        persistSettings(node);
-        renderSlot(node, "video", index);
-    }));
+    cell.appendChild(loadReplaceButton(hasMedia, () => pickFile(node, "video", index)));
 
-    if (item.path) {
+    if (hasMedia && videoEl) {
+        // 有素材：点画面 = 播放 / 暂停
+        cell.__h3mClick = () => videoEl.dispatchEvent(new MouseEvent("click", { bubbles: false }));
         const clr = clearButton(() => {
             const s = readSettings(node);
             s.videos[index].path = "";
@@ -871,12 +1070,13 @@ function renderVideoSlot(node, index, cell) {
             renderSlot(node, "video", index);
         });
         clr.dataset.h3mClear = "1";
-        clr.style.bottom = "26px";
+        // 46px：避开底部 22px 参数栏 + 约 20px 播放控制条，否则会盖住喇叭按钮
+        clr.style.bottom = "46px";
         cell.appendChild(clr);
     }
 
-    applyEnabledLook(cell, item.enabled, !!item.path);
-    cell.title = item.path ? `${item.path}\n点击可更换视频` : "点击选择视频（也可直接拖入）";
+    applyEnabledLook(cell, true, hasMedia);
+    cell.title = hasMedia ? `${item.path}\n点击播放 / 暂停 ｜ 右上角「替换」换视频` : "点击选择视频（也可直接拖入）";
 }
 
 // ── 槽位渲染分发 ─────────────────────────────────────────
@@ -1024,6 +1224,48 @@ function openParamDialog(node, kind, index) {
         inputs[field.key] = { input, field, dec };
     }
 
+    // 视频卡片：音轨开关（只这一个模块有）
+    let audioToggleOn = null;
+    if (kind === "video") {
+        const row = el("div", "display:flex;align-items:center;gap:6px;margin:10px 0 4px;");
+        row.appendChild(el("div", "flex:0 0 72px;font-size:12px;color:var(--jz-text);", VIDEO_AUDIO_FIELD.label));
+
+        audioToggleOn = item.audio_enabled !== false;
+        const sw = el("button", [
+            "flex:0 0 auto", "width:46px", "height:24px", "padding:0", "position:relative",
+            "border-radius:12px", "cursor:pointer", "transition:background .15s",
+            "border:1px solid var(--jz-border)",
+        ].join(";"));
+        const knob = el("span", [
+            "position:absolute", "top:3px", "width:16px", "height:16px",
+            "border-radius:50%", "background:#fff", "transition:left .15s",
+            "box-shadow:0 1px 3px rgba(0,0,0,.45)",
+        ].join(";"));
+        sw.appendChild(knob);
+        const paintSw = () => {
+            sw.style.background = audioToggleOn ? "var(--jz-btn-ok)" : "var(--jz-bg-deep)";
+            knob.style.left = audioToggleOn ? "25px" : "3px";
+            sw.title = audioToggleOn ? "音轨开（点击关闭）" : "音轨关（点击开启）";
+        };
+        paintSw();
+        sw.addEventListener("click", (e) => {
+            e.preventDefault();
+            audioToggleOn = !audioToggleOn;
+            paintSw();
+        });
+        row.appendChild(sw);
+
+        const stateTxt = el("div", "flex:0 0 auto;font-size:11px;color:var(--jz-text-dim);", "");
+        const paintTxt = () => { stateTxt.textContent = audioToggleOn ? "开" : "关"; };
+        paintTxt();
+        row.appendChild(stateTxt);
+        sw.addEventListener("click", paintTxt);
+
+        panel.appendChild(row);
+        panel.appendChild(el("div", "font-size:10px;color:var(--jz-text-dim);margin:-2px 0 9px 78px;line-height:1.3;",
+            VIDEO_AUDIO_FIELD.hint));
+    }
+
     const btnRow = el("div", "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;");
     const cancel = el("button", [
         "height:28px", "padding:0 14px", "border-radius:6px",
@@ -1049,6 +1291,9 @@ function openParamDialog(node, kind, index) {
             if (field.max !== undefined) v = Math.min(field.max, v);
             // 按该字段步长的精度落库（音频 0.01 秒 → 两位小数）
             target[key] = dec === 0 ? Math.round(v) : Number(v.toFixed(dec));
+        }
+        if (kind === "video" && audioToggleOn !== null) {
+            target.audio_enabled = audioToggleOn;
         }
         persistSettings(node);
         closeDialog();
@@ -1084,9 +1329,9 @@ function applyLayout(node, layout) {
     renderAllSlots(node);
     const layoutNow = getLayout(node);
     if (st.dom && st.dom.element) {
-        // 顺序/数量变化后整体高度要重算（可能变高或变矮）
-        setTimeout(() => { try { st.fitPanelHeight?.(); } catch (_) {} }, 60);
-        setTimeout(() => { try { st.fitPanelHeight?.(); } catch (_) {} }, 320);
+        // 顺序/数量变化后整体高度要重算（可能变高，也可能变矮 → 允许收缩）
+        setTimeout(() => { try { st.fitPanelHeight?.(true); } catch (_) {} }, 60);
+        setTimeout(() => { try { st.fitPanelHeight?.(true); } catch (_) {} }, 320);
     }
     node.setDirtyCanvas?.(true, true);
     return layoutNow;
@@ -1314,6 +1559,11 @@ function buildSlotGrid(node, kind, count) {
         cell.addEventListener("click", (e) => {
             if (e.button !== 0) return;
             e.stopPropagation();
+            // 有素材：格子里的处理器（图片大图 / 音频播放 / 视频播放）自己管
+            if (cell.__h3mHasMedia) {
+                if (cell.__h3mClick) cell.__h3mClick();
+                return;
+            }
             pickFile(node, kind, i);
         });
         node.__h3m.cells[kind].push(cell);
@@ -1363,10 +1613,14 @@ function fillBody(node) {
 
 function buildPanel(node) {
     const container = el("div", [
-        "width:100%", "height:100%", "display:flex", "flex-direction:column", "gap:6px",
+        // 宽度用「设计宽度」，整体再由 zoom 等比放大到节点实际宽度，
+        // 这样文字/按钮/进度条会跟着节点一起变大，而不是只有格子变大
+        `width:${PANEL_BASE_W}px`, "display:flex", "flex-direction:column", "gap:6px",
         "padding:8px", "box-sizing:border-box",
         // 不留滚动条：内容高度由 fitPanelHeight 反映到节点高度上（永远全部可见）
-        "overflow:hidden", "background:var(--jz-bg)", "border-radius:8px",
+        // 底色跟提示词输入框一致（--comfy-input-bg，跟随 ComfyUI 主题）
+        "overflow:hidden", "background:var(--comfy-input-bg, var(--jz-surface))",
+        "border-radius:8px",
     ].join(";"));
     container.addEventListener("pointerdown", (e) => e.stopPropagation());
     container.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -1400,6 +1654,7 @@ function setupMediaLoader(node) {
     node.__h3m = {
         settings: normalizeSettings(readWidgetValue(widget)),
         widget,
+        lastRaw: readWidgetValue(widget),
         cells: { image: [], audio: [], video: [] },
         status: null,
     };
@@ -1454,52 +1709,92 @@ function setupMediaLoader(node) {
     // 面板不留滚动条：内容多高，节点就多高。
     // 宽度变化时精确贴合（可增可减）；只拖高度时只增不减，避免和用户拖拽打架。
     let fitTimer = null;
+    let fitRaf = null;
     let verifyTimer = null;
     let fitAllowShrink = true;
     let selfResizing = false;
-    // overflow:hidden 时 scrollHeight 永远 ≥ clientHeight，量不出「内容比视口矮」→ 累加子元素高度。
-    // 子元素用 getBoundingClientRect（会被画布缩放），除以容器自身的缩放系数换算回 CSS px，避免取整误差。
+    let domOffsetY = 62;   // 节点顶部 → 面板顶部的固定偏移（标题栏），贴合时校准
+    // 面板整体 zoom：节点变宽 → 文字/按钮/进度条/格子一起等比放大
+    let panelScale = 1;
+    // 面板可用宽度：ComfyUI 给 DOM 面板的外层容器（节点宽 − 左右各 12px 内边距）。
+    // 必须用它（而不是节点宽度）来算缩放比，否则面板会比节点「胖」出来一圈。
+    const hostWidth = () => {
+        const parent = container.parentElement;
+        const w = parent ? parent.clientWidth : 0;
+        if (w > 50) return w;
+        return Math.max(200, (Number(node.size?.[0]) || PANEL_BASE_W) - 24);
+    };
+    const applyPanelScale = () => {
+        const s = clamp(hostWidth() / PANEL_BASE_W, 0.5, 3);
+        const changed = Math.abs(s - panelScale) > 0.002;
+        panelScale = s;
+        container.style.width = `${PANEL_BASE_W}px`;
+        container.style.zoom = String(s);
+        return changed;
+    };
+
+    // 内容占用高度（节点单位）= 各分节布局高度之和(px) × zoom。
+    // 不能直接读 container.scrollHeight：DOM 面板会被父容器拉伸到节点高度，
+    // 高度变化后量到的永远是「上一帧的视口高」→ 只会变高不会缩回。
+    // 分节是 flex:0 0 auto，offsetHeight 就是它们的自然高度（布局像素，不受 zoom/画布缩放影响）。
+    // 节点顶部 → 面板顶部的真实偏移（标题栏 + 内边距）：直接按屏幕坐标量，别用「节点高−内容高」反推
+    // （反推会自洽在错误的数值上，导致底部永远多出一截空白）
+    const measureDomOffset = () => {
+        try {
+            const parent = container.parentElement;
+            const canvasEl = app?.canvas?.canvas;
+            const ds = app?.canvas?.ds;
+            if (!parent || !canvasEl || !ds) return null;
+            const rect = canvasEl.getBoundingClientRect();
+            const scale = Number(ds.scale) || 1;
+            if (!(scale > 0)) return null;
+            const nodeTop = rect.top + ((Number(node.pos?.[1]) || 0) + (Number(ds.offset?.[1]) || 0)) * scale;
+            const d = (parent.getBoundingClientRect().top - nodeTop) / scale;
+            return (d > 5 && d < 240) ? d : null;
+        } catch (_) {
+            return null;
+        }
+    };
     const measureContentHeight = () => {
-        const kids = container.children;
-        if (!kids || !kids.length) return container.scrollHeight;
+        const st = node.__h3m;
         const cs = getComputedStyle(container);
         const gap = parseFloat(cs.rowGap) || 0;
         const padTop = parseFloat(cs.paddingTop) || 0;
         const padBottom = parseFloat(cs.paddingBottom) || 0;
-        const rectH = container.getBoundingClientRect().height;
-        const scale = (rectH > 0 && container.clientHeight > 0)
-            ? rectH / container.clientHeight
-            : 1;
-        const safeScale = (Number.isFinite(scale) && scale > 0.05) ? scale : 1;
-        let h = 0;
-        for (let i = 0; i < kids.length; i++) {
-            const kh = kids[i].getBoundingClientRect().height;
-            h += kh > 0 ? kh / safeScale : kids[i].offsetHeight;
+        const head = container.firstElementChild;
+        const sections = st?.body ? Array.from(st.body.children) : [];
+        let h = head ? head.offsetHeight : 0;
+        for (const sec of sections) h += sec.offsetHeight;
+        h += gap;                                            // 标题 ↔ body
+        if (sections.length > 1) {
+            const bodyGap = parseFloat(getComputedStyle(st.body).rowGap) || 0;
+            h += bodyGap * (sections.length - 1);
         }
-        h += gap * (kids.length - 1);
-        return Math.ceil(h + padTop + padBottom);
+        h += padTop + padBottom;
+        return h > 0 ? Math.ceil(h * panelScale) : 0;
     };
     const fitPanelHeight = () => {
         fitTimer = null;
         try {
-            const need = measureContentHeight();   // 真实内容高度（不依赖 scrollHeight）
+            // 父容器宽度可能刚变（首次布局、工作流还原）→ 先把缩放比对一遍，再量高度
+            applyPanelScale();
             const cur = Number(node.size?.[1]) || 0;
-            const clientH = container.clientHeight;
-            // DOM 还没布局好（clientHeight=0）时不能量，否则会把节点撑爆
-            if (!need || !cur || clientH <= 0) return;
-            // 节点高度 ↔ 面板高度是 1:1 的：差多少补多少，不用去猜标题栏高度（猜错会越调越大）
-            const delta = need - clientH;
+            const contentUnits = measureContentHeight();
+            if (!contentUnits || !cur) return;
+            const measured = measureDomOffset();
+            if (measured != null) domOffsetY = measured;
+            const delta = contentUnits + domOffsetY - cur;
             const shouldResize = fitAllowShrink ? Math.abs(delta) > 2 : delta > 2;
             if (shouldResize) {
                 // 自己改的尺寸不要再回头量一次（改完布局还没生效，会越量越大）
                 selfResizing = true;
-                node.setSize?.([node.size?.[0] || 700, cur + delta]);
+                node.setSize?.([node.size?.[0] || PANEL_BASE_W, Math.max(200, cur + delta)]);
                 setTimeout(() => { selfResizing = false; }, 120);
                 // 复核一次：aspect-ratio 取整可能让真实内容比预算多几像素，按实测差值补齐（只补一次，不会循环）
                 clearTimeout(verifyTimer);
                 verifyTimer = setTimeout(() => {
                     try {
-                        const over = container.scrollHeight - container.clientHeight;
+                        const over = (container.scrollHeight - container.clientHeight) * panelScale;
                         if (over > 1) {
                             node.setSize?.([node.size?.[0], (Number(node.size?.[1]) || 0) + over]);
                         }
@@ -1509,11 +1804,19 @@ function setupMediaLoader(node) {
         } catch (_) {}
     };
     const scheduleFit = (allowShrink = false) => {
-        fitAllowShrink = allowShrink;
-        clearTimeout(fitTimer);
-        fitTimer = setTimeout(() => requestAnimationFrame(fitPanelHeight), 30);
+        if (allowShrink) fitAllowShrink = true;
+        // 拖拽过程中尺寸每帧都在变：不能每次都 clearTimeout，否则永远等不到执行（表现为「不同步/有延迟」）
+        if (fitTimer || fitRaf) return;
+        fitTimer = setTimeout(() => {
+            fitTimer = null;
+            fitRaf = requestAnimationFrame(() => {
+                fitRaf = null;
+                fitPanelHeight();
+                fitAllowShrink = false;
+            });
+        }, 30);
     };
-    node.__h3m.fitPanelHeight = () => scheduleFit(false);
+    node.__h3m.fitPanelHeight = (allowShrink) => scheduleFit(!!allowShrink);
 
     let lastWidth = Number(node.size?.[0]) || 0;
     const prevResize = node.onResize;
@@ -1521,30 +1824,49 @@ function setupMediaLoader(node) {
         const r = prevResize?.apply(this, args);
         syncWidth();
         lockWidth();
-        if (selfResizing) return r;   // 自己触发的尺寸变化，不重新量
+        // 缩放比必须每帧都同步：不能放在 selfResizing 判断之后，
+        // 否则自己贴合高度的那 120ms 里宽度变化被跳过，拖拽时面板就「跟不上」
         const w = Number(node.size?.[0]) || 0;
         const widthChanged = Math.abs(w - lastWidth) > 0.5;
-        lastWidth = w;
-        // 宽度变了 → 格子尺寸变了 → 高度精确贴合；否则只保证不被裁切
+        if (widthChanged) {
+            lastWidth = w;
+            applyPanelScale();
+        }
+        // 高度贴合用节流排队（不等 selfResizing）：否则拖拽中最后几次宽度变化会被丢掉，
+        // 松手后高度停在中间态，面板就「冒出节点」
         scheduleFit(widthChanged);
         return r;
     };
-    // 首次真正被绘制时（标签页切回来 / 后台加载的工作流）再贴合一次：
-    // 之前 clientHeight 可能是 0，量不到内容高度
+    // 每帧校验：拖拽改尺寸时 onResize 在部分前端版本不稳定触发，
+    // 这里在每次画布绘制时对比尺寸，保证缩放比和高度实时跟随（不再出现「不同步/有延迟」）
     if (dom) {
         let firstDrawn = false;
+        let drawnW = 0;
+        let drawnH = 0;
         dom.options.onDraw = () => {
-            if (firstDrawn || container.clientHeight <= 0) return;
-            firstDrawn = true;
-            scheduleFit(true);
+            const w = Number(node.size?.[0]) || 0;
+            const h = Number(node.size?.[1]) || 0;
+            if (!w || !h) return;
+            if (Math.abs(w - drawnW) > 0.5 || Math.abs(h - drawnH) > 0.5) {
+                const widthChanged = Math.abs(w - drawnW) > 0.5;
+                drawnW = w;
+                drawnH = h;
+                if (widthChanged) applyPanelScale();
+                scheduleFit(widthChanged);
+            }
+            if (!firstDrawn && container.offsetHeight > 0) {
+                firstDrawn = true;
+                scheduleFit(true);
+            }
         };
     }
 
     // 首次布局：默认高度按「3 行图 + 1 行音频 + 1 行视频」给足，再贴合实际内容
     lockWidth();
     syncWidth();
+    applyPanelScale();
     if (!Number.isFinite(node.size?.[1]) || node.size[1] < 1000) {
-        try { node.setSize?.([node.size?.[0] || 700, 1220]); } catch (_) {}
+        try { node.setSize?.([node.size?.[0] || PANEL_BASE_W, 1220]); } catch (_) {}
     }
     renderAllSlots(node);
     lastWidth = Number(node.size?.[0]) || 0;
@@ -1571,6 +1893,10 @@ function setupMediaLoader(node) {
         } catch (_) {}
         return r;
     };
+
+    // 初始化完成后再交给看门狗（面板此时已建好，可以安全自愈）
+    liveNodes.add(node);
+    startSyncWatchdog();
 }
 
 // 工作流载入后 widgets_values 是异步还原的 → 重新读一次
@@ -1585,6 +1911,7 @@ function refreshFromWidget(node) {
     // 否则会出现「先闪成默认 9/3/3，再跳回自己保存的布局」这种跳变
     if (typeof raw === "string" && !raw.trim()) return;
     st.widget = widget;
+    st.lastRaw = raw;
     const next = normalizeSettings(raw);
     const prevSig = JSON.stringify(st.settings || {});
     const nextSig = JSON.stringify(next);
@@ -1596,10 +1923,52 @@ function refreshFromWidget(node) {
     if (layoutSig !== st.renderedLayoutSig) {
         fillBody(node);
         renderAllSlots(node);
-        setTimeout(() => { try { st.fitPanelHeight?.(); } catch (_) {} }, 60);
+        // 数量变少时节点要能缩回去（否则下面留一大片空白）
+        setTimeout(() => { try { st.fitPanelHeight?.(true); } catch (_) {} }, 60);
         return;
     }
     renderAllSlots(node);
+}
+
+// ── 面板 ↔ widget 值同步看门狗 ─────────────────────────────
+// 右击「刷新节点」会把节点整个重建：新节点先建界面、后写 widgets_values，
+// 于是 onNodeCreated/onConfigure 那一瞬间读到的还是空串 → 面板停在默认布局，
+// 看上去就是「界面全空」（数据其实还在 widget 里，所以 F5 又正常了）。
+// 这里持续比对 widget 值，一变就重建，任何重建/撤销/粘贴路径都能自愈。
+const liveNodes = new Set();
+let syncTimer = null;
+
+function startSyncWatchdog() {
+    if (syncTimer) return;
+    syncTimer = setInterval(() => {
+        for (const node of Array.from(liveNodes)) {
+            const st = node.__h3m;
+            if (!st) { liveNodes.delete(node); continue; }
+            if (!node.graph) { liveNodes.delete(node); continue; }
+            const widget = getSettingsWidget(node) || st.widget;
+            if (!widget) continue;
+            const raw = readWidgetValue(widget);
+            if (typeof raw !== "string" || !raw.trim()) continue;  // 还没写入，别覆盖
+            if (raw === st.lastRaw) continue;
+            try {
+                refreshFromWidget(node);
+            } catch (err) {
+                console.error("[JZL-素材加载] 同步设置失败", err);
+            }
+        }
+        // 面板被清空（异常重建等）→ 自愈
+        for (const node of Array.from(liveNodes)) {
+            const st = node.__h3m;
+            if (!st || !st.body || !node.graph) continue;
+            if (st.body.children.length) continue;
+            try {
+                fillBody(node);
+                renderAllSlots(node);
+            } catch (err) {
+                console.error("[JZL-素材加载] 面板重建失败", err);
+            }
+        }
+    }, 300);
 }
 
 app.registerExtension({
