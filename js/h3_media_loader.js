@@ -407,20 +407,27 @@ function numberBadge(text) {
     ].join(";"), text);
 }
 
-// 右上角按钮：空槽 →「加载」，已有素材 →「替换」
+// 右上角按钮：空槽 →「加载」，已有素材 →「替换」（半透明，不遮挡预览画面）
 function loadReplaceButton(hasMedia, onClick) {
     const btn = el("button", [
         "position:absolute", "right:5px", "top:5px", "z-index:4",
         "height:18px", "padding:0 7px", "border-radius:5px",
         "border:1px solid rgba(255,255,255,.42)",
-        "background:" + (hasMedia ? "rgba(35,100,170,.88)" : "rgba(0,0,0,.55)"),
+        "background:" + (hasMedia ? "rgba(35,100,170,.55)" : "rgba(0,0,0,.38)"),
         "color:#fff", "font-size:10px", "line-height:1", "cursor:pointer",
-        "white-space:nowrap", "box-shadow:0 1px 3px rgba(0,0,0,.45)",
+        "white-space:nowrap", "box-shadow:0 1px 3px rgba(0,0,0,.35)",
+        "backdrop-filter:blur(3px)", "-webkit-backdrop-filter:blur(3px)",
+        "transition:background .15s",
     ].join(";"), hasMedia ? "替换" : "加载");
     btn.title = hasMedia ? "替换当前素材（点击选择新文件）" : "加载素材（点击选择文件）";
     btn.dataset.h3mAction = "1";
     btn.addEventListener("mousedown", (e) => e.stopPropagation());
     btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    // 半透明底 → 悬停时加深一点，保证可点性一眼可见
+    const base = hasMedia ? "rgba(35,100,170,.55)" : "rgba(0,0,0,.38)";
+    const hover = hasMedia ? "rgba(35,100,170,.85)" : "rgba(0,0,0,.68)";
+    btn.addEventListener("mouseenter", () => { btn.style.background = hover; });
+    btn.addEventListener("mouseleave", () => { btn.style.background = base; });
     btn.addEventListener("click", (e) => {
         e.stopPropagation();
         onClick();
@@ -1029,7 +1036,7 @@ function renderVideoSlot(node, index, cell) {
             "＋\n点击或拖入视频"));
     }
 
-    // 底部栏：参数摘要 + 视频设置
+    // 底部栏：只放参数摘要（「视频设置」已移到进度条上方，见下）
     const footer = el("div", [
         "position:absolute", "left:0", "right:0", "bottom:0", "height:22px", "z-index:3",
         "display:flex", "align-items:center", "gap:4px", "padding:0 5px",
@@ -1042,20 +1049,33 @@ function renderVideoSlot(node, index, cell) {
     ].join(";"), videoSpecText(item));
     spec.title = "当前视频参数：" + videoSpecText(item);
     footer.appendChild(spec);
+    cell.appendChild(footer);
 
+    // 「设置」：橙色醒目，浮在播放进度条正上方（尺寸与「加载/替换」一致；半透明不遮画面）
     const setBtn = el("button", [
-        "flex:0 0 auto", "height:17px", "padding:0 8px", "border-radius:5px",
-        "border:1px solid var(--jz-border)", "background:var(--jz-btn-info)",
-        "color:#fff", "font-size:10px", "cursor:pointer", "line-height:1",
-    ].join(";"), "视频设置");
-    setBtn.title = "强制帧率 / 跳过帧数 / 输出宽高 / 帧数上限";
+        "position:absolute", "right:5px", "bottom:44px", "z-index:4",
+        "height:18px", "padding:0 7px", "border-radius:5px",
+        "border:1px solid rgba(255,255,255,.42)",
+        "background:var(--jz-btn-orange-soft, rgba(224,123,31,.58))", "color:#fff",
+        "font-size:10px", "font-weight:600", "letter-spacing:.2px",
+        "cursor:pointer", "line-height:1", "white-space:nowrap",
+        "box-shadow:0 1px 4px rgba(0,0,0,.35)",
+        "backdrop-filter:blur(3px)", "-webkit-backdrop-filter:blur(3px)",
+        "transition:background .15s",
+    ].join(";"), "设置");
+    setBtn.title = "强制帧率 / 跳过帧数 / 输出宽高 / 帧数上限 / 视频音轨";
     setBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    setBtn.addEventListener("mouseenter", () => {
+        setBtn.style.background = "var(--jz-btn-orange, #e07b1f)";
+    });
+    setBtn.addEventListener("mouseleave", () => {
+        setBtn.style.background = "var(--jz-btn-orange-soft, rgba(224,123,31,.58))";
+    });
     setBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         openParamDialog(node, "video", index);
     });
-    footer.appendChild(setBtn);
-    cell.appendChild(footer);
+    cell.appendChild(setBtn);
 
     cell.appendChild(numberBadge(String(index + 1)));
     cell.appendChild(loadReplaceButton(hasMedia, () => pickFile(node, "video", index)));
@@ -1070,8 +1090,10 @@ function renderVideoSlot(node, index, cell) {
             renderSlot(node, "video", index);
         });
         clr.dataset.h3mClear = "1";
-        // 46px：避开底部 22px 参数栏 + 约 20px 播放控制条，否则会盖住喇叭按钮
-        clr.style.bottom = "46px";
+        // 「视频设置」现在占住右下（进度条上方），✕ 移到右上「替换」左边，避免叠在一起
+        clr.style.bottom = "auto";
+        clr.style.top = "5px";
+        clr.style.right = "54px";
         cell.appendChild(clr);
     }
 

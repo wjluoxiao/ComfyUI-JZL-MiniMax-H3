@@ -38,6 +38,8 @@ const PALETTE = {
     "--jz-surface": ["#222222", "#ffffff"],
     "--jz-float": ["#2a2a2e", "#ffffff"],
     "--jz-btn-warn": ["#b45309", "#c2410c"],
+    "--jz-btn-orange": ["#e07b1f", "#c2410c"],
+    "--jz-btn-orange-soft": ["rgba(224,123,31,.58)", "rgba(194,65,12,.58)"],
     "--jz-btn-primary": ["#2d5a88", "#1f6fd0"],
     "--jz-btn-info": ["#2a3a4a", "#1f6fd0"],
     "--jz-btn-ok": ["#2d5a3a", "#1f7a3a"],

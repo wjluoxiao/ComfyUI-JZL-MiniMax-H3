@@ -481,6 +481,13 @@ export function renderSwapPromptPanel(c, s, d, node) {
     // ── ③ LLM 后端 ──
     const llm = pc.llm || (pc.llm = {});
     const apiCfg = pc.api || (pc.api = {});   // 注意：不能叫 api，会遮蔽 ComfyUI 的 fetchApi 模块
+    // 缺值/脏值时显式落成「本地模型」：后端也按同一规则判定，
+    // 否则会出现「界面勾的是 CLIP，跑起来却去请求 API 报 401」的错位。
+    const rawBackend = String(pc.llm_backend || "").toLowerCase();
+    const isApiBackend = /api|在线/.test(rawBackend);
+    if (!/local|本地|api|在线/.test(rawBackend)) {
+        pc.llm_backend = "本地模型 [local]";
+    }
     c.append(makeSectionTitle("LLM 后端"));
     const backendRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;");
     const backendCbs = [];
@@ -488,7 +495,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
         const lab = el("label", "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
         const cb = el("input", "width:18px;height:18px;accent-color:#f59e0b;cursor:pointer;");
         cb.type = "checkbox";
-        cb.checked = (String(pc.llm_backend || "").includes("api") ? "在线API [api]" : "本地模型 [local]") === val;
+        cb.checked = (isApiBackend ? "在线API [api]" : "本地模型 [local]") === val;
         cb.addEventListener("change", () => {
             if (cb.checked) {
                 pc.llm_backend = val;
@@ -560,7 +567,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
     c.append(apiBox);
 
     const syncBackend = () => {
-        const isApi = String(pc.llm_backend || "").includes("api");
+        const isApi = /api|在线/.test(String(pc.llm_backend || "").toLowerCase());
         localBox.style.display = isApi ? "none" : "block";
         apiBox.style.display = isApi ? "block" : "none";
     };
@@ -1032,8 +1039,14 @@ export function setupSwapNode(self) {
             : (() => { const [W, H] = jzlCalcResolution(ar, Number(gp.megapixels ?? 0.4)); return `${W}×${H}`; })();
         const f = swapFrameLen(gp.segment || "固定5秒");
         const secPerSeg = `${Math.round(f / 24)}秒/每段`;
-        // LLM 增强由「提示词来源」派生（与后端 use_llm 同规则）
-        const llmOn = String(pc.source || "系统默认") !== "系统默认";
+        // 声音来源：直接显示面板里选的那一项（使用原声 / 生成音频），一眼知道成片有没有声音、是谁的声音
+        const audioTxt = String(gp.audio_mode || "使用原声") === "生成音频" ? "生成音频" : "使用原声";
+        // LLM 增强由「提示词来源」派生（与后端 use_llm 同规则）；
+        // 后面直接跟上来源名，省得再去面板里翻「到底是内置哪一套 skill」。
+        const llmSrc = String(pc.source || "系统默认");
+        const llmTxt = llmSrc === "系统默认" ? "LLM关闭 丨 系统默认"
+            : llmSrc === "内置skill" ? `LLM开启 丨 内置skill:${String(pc.builtin || "人物替换")}`
+            : `LLM开启 丨 自定义skill`;
         // 本节点固定常规采样（联合窗口采样）：旧工作流里存的「SelfLift采样」一律按常规显示
         const secTgt = String(gp.second_mode || "放大倍数") === "目标分辨率";
         const secOn = sec.enabled !== false;
@@ -1045,7 +1058,7 @@ export function setupSwapNode(self) {
             ? "随机" : (seedRaw || "0");
         infoRow.innerHTML =
             `视频参数: ${dv(arTxt)}${sep}${dv(canvasTxt)}${sep}${dv(secPerSeg)}`
-            + `${sep}${dv(`重叠${seam.window ?? 22}帧`)}${sep}${dv(llmOn ? "LLM开启" : "LLM关闭")}`
+            + `${sep}${dv(`重叠${seam.window ?? 22}帧`)}${sep}${dv(audioTxt)}${sep}${dv(llmTxt)}`
             + `\n采样参数: ${dv(secTxt)}${sep}${dv(sd.scheduler || "simple")}`
             + `${sep}${dv(sd.sampler || OPTIONS.samplers[0])}${sep}${dv(`${sd.steps ?? 4}步`)}${sep}种子:${dv(seedTxt)}`;
     };

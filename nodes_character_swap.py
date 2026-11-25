@@ -399,10 +399,18 @@ def _load_swap_skill(name, tag=TAG):
 
 
 def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
-    """调 LLM 生成提示词。失败返回 None，由调用方回退系统默认（绝不因 LLM 挂掉而中断生成）。"""
-    backend = str(prompt_cfg.get("llm_backend") or "")
+    """调 LLM 生成提示词。失败返回 None，由调用方回退系统默认（绝不因 LLM 挂掉而中断生成）。
+
+    「本地模型(CLIP)」与「在线API」两条分支**完全独立**：
+      · 走本地时只读 prompt_cfg["llm"]，绝不碰 api（不校验、不请求 → 不会出现 401）；
+      · 走在线时只读 prompt_cfg["api"]，绝不碰 clip。
+    后端判定统一走 _resolve_llm_backend，与面板显示的勾选项永远一致。
+    """
+    api_mode = _is_api_backend(prompt_cfg)
+    backend_label = "在线API" if api_mode else "本地模型"
+    print(f"[JZL-{tag}] LLM 后端：{backend_label}（只使用该后端的参数）", flush=True)
     try:
-        if "api" in backend:
+        if api_mode:
             from .nodes_llama import JZL_MiniMax_ScriptProcessor
             api = prompt_cfg.get("api") or {}
             if not str(api.get("model") or "").strip():
@@ -480,8 +488,13 @@ def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
         return None
     text = str(text or "").strip()
     if not text or text.startswith(("[API 错误]", "[LLM 错误]", "[API 配置错误]")):
-        print(f"[JZL-{tag}] ⚠️ LLM 返回异常：{text[:160] or '(空)'}"
-              f" → 回退「系统默认」提示词", flush=True)
+        hint = ""
+        if api_mode and ("401" in text or "403" in text or "Unauthorized" in text
+                         or "Authorization" in text):
+            hint = ("\n   ↳ 这是**在线 API** 的鉴权错误：请检查「LLM 后端 = 在线API」里的 "
+                    "API Key / Base URL / 模型名；若本来想用本地 CLIP，请把后端切到「本地模型」。")
+        print(f"[JZL-{tag}] ⚠️ LLM 返回异常（后端={backend_label}）：{text[:160] or '(空)'}"
+              f"{hint} → 回退「系统默认」提示词", flush=True)
         return None
     return text
 
@@ -766,9 +779,10 @@ def _prompt_cfg_label(pc):
     src, builtin, _tpl, _lead = _resolve_prompt_kind(pc)
     if src == "系统默认":
         return "关（系统默认模板，不调用 LLM）"
+    backend = "在线API" if _is_api_backend(pc) else "本地模型"
     if src == "内置skill":
-        return f"开（内置skill·{builtin}）"
-    return f"开（自定义skill：{pc.get('skill') or '未选择'}）"
+        return f"开（内置skill·{builtin} / {backend}）"
+    return f"开（自定义skill：{pc.get('skill') or '未选择'} / {backend}）"
 
 
 class _Heartbeat:
@@ -883,7 +897,9 @@ _SWAP_DEFAULTS = {
         "builtin": "人物替换",             # 内置skill 分支用哪一个（人物替换/动物替换/非活物替换/多人替换）
         "source": "系统默认",              # 系统默认 | 内置skill | 自定义skill
         "skill": "",                       # 自定义 skill 文件名（skills/jzl/*.md）
-        "llm_backend": "在线API [api]",    # 本地模型 [local] | 在线API [api]
+        # 后端默认必须与面板显示一致（面板缺值时显示「本地模型」）：
+        # 若这里默认在线API，就会出现「界面选的是 CLIP，跑起来却请求 API 报 401」
+        "llm_backend": "本地模型 [local]",   # 本地模型 [local] | 在线API [api]
         # 本地文本生成 = 官方「Load CLIP」+「Generate Text」（CLIP 文本编码器，不是 gguf）
         "llm": {"clip_name": "", "clip_type": "qwen_image", "max_length": 2048,
                 "temperature": 0.7, "top_k": 64, "top_p": 0.95, "min_p": 0.05,
@@ -916,6 +932,29 @@ def _cfg_bool(d, key, default):
 def _cfg_opt(d, key, default, options):
     v = str((d or {}).get(key, default) or default)
     return v if v in options else default
+
+
+LLM_BACKEND_LOCAL = "本地模型 [local]"
+LLM_BACKEND_API = "在线API [api]"
+
+
+def _resolve_llm_backend(pc):
+    """判定 LLM 后端：本地 CLIP 还是在线 API。
+
+    ⚠️ 这里绝对不能有「缺值时默认走 API」的行为：面板在 llm_backend 缺失时显示的是
+    **本地模型**，若后端默认成在线 API，就会出现「界面选的是 CLIP，跑起来却去请求
+    API 并报 401」这种界面与实际不一致的错。
+    所以只有明确写了 api / 在线 才走 API，其余（缺值 / 空串 / 脏值 / 老值 local）一律走本地
+    —— 本地不需要任何凭据，绝不会凭空报鉴权错误。
+    """
+    raw = str((pc or {}).get("llm_backend") or "").strip().lower()
+    if "api" in raw or "在线" in raw:
+        return LLM_BACKEND_API
+    return LLM_BACKEND_LOCAL
+
+
+def _is_api_backend(pc):
+    return _resolve_llm_backend(pc) == LLM_BACKEND_API
 
 
 def _parse_swap_settings(raw):
@@ -1030,8 +1069,7 @@ def _parse_swap_settings(raw):
         "source": source,
         "builtin": _builtin,
         "skill": str(pc.get("skill") or ""),
-        "llm_backend": _cfg_opt(pc, "llm_backend", "在线API [api]",
-                                 ("本地模型 [local]", "在线API [api]")),
+        "llm_backend": _resolve_llm_backend(pc),
         "llm": {
             "clip_name": str(llm.get("clip_name") or ""),
             "clip_type": str(llm.get("clip_type") or "qwen_image"),
@@ -1261,7 +1299,7 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
                 io.Model.Input("model", display_name="主模型"),
                 io.Clip.Input("clip", display_name="CLIP"),
                 io.Vae.Input("vae", display_name="视觉VAE"),
-                io.Vae.Input("audio_vae", display_name="音频VAE（生成音频时才要）", optional=True,
+                io.Vae.Input("audio_vae", display_name="音频VAE", optional=True,
                     tooltip="「🎨 视频参数设置 → 声音来源」选「生成音频」时必须接，用来解码模型音轨；"
                             "选「使用原声」时完全不使用它（latent 音频不解码），可以留空，"
                             "省一个音频 VAE 的加载与显存。"),
@@ -1796,7 +1834,7 @@ class JZL_MiniMaxVideoEdit(JZL_MiniMaxCharacterSwap):
                 io.Model.Input("model", display_name="主模型"),
                 io.Clip.Input("clip", display_name="CLIP"),
                 io.Vae.Input("vae", display_name="视觉VAE"),
-                io.Vae.Input("audio_vae", display_name="音频VAE（生成音频时才要）", optional=True,
+                io.Vae.Input("audio_vae", display_name="音频VAE", optional=True,
                     tooltip="「🎨 视频参数设置 → 声音来源」选「生成音频」时必须接，用来解码模型音轨；"
                             "选「使用原声」时完全不使用它（latent 音频不解码），可以留空。"),
                 io.Custom("JZL_REF2VA_BUS").Input("bus", display_name="素材总线",
