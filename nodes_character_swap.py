@@ -387,10 +387,16 @@ def _fill_prompt(prompt, index, count, start_frame, keep_frames):
                .replace("{frames}", str(int(keep_frames))))
 
 
-def _load_swap_skill(name, tag=TAG):
-    """读 skill 文件（skills/jzl/*.md，与「✨ MiniMax-skill加载」同一目录与规则）。"""
+def _load_swap_skill(name, tag=TAG, skill_dir=""):
+    """读 skill 文件。
+
+    skill_dir 非空 = 用户自己选的目录（「📂 选择 skill 文件目录」），直接从那里读；
+    为空时退回插件自带 skills/jzl（与「✨ MiniMax-skill加载」同一目录与规则）。
+    """
     try:
-        from .nodes_skill import _read_skill
+        from .nodes_skill import _read_skill, read_skill_in_dir
+        if str(skill_dir or "").strip():
+            return read_skill_in_dir(skill_dir, name)
         return _read_skill(name)
     except Exception as e:
         print(f"[JZL-{tag}] ⚠️ skill 读取失败（{name or '未选择'}）：{e}"
@@ -541,8 +547,31 @@ BUILTIN_SKILLS = {
 DEFAULT_BUILTIN_SKILL = "人物替换"
 
 
+def _builtin_skill_file(name):
+    """「内置 skill」下拉里的一个值 → 实际要读的文件名。
+
+    两种值都认：
+    · 内置四档（人物替换 / 动物替换 / 非活物替换 / 多人替换）→ 对应的自带 skill 文件；
+    · 用户用「📥 导入Skill文件」放进内置目录的自定义文件，值就是文件名本身（.md/.txt）。
+    认不出来的返回 ""（调用方回退默认内置 skill）。
+    """
+    key = str(name or "").strip()
+    if not key:
+        return ""
+    if key in BUILTIN_SKILLS:
+        return BUILTIN_SKILLS[key][0]
+    if os.path.splitext(key)[1].lower() not in (".md", ".markdown", ".txt"):
+        return ""
+    try:
+        from .nodes_skill import _skill_path
+        _skill_path(key)                      # 只认内置目录里真实存在、非符号链接的文件
+        return key
+    except Exception:
+        return ""
+
+
 def _resolve_prompt_kind(prompt_cfg):
-    """(来源分支, 内置 skill 名, 兜底模板, LLM 附加指令) —— 面板的两个分支 + 老值兼容。"""
+    """(来源分支, 内置 skill 名, 实际 skill 文件, 兜底模板, LLM 附加指令) —— 面板的两个分支 + 老值兼容。"""
     source = str(prompt_cfg.get("source") or "系统默认")
     builtin = str(prompt_cfg.get("builtin") or "")
     if source in LEGACY_SOURCE_ALIAS:                    # 老工作流：来源就是某个内置 skill
@@ -551,29 +580,38 @@ def _resolve_prompt_kind(prompt_cfg):
     if source not in PROMPT_LLM_SOURCES:
         source = "系统默认"
     if source != "内置skill":
-        return source, "", None, None
-    if builtin not in BUILTIN_SKILLS:
+        return source, "", "", None, None
+    skill_file = _builtin_skill_file(builtin)
+    if not skill_file:
         builtin = DEFAULT_BUILTIN_SKILL
-    skill_file, template, lead = BUILTIN_SKILLS[builtin]
-    return source, builtin, template, lead
+        skill_file, template, lead = BUILTIN_SKILLS[builtin]
+        return source, builtin, skill_file, template, lead
+    if builtin in BUILTIN_SKILLS:
+        _f, template, lead = BUILTIN_SKILLS[builtin]
+    else:
+        # 导入的 skill：没有专用兜底模板 / 附加指令 → 走通用换人话术（模板用系统默认）
+        template, lead = None, None
+    return source, builtin, skill_file, template, lead
 
 
 def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG):
     """按「📝 提示词预设」产出最终提示词。
 
     系统默认 = 内置模板 + 用户填的「视频描述 / 图片描述」；
-    内置skill（人物/动物/非活物/多人）= 对应内置 skill 当 LLM 设定词；
-    自定义skill = 用户加载的 .md 当 LLM 设定词。
+    内置skill（人物/动物/非活物/多人，以及用户导入到内置目录的 .md）= 对应 skill 当 LLM 设定词；
+    自定义skill = 用户选的目录里的 .md 当 LLM 设定词。
     """
-    source, builtin, template, lead = _resolve_prompt_kind(prompt_cfg)
+    source, builtin, skill_file, template, lead = _resolve_prompt_kind(prompt_cfg)
     fallback = _fill_desc(template or DEFAULT_PROMPT, video_desc, image_desc)
     if not bool(prompt_cfg.get("use_llm")) or source == "系统默认":
         return fallback
     if source == "内置skill":
-        skill_name = BUILTIN_SKILLS[builtin][0]
+        skill_name = skill_file
+        skill_dir = ""
     else:
         skill_name = prompt_cfg.get("skill") or ""
-    skill = _load_swap_skill(skill_name, tag)
+        skill_dir = prompt_cfg.get("skill_dir") or ""
+    skill = _load_swap_skill(skill_name, tag, skill_dir)
     if not skill:
         return fallback
     _miss = ("（用户未填写，请按通用替换场景处理）" if source == "内置skill"
@@ -776,7 +814,7 @@ def _fmt_secs(sec):
 def _prompt_cfg_label(pc):
     """「📝 提示词预设」的一句话摘要（配置总览用）。"""
     pc = pc or {}
-    src, builtin, _tpl, _lead = _resolve_prompt_kind(pc)
+    src, builtin, _f, _tpl, _lead = _resolve_prompt_kind(pc)
     if src == "系统默认":
         return "关（系统默认模板，不调用 LLM）"
     backend = "在线API" if _is_api_backend(pc) else "本地模型"
@@ -896,7 +934,8 @@ _SWAP_DEFAULTS = {
         "use_llm": False,                  # 仅由 source 推导（系统默认→False，其余→True），面板不再提供开关
         "builtin": "人物替换",             # 内置skill 分支用哪一个（人物替换/动物替换/非活物替换/多人替换）
         "source": "系统默认",              # 系统默认 | 内置skill | 自定义skill
-        "skill": "",                       # 自定义 skill 文件名（skills/jzl/*.md）
+        "skill": "",                       # 自定义 skill 文件名（用户选的目录里的某个 .md/.txt）
+        "skill_dir": "",                   # 自定义 skill 目录（「📂 选择 skill 文件目录」选的绝对路径）
         # 后端默认必须与面板显示一致（面板缺值时显示「本地模型」）：
         # 若这里默认在线API，就会出现「界面选的是 CLIP，跑起来却请求 API 报 401」
         "llm_backend": "本地模型 [local]",   # 本地模型 [local] | 在线API [api]
@@ -1059,7 +1098,8 @@ def _parse_swap_settings(raw):
         _builtin = LEGACY_SOURCE_ALIAS[_raw_src]
         _raw_src = "内置skill"
     source = _cfg_opt({"source": _raw_src}, "source", "系统默认", PROMPT_SOURCES)
-    if _builtin not in BUILTIN_SKILLS:
+    # 内置 skill 可以是四档之一，也可以是用户「📥 导入Skill文件」放到内置目录里的文件名
+    if not _builtin_skill_file(_builtin):
         _builtin = DEFAULT_BUILTIN_SKILL
     use_llm = (source != "系统默认")
     api = pc.get("api") or {}
@@ -1069,6 +1109,7 @@ def _parse_swap_settings(raw):
         "source": source,
         "builtin": _builtin,
         "skill": str(pc.get("skill") or ""),
+        "skill_dir": str(pc.get("skill_dir") or ""),
         "llm_backend": _resolve_llm_backend(pc),
         "llm": {
             "clip_name": str(llm.get("clip_name") or ""),

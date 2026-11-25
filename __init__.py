@@ -1503,50 +1503,84 @@ async def jzl_swap_prompt_preview(request):
             {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)
 
 
+@PromptServer.instance.routes.post("/jzl/swap_skill_dir")
+async def jzl_swap_skill_dir(request):
+    """🎭 人物替换「自定义skill → 📂 选择 skill 文件目录」。
+
+    两种用法：
+    · 不传 dir  → 弹系统目录选择框（本机有桌面时），选完返回该目录与其中的 .md/.txt 列表；
+    · 传 dir    → 直接校验并列出该目录（无桌面/云机/手填路径时用）。
+    返回 {ok, dir, items, error}，前端用它刷新「已有 skill」下拉。
+    """
+    from .nodes_skill import list_skills_in_dir
+
+    def _resp(directory="", error=""):
+        items = list_skills_in_dir(directory) if directory else []
+        return web.json_response({"ok": bool(directory) and not error, "dir": directory,
+                                  "items": items, "error": error})
+
+    try:
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        manual = str((body or {}).get("dir") or "").strip()
+        if manual:
+            ap = os.path.abspath(os.path.expanduser(manual))
+            if not os.path.isdir(ap):
+                return _resp("", f"目录不存在：{manual}")
+            return _resp(ap, "")
+
+        if not HAS_TKINTER:
+            return _resp("", "当前环境没有桌面弹窗（云机/无 GUI）→ 请在右边的路径框里手填 skill 目录")
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        picked = filedialog.askdirectory(title="选择 skill 文件目录（里面的 .md/.txt 会出现在「已有 skill」）")
+        root.destroy()
+        if not picked:
+            return _resp("", "")            # 用户取消：不是错误
+        ap = os.path.abspath(picked)
+        if not os.path.isdir(ap):
+            return _resp("", f"目录不存在：{picked}")
+        return _resp(ap, "")
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return web.json_response({"ok": False, "dir": "", "items": [],
+                                  "error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+
+@PromptServer.instance.routes.get("/jzl/swap_skill_list")
+async def jzl_swap_skill_list(request):
+    """按目录重新扫描 skill 列表（目录里新增/删除 .md 后点「🔄 刷新」用）。"""
+    from .nodes_skill import list_skills_in_dir
+    directory = str(request.query.get("dir") or "").strip()
+    if not directory:
+        return web.json_response({"ok": True, "dir": "", "items": []})
+    ap = os.path.abspath(os.path.expanduser(directory))
+    if not os.path.isdir(ap):
+        return web.json_response({"ok": False, "dir": "", "items": [], "error": f"目录不存在：{directory}"})
+    return web.json_response({"ok": True, "dir": ap, "items": list_skills_in_dir(ap), "error": ""})
+
+
 @PromptServer.instance.routes.post("/jzl/swap_skill_import")
 async def jzl_swap_skill_import(request):
-    """🎭 人物替换「自定义skill → 📂 加载 skill 文件」：把本地 .md/.txt 存进 skills/jzl。
+    """🎭「📥 导入Skill文件」：把用户**浏览器**选中的 .md/.txt 存进内置 skill 目录（skills/jzl）。
 
+    走 multipart 上传 → 服务器只负责落盘，**不依赖桌面弹窗**，所以云机也能上传；
     返回 {ok, id(文件名), path(绝对路径), items(目录下全部 skill 文件名)}，
-    前端用它设为当前 skill 并显示完整路径。
+    前端用它把新文件塞进「内置 skill」下拉并选中。
     """
     try:
-        from .nodes_skill import _skill_dirs as _jzl_skill_dirs, _skill_files as _jzl_skill_files
+        from .nodes_skill import save_skill_upload
         post = await request.post()
         file = post.get("file")
         if not file or not getattr(file, "file", None):
             return web.json_response({"ok": False, "error": "未收到文件"}, status=400)
-        filename = os.path.basename(str(file.filename or "").strip()) or "自定义skill.md"
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in (".md", ".markdown", ".txt"):
-            return web.json_response({"ok": False, "error": "只支持 .md / .markdown / .txt"}, status=400)
-        target = ""
-        for _d in _jzl_skill_dirs():
-            if os.path.isdir(_d):
-                target = _d
-                break
-        if not target:
-            target = _jzl_skill_dirs()[-1]
-        os.makedirs(target, exist_ok=True)
-        out = os.path.join(target, filename)
-        base, _e = os.path.splitext(filename)
-        n = 2
-        while os.path.exists(out):          # 同名不覆盖，自动加序号
-            out = os.path.join(target, f"{base}_{n}{_e}")
-            n += 1
-        raw = file.file.read(1_048_576)      # 上限 1 MB
-        text = _jzl_decode_text(raw)
-        if not text.strip():
-            return web.json_response({"ok": False, "error": "文件内容为空或无法解码（需 UTF-8 / GBK 文本）"},
-                                     status=400)
-        with open(out, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-        return web.json_response({
-            "ok": True,
-            "id": os.path.basename(out),
-            "path": out,
-            "items": [f for f in _jzl_skill_files() if not f.startswith("（")],
-        })
+        res = save_skill_upload(file.file, getattr(file, "filename", "") or "自定义skill.md")
+        return web.json_response(res, status=200 if res.get("ok") else 400)
     except Exception as exc:
         import traceback
         traceback.print_exc()
