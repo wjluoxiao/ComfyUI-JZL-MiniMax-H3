@@ -412,7 +412,7 @@ function loadReplaceButton(hasMedia, onClick) {
     const btn = el("button", [
         "position:absolute", "right:5px", "top:5px", "z-index:4",
         "height:18px", "padding:0 7px", "border-radius:5px",
-        "border:1px solid rgba(255,255,255,.42)",
+        "border:1px solid var(--jz-border-accent)",
         "background:" + (hasMedia ? "rgba(35,100,170,.55)" : "rgba(0,0,0,.38)"),
         "color:#fff", "font-size:10px", "line-height:1", "cursor:pointer",
         "white-space:nowrap", "box-shadow:0 1px 3px rgba(0,0,0,.35)",
@@ -521,7 +521,8 @@ function clearButton(onClick) {
 function slotShell(css) {
     const cell = el("div", [
         "position:relative", "border-radius:8px", "overflow:hidden",
-        "border:1px solid var(--jz-border)", "background:var(--jz-bg-raise)",
+        // 淡蓝描边：和「加载/替换/设置」这些按钮的边框同色，格子分界一眼能看清
+        "border:2px solid var(--jz-border-accent)", "background:var(--jz-bg-raise)",
         "box-sizing:border-box", "cursor:pointer",
         ...css,
     ].join(";"));
@@ -538,7 +539,7 @@ function applyEnabledLook(cell, enabled, hasMedia) {
     // 槽位不再有「禁用」概念：所有素材都会传递，避免总线槽位出现空洞导致编号错位
     cell.style.opacity = "1";
     cell.style.filter = "none";
-    cell.style.borderColor = "var(--jz-border)";
+    cell.style.borderColor = "var(--jz-border-accent)";
 }
 
 // ── 图片槽位（正方形，长边自适应） ─────────────────────────
@@ -1055,7 +1056,7 @@ function renderVideoSlot(node, index, cell) {
     const setBtn = el("button", [
         "position:absolute", "right:5px", "bottom:44px", "z-index:4",
         "height:18px", "padding:0 7px", "border-radius:5px",
-        "border:1px solid rgba(255,255,255,.42)",
+        "border:1px solid var(--jz-border-accent)",
         "background:var(--jz-btn-orange-soft, rgba(224,123,31,.58))", "color:#fff",
         "font-size:10px", "font-weight:600", "letter-spacing:.2px",
         "cursor:pointer", "line-height:1", "white-space:nowrap",

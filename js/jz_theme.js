@@ -15,6 +15,8 @@ const PALETTE = {
     "--jz-bg-raise": ["#2a2a2e", "#e9eaee"],
     "--jz-bg-deep": ["#111111", "#f7f8fa"],
     "--jz-border": ["#3a3a3a", "#c9ced6"],
+    // 预览窗 / 副按钮的淡蓝边框（与其它节点的按钮描边一致）
+    "--jz-border-accent": ["#5b9bd5", "#3f7fc4"],
     "--jz-text": ["#dddddd", "#23262a"],
     "--jz-text-strong": ["#eeeeee", "#15181c"],
     "--jz-text-dim": ["#888888", "#5c626b"],
