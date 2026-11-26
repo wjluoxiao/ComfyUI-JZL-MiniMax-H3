@@ -5917,7 +5917,6 @@ function buildModal(node, data, panelId) {
     jzlBindWheelZoom(dialog);
 
     const close = () => { overlay.remove(); modal = null; };
-
     // 保存
     let autoSaveTimer = null;
     const doSave = async (silent, refreshAssets=false) => {
@@ -5941,12 +5940,13 @@ function buildModal(node, data, panelId) {
     });
 
     // 自动保存：控件 change 后防抖保存（降低频繁整包 POST 的卡顿）。
-    // 下拉框/复选框属于「一选就该生效」的离散选择（尤其模型选择），必须立刻落盘——
-    // 否则「选完模型马上点运行」会用到上一次保存的旧值（曾报「选了 Q4 却提示 Q8 不存在」）。
+    // 下拉/复选/数字输入框都属于「一选就该生效」的离散选择（尤其模型、分辨率/MP），必须立刻落盘——
+    // 否则「改完马上点运行」会用到上一次保存的旧值（曾报「选了 Q4 却提示 Q8 不存在」「MP 改 1.0 却按 0.4 跑」）。
     panelBox.addEventListener("change", (ev) => {
         if (settings.auto_save === false) return;
         const t = String(ev?.target?.tagName || "").toUpperCase();
-        const immediate = t === "SELECT" || (t === "INPUT" && String(ev?.target?.type || "").toLowerCase() === "checkbox");
+        const ty = String(ev?.target?.type || "").toLowerCase();
+        const immediate = t === "SELECT" || (t === "INPUT" && (ty === "checkbox" || ty === "number"));
         clearTimeout(autoSaveTimer);
         autoSaveTimer = setTimeout(() => doSave(true, panelId === "assets"), immediate ? 0 : 1200);
     });

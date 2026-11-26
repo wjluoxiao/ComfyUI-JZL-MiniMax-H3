@@ -1295,9 +1295,11 @@ export function migrateSwapSettings(s) {
 for (const t of SWAP_NODE_TYPES) {
     registerSwapLikeType(t);                       // 共用函数据此判断「该按这套布局处理」
     registerPanelOverride(t, {                     // 弹窗里按面板 id 接管渲染
+        // ⚠️ 回调签名固定是 (c, s, d, node)：buildModal 会传 4 个参数。
+        //    写成 (c, s, node) 时 node 实际拿到的是 d（清单数据），节点对象就丢了。
         preference: (c, s, d, node) => renderSwapPrefPanel(c, s, d, node),
-        video_params: (c, s, node) => renderSwapVideoParamsPanel(c, s, node),
-        save_settings: (c, s, node) => renderSwapSavePanel(c, s, node),
+        video_params: (c, s, d, node) => renderSwapVideoParamsPanel(c, s, node),
+        save_settings: (c, s, d, node) => renderSwapSavePanel(c, s, node),
         help: (c, s, d, node) => renderSwapPromptPanel(c, s, d, node),
     });
     registerSettingsHook(t, {                      // 该类型自己的默认值 / 保存裁剪 / 一次性迁移
