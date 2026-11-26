@@ -103,175 +103,685 @@ DECODE_FRAMES_BUDGET = 1200
 _SEGMENT_SECONDS_OPTIONS = tuple(x for x in SEGMENT_DURATION_CHOICES if x.startswith("固定"))
 
 
-DEFAULT_PROMPT = (
-    "[SHOT_START]\n"
-    "\n"
-    "===H3_PROMPT===\n"
-    "subject_definitions:\n"
-    "<Subject 1> 是 <Picture 1> 中的人物。身份、五官、脸型、发型、发色、肤色、体型、服装、配饰与配色"
-    "全部以 <Picture 1> 为准；<Picture 1> 只是参考图，不作为画面内容出现。\n"
-    "\n"
-    "summary:\n"
-    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里的人换成 "
-    "<Subject 1>，其余一律沿用 <Video 1>。\n"
-    "\n"
-    "retention_analysis:\n"
-    "<Picture 1>: fully_preserved —— 身份与外观（长相、发型、服装、配饰、配色）。\n"
-    "<Video 1>: attribute_transfer —— 动作、表情、口型、走位、时机、机位、景别、景深、镜头运动；\n"
-    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调；\n"
-    "            partially_preserved —— 画面里的人物被 <Subject 1> 取代，位置与遮挡关系不变。\n"
-    "\n"
-    "detailed_description:\n"
-    "<Subject 1> 以 <Video 1> 中人物的同一姿态、同一动作节奏、同一表情完成整段表演，"
-    "口型开合与停顿与 <Video 1> 一致；镜头、景别、景深、运动与 <Video 1> 一致；"
-    "场景、道具、背景、光线与色彩与 <Video 1> 一致。只替换人物本身：脸、发型、服装、配饰换成 "
-    "<Picture 1> 的，动作与场景不换。\n"
-    "{video_desc}"
-    "{image_desc}"
-    "\n"
-    "[Shot 1] 沿用 <Video 1> 的表演与运镜。\n"
-    "\n"
-    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
-    "\n"
-    "non_diegetic_music: N/A\n"
-    "[SHOT_END]"
+def _fb_prompt(subject_lines, summary, retention_lines, desc_lead, desc_body, shot_line):
+    """组装「LLM 不可用时的兜底提示词」。
+
+    统一走官方 Ref2VA 六段式（字段名/顺序固定），正文用英文：
+      subject_definitions → summary → retention_analysis → detailed_description
+      → overall_soundscape → non_diegetic_music
+    `{video_desc}{image_desc}` 由 `_fill_desc()` 填用户的两段描述（空则整行消失）。
+    """
+    return (
+        "[SHOT_START]\n\n===H3_PROMPT===\n"
+        "subject_definitions:\n" + subject_lines + "\n\n"
+        "summary:\n" + summary + "\n\n"
+        "retention_analysis:\n" + retention_lines + "\n\n"
+        "detailed_description:\n" + desc_lead + "\n" + desc_body + "\n"
+        "{video_desc}{image_desc}\n"
+        "[Shot 1] " + shot_line + "\n\n"
+        "overall_soundscape: The ambience, action sounds and dialogue of <Video 1> are retained unchanged; "
+        "no new dialogue or music is added.\n\n"
+        "non_diegetic_music: N/A\n[SHOT_END]"
+    )
+
+
+_VE_SRC = (
+    "<Video 1> (source video, edit source): partially_preserved - the colour grade, lighting, background, "
+    "environment, camera move, framing, shot scale, depth of field, editing rhythm and every untouched "
+    "person, animal and prop are kept; only {what} is replaced."
 )
 
-# 提示词来源（「📝 提示词预设 → 提示词来源」下拉）
-PROMPT_SOURCES = ("系统默认", "内置skill", "内置skill·动物", "内置skill·非活物", "自定义skill")
-BUILTIN_SWAP_SKILL = "人物替换提示词.md"
-BUILTIN_ANIMAL_SKILL = "动物替换提示词.md"
-BUILTIN_INANIMATE_SKILL = "非活物替换提示词.md"
-BUILTIN_MULTI_SKILL = "多人替换提示词.md"
-# 旧档位名（老工作流里存的值，仍被 LEGACY_SOURCE_ALIAS 认）
-ANIMAL_SOURCE = "内置skill·动物"
-INANIMATE_SOURCE = "内置skill·非活物"
-MULTI_SOURCE = "内置skill·多人"
-
-# 动物拟人替换的兜底模板（LLM 不可用 / 生成失败时用）：
-# 与人物模板的关键差别 —— 明确「人类主体被整体替换掉、画面里不再有人、也不多出一只动物」。
-DEFAULT_ANIMAL_PROMPT = (
-    "[SHOT_START]\n"
-    "\n"
-    "===H3_PROMPT===\n"
-    "subject_definitions:\n"
-    "<Subject 1> 是 <Picture 1> 中的动物。物种、品种、毛色、花纹、体型、耳朵与尾巴形态、眼睛、"
-    "配饰与配色全部以 <Picture 1> 为准；<Picture 1> 只是参考图，不作为画面内容单独出现。"
-    "<Subject 1> 在本段视频里**替代 <Video 1> 中原本的那一个人类角色**，以拟人化方式表演："
-    "保留动物的外观与毛发质感，采用人类的站姿、手势、步态与表情。\n"
-    "\n"
-    "summary:\n"
-    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里唯一的人类主体"
-    "整体替换为 <Subject 1>（<Picture 1> 中的动物），由它拟人化地完成同一段表演，其余一律沿用 <Video 1>。"
-    "画面中不出现任何人类，也不出现第二只动物。\n"
-    "\n"
-    "retention_analysis:\n"
-    "<Picture 1>: fully_preserved —— 物种、毛色花纹、体型、耳朵尾巴形态、眼神、配饰与配色。\n"
-    "<Video 1>: attribute_transfer —— 动作、姿态、表情、口型开合与停顿、走位、时机、机位、景别、景深、镜头运动；\n"
-    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调、构图与遮挡关系；\n"
-    "            replaced —— 画面里的人类主体被 <Subject 1> 完全取代（同位置、同轮廓比例、同遮挡关系），"
-    "替换后画面内不再有人。\n"
-    "\n"
-    "detailed_description:\n"
-    "<Subject 1> 以 <Video 1> 中那个人物的同一姿态、同一动作节奏、同一表情完成整段拟人化表演："
-    "直立或按其原本姿势站立、用前肢做出对应的手势、头部与眼神随台词变化，口型开合与停顿与 <Video 1> 一致；"
-    "镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 <Video 1> 一致。"
-    "只替换主体本身：人类角色整体换成 <Picture 1> 的动物，动作与场景不换；"
-    "画面中只有这一只动物，没有人类，也没有第二只动物。\n"
-    "{video_desc}"
-    "{image_desc}"
-    "\n"
-    "[Shot 1] 沿用 <Video 1> 的表演与运镜，由 <Subject 1> 拟人化完成。\n"
-    "\n"
-    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
-    "\n"
-    "non_diegetic_music: N/A\n"
-    "[SHOT_END]"
+# ① 单人物替换
+DEFAULT_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the person in <Picture 1>. Face shape, hairstyle, hair colour, makeup, skin tone, "
+        "body type, top, bottom, footwear, accessories and overall colour palette all follow <Picture 1>. "
+        "<Picture 1> is a reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the main "
+        "person of <Video 1> is replaced by <Subject 1>, head to toe; every other element, and the headcount, "
+        "stay exactly as in <Video 1>."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - identity, facial features, hairstyle, outfit, "
+        "footwear, accessories and colour palette.\n"
+        + _VE_SRC.format(what="the appearance of that one person") + "\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "<Subject 1> performs the same actions with the same pose, timing and expression as the source "
+        "person, mouth movement and pauses matching <Video 1>. Camera type, movement, shot scale and depth "
+        "of field follow <Video 1>; the setting, props, background and lighting stay identical. The "
+        "replacement is complete from head to toe - entire outfit, footwear and accessories - never a face "
+        "swap on top of the original clothes. Unspecified background passers-by are kept unchanged and are "
+        "never replaced. Only where a person is actually present in <Video 1> is that person replaced."
+    ),
+    shot_line="the source performance and camera work are retained while that one person wears <Subject 1>'s "
+              "complete look.",
 )
 
-# 非活物（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…）替换的兜底模板。
-# 关键差别：主体是无生命的物件 → 必须写清「保持材质、由它占住原主体位置、做同一套动作」，
-# 且不能留下人类/动物本体，也不能把它当成道具塞进画面里。
-DEFAULT_INANIMATE_PROMPT = (
-    "[SHOT_START]\n"
-    "\n"
-    "===H3_PROMPT===\n"
-    "subject_definitions:\n"
-    "<Subject 1> 是 <Picture 1> 中的非活物／人工造物（玩偶、毛绒玩具、木头人、火柴人、机器人、砖头人……按实际写清）。"
-    "外形、材质、颜色、纹理、比例、结构细节（关节、缝线、螺丝、砖块堆叠、木纹、毛绒质感）与配饰全部以 <Picture 1> 为准；"
-    "<Picture 1> 只是参考图，不作为画面内容单独出现。<Subject 1> 在本段视频里**替代 <Video 1> 中原本的那个主体**"
-    "（无论原本是人还是动物），占住它的位置、做出它的动作，但一直保持自己无生命的材质与结构。\n"
-    "\n"
-    "summary:\n"
-    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里唯一的主体"
-    "整体替换为 <Subject 1>（<Picture 1> 中的非活物），由它以拟人化方式完成同一段表演，其余一律沿用 <Video 1>。"
-    "画面中不出现原本的人类或动物，也不出现第二个同类物件。\n"
-    "\n"
-    "retention_analysis:\n"
-    "<Picture 1>: fully_preserved —— 外形、材质、颜色、纹理、比例、结构细节与配饰。\n"
-    "<Video 1>: attribute_transfer —— 动作、姿态、节奏、走位、时机、机位、景别、景深、镜头运动；\n"
-    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调、构图与遮挡关系；\n"
-    "            replaced —— 画面里的主体被 <Subject 1> 完全取代（同位置、同轮廓比例、同遮挡关系），"
-    "替换后画面内不再有人类和动物。\n"
-    "\n"
-    "detailed_description:\n"
-    "<Subject 1> 以 <Video 1> 中那个主体的同一姿态、同一动作节奏完成整段拟人化表演："
-    "按自身结构活动（玩偶/木偶靠关节摆动、火柴人靠细线状肢体、机器人靠机械关节、砖头人靠砖块层层堆叠位移），"
-    "动作幅度与 <Video 1> 一致；不做人类式的皮肤、肌肉或毛发变化，材质始终保持 <Picture 1> 的样子。"
-    "镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 <Video 1> 一致。"
-    "只替换主体本身，动作与场景不换；画面中只有这一个物件，没有人类、没有动物，也没有第二个同类物件。\n"
-    "{video_desc}"
-    "{image_desc}"
-    "\n"
-    "[Shot 1] 沿用 <Video 1> 的表演与运镜，由 <Subject 1> 拟人化完成。\n"
-    "\n"
-    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
-    "\n"
-    "non_diegetic_music: N/A\n"
-    "[SHOT_END]"
+# ② 多人物替换
+DEFAULT_MULTI_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the person in <Picture 1> and replaces only the source person matching its "
+        "description (identity, hair, outfit and accessories all follow <Picture 1>).\n"
+        "<Subject 2> is the person in <Picture 2> and replaces only the source person matching its "
+        "description (identity, hair, outfit and accessories all follow <Picture 2>).\n"
+        "<Subject 3> is the person in <Picture 3> and replaces only the source person matching its "
+        "description (identity, hair, outfit and accessories all follow <Picture 3>).\n"
+        "(one line per tracked person, matching the number of reference pictures; <Picture N> is a reference "
+        "only and never appears as content in the shot.)"
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Each main person "
+        "of <Video 1> is replaced by its matching <Subject i>, head to toe; the headcount stays the same and "
+        "every other element is kept."
+    ),
+    retention_lines=(
+        "<Subject 1..N> (appear in [Shot 1]): fully_preserved - each subject's own identity, hairstyle, "
+        "outfit, footwear, accessories and palette, never mixed or swapped between subjects.\n"
+        + _VE_SRC.format(what="the appearance of each tracked person")
+        + " The number of people, their staging and their occlusion order stay identical.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "Every source person keeps the same action, expression, timing, staging and occlusion, and is "
+        "replaced by the matching <Subject i> from head to toe - entire outfit, footwear and accessories. "
+        "Subjects are locked by visual characteristics, never by screen position: each <Subject i> replaces "
+        "only the source person matching its description, and identities or outfits are never mixed or "
+        "swapped between subjects. Nobody is added and nobody disappears; unspecified background passers-by "
+        "stay unchanged. A <Subject i> appears only where its matching source person is actually present in "
+        "<Video 1>."
+    ),
+    shot_line="the source performance and camera work are retained while every person wears the matching "
+              "subject's complete look.",
 )
 
-# 多人替换的兜底模板（LLM 不可用 / 生成失败时用）：
-# 关键差别：人数必须保持不变，每个 <Subject i> 都要锚定「画面里第 i 个主体」的位置/原角色。
-DEFAULT_MULTI_PROMPT = (
-    "[SHOT_START]\n"
-    "\n"
-    "===H3_PROMPT===\n"
-    "subject_definitions:\n"
-    "<Subject 1> 是 <Picture 1> 中的人物。身份、五官、脸型、发型、发色、肤色、体型、服装、配饰与配色全部以 "
-    "<Picture 1> 为准；它对应 <Video 1> 画面里的第 1 个主体（按画面从左到右 / 从前到后的顺序）；"
-    "<Picture 1> 只是参考图，不作为画面内容出现。\n"
-    "<Subject 2> 是 <Picture 2> 中的人物，外观全部以 <Picture 2> 为准；它对应 <Video 1> 画面里的第 2 个主体。\n"
-    "<Subject 3> 是 <Picture 3> 中的人物，外观全部以 <Picture 3> 为准；它对应 <Video 1> 画面里的第 3 个主体。\n"
-    "（画面里有几个主体就有几个 <Subject i>，与定妆图张数一致；多余人物的行请按同样句式补全或删掉）\n"
-    "\n"
-    "summary:\n"
-    "[reference generation + audio reference] 目标视频是 <Video 1> 的重制版：把 <Video 1> 里的每一个主体**按位置逐一**"
-    "换成对应的定妆图人物（第 i 个主体 → <Subject i>），**人数保持不变**，其余一律沿用 <Video 1>。"
-    "不新增角色，也不让任何角色消失。\n"
-    "\n"
-    "retention_analysis:\n"
-    "<Picture 1..N>: fully_preserved —— 各自的身份与外观（长相、发型、服装、配饰、配色），彼此不混用、不互换。\n"
-    "<Video 1>: attribute_transfer —— 每个人的动作、表情、口型、走位、时机、机位、景别、景深、镜头运动；\n"
-    "            fully_preserved —— 场景、道具、背景、光线方向、整体色调、人数、站位与遮挡关系；\n"
-    "            replaced —— 画面里每个主体分别被对应的 <Subject i> 取代，一个不多一个不少，位置与遮挡不变。\n"
-    "\n"
-    "detailed_description:\n"
-    "画面里原本的每个人都在原来的位置、以原来的姿态与节奏表演，只是外貌换成了对应定妆图那个人："
-    "第 1 个主体像 <Picture 1>、第 2 个主体像 <Picture 2>，依此类推；彼此身份与服装不混用、不互换，"
-    "人数、站位、遮挡关系、动作时机全部保持与 <Video 1> 一致。口型开合与停顿与 <Video 1> 一致；"
-    "镜头、景别、景深、运动与 <Video 1> 一致；场景、道具、背景、光线与色彩与 <Video 1> 一致。"
-    "只替换人本身，动作与场景不换；不新增角色，也不让任何角色消失。\n"
-    "{video_desc}"
-    "{image_desc}"
-    "\n"
-    "[Shot 1] 沿用 <Video 1> 的表演与运镜，多人同时按对应 <Picture> 替换。\n"
-    "\n"
-    "overall_soundscape: 沿用 <Video 1> 的原始环境声。\n"
-    "\n"
-    "non_diegetic_music: N/A\n"
-    "[SHOT_END]"
+# ③ 单物品替换
+DEFAULT_OBJECT_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the object in <Picture 1>: material, shape, colour, texture, proportions and "
+        "structural details all follow <Picture 1>. It replaces only the one source item described by the "
+        "user (locked by its visual characteristics and its relation to the person holding or using it). "
+        "<Picture 1> is a reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only that one "
+        "specified item is replaced by <Subject 1>; every person, animal, prop and the whole scene are kept."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - material, shape, colour, structure, "
+        "proportions and surface finish.\n"
+        + _VE_SRC.format(what="that one specified item")
+        + " The item's size, perspective angle, motion blur, environment reflection and cast shadow are "
+        "inherited from the source item.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "<Subject 1> occupies exactly the same place, size, 3D perspective, motion path and motion blur as "
+        "the source item, and its surface picks up the same environment light, reflections and cast shadow. "
+        "The same occlusion order and contact points are preserved: the hand pose, grip and fingers are not "
+        "altered and the item never floats. People, animals, other props, background and camera work stay "
+        "unchanged. The object appears only where the source object is actually visible in <Video 1>."
+    ),
+    shot_line="the source performance and camera work are retained while that one item becomes "
+              "<Subject 1> in the same hand, at the same scale and angle.",
 )
+
+# ④ 多物品替换
+DEFAULT_MULTI_OBJECT_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the item in <Picture 1> (material, shape, colour, texture, proportions and structure "
+        "follow <Picture 1>) and replaces only the source item matching its description.\n"
+        "<Subject 2> is the item in <Picture 2> (same rules) and replaces only the source item matching its "
+        "description.\n"
+        "(one line per tracked item, matching the number of reference pictures; <Picture N> is a reference "
+        "only and never appears as content in the shot.)"
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Each specified "
+        "source item is replaced by its matching <Subject i>; all other props, people and the whole scene "
+        "are kept."
+    ),
+    retention_lines=(
+        "<Subject 1..N> (appear in [Shot 1]): fully_preserved - each item's material, shape, colour, "
+        "structure and proportions, never mixed or swapped between subjects.\n"
+        + _VE_SRC.format(what="the appearance of each tracked item")
+        + " Unspecified props and background objects stay unchanged.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "Every specified item keeps the same size, perspective, orientation, motion path, motion blur, "
+        "occlusion order and contact points, and becomes the matching <Subject i>. Items are locked by "
+        "visual characteristics, never by screen position: an item is never mapped to a different item and "
+        "materials are never mixed. Hand poses and fingers are not deformed, nothing floats, and unspecified "
+        "props stay as in <Video 1>. A <Subject i> appears only where its matching source item is actually "
+        "visible in <Video 1>."
+    ),
+    shot_line="the source performance and camera work are retained while each specified item becomes its "
+              "matching subject in the same place.",
+)
+
+# ⑤ 单动物替换（动物→动物）
+DEFAULT_ANIMAL_SWAP_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the animal in <Picture 1>: species and breed, coat or feather colour and pattern "
+        "distribution, body outline, head and facial structure, ears, muzzle, eyes, tail, limbs and claws, "
+        "plus any worn accessories all follow <Picture 1>. It replaces the one source animal of <Video 1>. "
+        "<Picture 1> is a reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. That one source "
+        "animal is replaced by <Subject 1> as the same individual in the same place, inheriting its motion "
+        "path and gait; no second animal appears."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - species, coat colour and pattern distribution, "
+        "body outline, ears and tail, eyes and worn accessories.\n"
+        + _VE_SRC.format(what="the species and appearance of that one animal")
+        + " Motion path, gait rhythm, posture changes, ear and tail dynamics, and any human contact points "
+        "and hand poses are kept unchanged.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "<Subject 1> moves along the same path with the same rhythm, heading, posture changes and ear and "
+        "tail dynamics as the source animal; the entire body - head, coat or pelt pattern, torso, limbs, "
+        "paws or claws, tail and any worn accessories - follows <Picture 1>, leaving no trace of the source "
+        "animal's coat or markings. Where a person touches, holds or leads the animal, that person's "
+        "appearance, hand pose and contact points stay unchanged. There is exactly one animal and no second "
+        "animal. <Subject 1> appears only where the source animal is actually present in <Video 1>."
+    ),
+    shot_line="the source motion, gait and camera work are retained while that one animal carries the "
+              "complete look of <Subject 1>.",
+)
+
+# ⑥ 动物替换人（人→动物）
+DEFAULT_ANIMAL_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the animal in <Picture 1>: species and breed, coat colour and pattern distribution, "
+        "body outline, ears and tail, eyes, and any clothing or accessories it wears all follow "
+        "<Picture 1>. It fully replaces the entire body of the one human subject of <Video 1>, inheriting "
+        "only that person's motion path and posture intent; no human skin, hands, hair or facial features "
+        "remain. <Picture 1> is a reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. The one human "
+        "subject of <Video 1> is replaced in full by <Subject 1>, which performs the same beats in the same "
+        "place; no human remains in that role and no second animal appears."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - species, coat colour and pattern, body "
+        "outline, ears and tail, eyes, and its own clothing and accessories.\n"
+        + _VE_SRC.format(what="the entire body of that one human subject")
+        + " Motion path, body rhythm, posture, timing, mouth movement and pauses are kept unchanged, and "
+        "contact shadows with the floor or furniture stay physically consistent.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "<Subject 1> performs the same beats in the same place and rhythm as the source person, with head and "
+        "eye movements following the dialogue and mouth movement matching the original timing. The entire "
+        "body - head, fur, torso, limbs, paws or hooves, tail and its own clothing - follows <Picture 1>: "
+        "there is no human skin, no human hands, no human facial features and no human hair anywhere. The "
+        "figure is not a person wearing a costume. Unspecified background passers-by stay unchanged, and "
+        "<Subject 1> appears only where the source person is actually present in <Video 1>."
+    ),
+    shot_line="the source performance and camera work are retained while the subject performs them as "
+              "the complete animal form of <Subject 1>.",
+)
+
+# ⑦ 人替换动物（动物→人）
+DEFAULT_HUMAN_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the person in <Picture 1>: face shape, hairstyle, hair colour, outfit, footwear, "
+        "accessories and colour palette all follow <Picture 1>. It fully replaces the one source animal of "
+        "<Video 1>, inheriting only that animal's movement route and rhythm while keeping a normal human "
+        "anatomy; no animal ears, tail, fur, feathers, paws or quadruped bone structure remain. "
+        "<Picture 1> is a reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. That one source "
+        "animal is replaced by <Subject 1>, who moves through the same space on the same route and rhythm; "
+        "no animal remains in that role and no extra person is added."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - identity, face, hairstyle, outfit, footwear "
+        "and accessories.\n"
+        + _VE_SRC.format(what="the one source animal")
+        + " Movement route, pacing, heading changes, dwell and turn positions, scene interaction logic, and "
+        "the contact shadows on floor or furniture are kept physically consistent.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "<Subject 1> follows the same movement route, pacing, heading changes and dwell positions as the "
+        "source animal, performed as natural human motion: normal human anatomy, natural walking, standing "
+        "and reaching, no reversed or quadruped joints, no animal ears, tail, fur, feathers or paws. Human "
+        "scale is placed correctly inside the original scene perspective, matching the source environment "
+        "light, colour temperature and cast shadow. Unspecified background passers-by stay unchanged, and "
+        "<Subject 1> appears only where the source animal is actually present in <Video 1>."
+    ),
+    shot_line="the source movement route and camera work are retained while a person performs them as "
+              "<Subject 1>.",
+)
+
+# ⑧ 非活物替换
+DEFAULT_INANIMATE_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the manufactured, non-living figure in <Picture 1>: kind, material, structural "
+        "details, colourway, proportions, joint type and surface finish all follow <Picture 1>. It fully "
+        "replaces the one source figure of <Video 1>, keeping its own manufactured nature and inheriting "
+        "only that figure's motion path and rhythm. <Picture 1> is a reference only and never appears as "
+        "content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. That one source "
+        "figure is replaced by <Subject 1>, which performs the same beats in the same place; the source "
+        "figure is gone and no second copy of the object appears."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - kind, material, structure, joints, colourway, "
+        "proportions and surface finish.\n"
+        + _VE_SRC.format(what="that one source figure")
+        + " Motion path, limb rhythm, turn amplitude, timing, mouth articulation and the contact shadows on "
+        "floor, furniture and props stay physically consistent.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of "
+        "<Video 1>."
+    ),
+    desc_body=(
+        "<Subject 1> reproduces the same motion path, turn amplitude and limb rhythm, performed in the way "
+        "its own construction allows - plastic joints, hinged wooden limbs, soft plush deformation, rigid "
+        "mechanical rotation, stacked brick blocks or minimal stick lines - without breaking its own "
+        "proportions. Its surface reflects and shadows the original environment light naturally and it has "
+        "a believable contact shadow on the floor or furniture. It stays a manufactured, non-living figure: "
+        "no human skin, no human fingers, no human facial features, no flesh, no muscles and no living fur. "
+        "The source figure is gone, no second copy of the object appears, and <Subject 1> is present only "
+        "where the source figure is actually present in <Video 1>."
+    ),
+    shot_line="the source performance and camera work are retained while the subject performs them as "
+              "the complete non-living figure of <Subject 1>.",
+)
+
+# ⑨ 单背景替换（换环境 / 换场景）——反向锁定：保留全部前景主体，只换背景
+DEFAULT_BG_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the environment in <Picture 1>: scene type, spatial structure with foreground, midground "
+        "and background layers, horizon and vanishing point, key landmarks and materials, weather, light "
+        "direction and colour temperature, depth of field and atmospheric depth all follow <Picture 1>. It "
+        "replaces the background environment of <Video 1> and changes no foreground subject. <Picture 1> is an "
+        "environment reference only: it never appears as content in the shot and is never a flat image pinned "
+        "behind the subject."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the background "
+        "environment is replaced by <Subject 1>, which has real depth and moves with the original camera; every "
+        "foreground subject keeps 100% of its appearance, action and headcount."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - scene type, spatial structure, key landmarks, "
+        "weather, light direction and colour temperature, depth of field and atmospheric depth.\n"
+        "<Video 1> (source video, edit source): partially_preserved - every foreground subject's face, facial "
+        "features, hairstyle, outfit, footwear, accessories, fur or feathers and held props, plus their action, "
+        "expression, mouth movement, staging, headcount, framing, shot scale, depth of field, camera move and "
+        "editing rhythm are all kept; only the background environment is replaced by <Subject 1>, with rim light "
+        "and contact shadows re-integrated into the new lighting.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the cinematic style, lighting design, colour grade and composition of <Video 1>."
+    ),
+    desc_body=(
+        "Every foreground subject - face, hair, outfit, accessories, held props, fur or feathers - stays 100% "
+        "identical to <Video 1> and performs the same actions with the same timing; nothing in their appearance or "
+        "headcount changes because of the background swap. The new environment has real depth with foreground, "
+        "midground and background layers and produces natural parallax that follows the original camera move; it "
+        "never behaves like a flat still image. The new scene's ambient light direction, colour temperature and "
+        "intensity fall coherently on the foreground, creating matching rim light along the subjects' edges and "
+        "believable contact shadows on the new ground surface. There is no cut-out look, no hard matte edge and no "
+        "floating subject. Foreground subjects are never invented where none are present in <Video 1>."
+    ),
+    shot_line="the foreground performance and camera work are retained while the world around them becomes the "
+              "complete environment of <Subject 1>.",
+)
+
+
+DEFAULT_ACTION_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the person in <Picture 1>: face shape, facial features, hairstyle, hair colour, makeup, "
+        "skin tone, body type, top, bottom, footwear and accessories all follow <Picture 1>. The performer is "
+        "<Subject 1> and is never the person in <Video 1>; <Video 1> supplies motion, expression and camera work "
+        "only. The scene, environment layout, props, light direction, colour temperature and depth of field also "
+        "follow <Picture 1>. <Picture 1> is a reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the body movement, "
+        "gesture timing, performance rhythm, facial expression, lip movement and camera move of <Video 1> are "
+        "carried over; the performer's identity, outfit and the entire environment come from <Subject 1>, while the "
+        "source performer's appearance and the source background are fully discarded."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - face shape and facial features, hairstyle, hair "
+        "colour, makeup, skin tone, body type, outfit, footwear and accessories, plus scene type, spatial "
+        "structure, key landmarks and materials, weather, light direction and colour temperature, depth of field.\n"
+        "<Video 1> (source video, motion driver): partially_preserved - only limb trajectories, gesture and step "
+        "timing, dance or performance rhythm, facial expression, lip movement, staging beats, shot scale changes "
+        "and camera move; the source performer's face, hairstyle, body, outfit and accessories and the source "
+        "environment, architecture, set dressing, props and colour grade are all discarded and replaced by "
+        "<Subject 1>.\n"
+    ),
+    desc_lead=(
+        "The target video follows the cinematic style, lighting design, colour grade and composition of <Subject 1>, "
+        "never those of <Video 1>."
+    ),
+    desc_body=(
+        "No facial feature, hairstyle, skin tone, garment, accessory or colour from the source performer survives "
+        "anywhere in the frame, and no element of the source environment, architecture, set dressing or background "
+        "remains. <Subject 1> reproduces the source motion faithfully - the same limb trajectories, the same gesture "
+        "and step timing, the same dance or performance rhythm, the same facial expressions and the same lip "
+        "movement - with matching staging and shot scale changes. The identity anchors stay locked frame to frame "
+        "even through fast turns, jumps, extreme close-ups and exaggerated expressions: no outfit change, no "
+        "hairstyle drift, no facial distortion. The camera move of <Video 1> is reproduced exactly inside the space "
+        "of <Subject 1>, which has real depth with foreground, midground and background layers and produces natural "
+        "parallax; it never behaves like a flat still image. Light direction, colour temperature and shadows belong "
+        "to <Subject 1>'s own environment, with believable contact shadows on the ground. The performer appears "
+        "only where <Video 1> already shows one."
+    ),
+    shot_line="the performance of the source is carried over into the world of <Subject 1>.",
+)
+
+
+DEFAULT_STYLE_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the art style of <Picture 1>: line quality and weight, brushwork and paint density, "
+        "material rendering, shading model and colour palette. It is the rendering language of the whole video and "
+        "never appears as content. <Subject 2> is every subject and the whole environment of <Video 1>: silhouette, "
+        "hairstyle shape, garment cut and layout, body proportion, prop shapes and scene layout stay identical to "
+        "<Video 1> and are only re-rendered in the style of <Subject 1>. <Picture 1> is a reference only and its "
+        "people and composition never appear in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Its content, action, "
+        "expression, composition, perspective and camera move are kept, while every surface of the frame is "
+        "re-rendered in the art style of <Subject 1>."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - line weight, brush density, material rendering, "
+        "shading model and colour palette.\n"
+        "<Video 1> (source video, edit source): partially_preserved - content, headcount, silhouette, hairstyle "
+        "shape, garment cut and colours, body proportion, expression and lip movement, action, scene layout, "
+        "framing, shot scale, depth of field, camera move and editing rhythm are kept; the photographic texture "
+        "(real skin pores, film grain, photographic background) is fully discarded and replaced by "
+        "<Subject 1>.\n"
+    ),
+    desc_lead=(
+        "The whole video is rendered in one single art style with one single set of line, brush and shading rules."
+    ),
+    desc_body=(
+        "Every surface in the frame - skin, hair, fabric, props, architecture, foliage, ground and sky - is rendered "
+        "in the same style of <Subject 1>. No photographic texture, no real-film grain and no leftover live-action "
+        "skin pores or photographic background survive anywhere, including distant areas, out-of-focus regions, "
+        "reflections and the inside of shadows. Silhouette, hairstyle shape, garment cut and layout, body proportion "
+        "and scene layout stay identical to <Video 1>; only the rendering style changes. The same line weight, "
+        "brush density, colour palette and shading model are used in every shot. Every subject appears only where "
+        "<Video 1> already shows it and nothing is added or removed."
+    ),
+    shot_line="the content and performance of the source are kept while the whole frame is re-rendered in the "
+              "style of <Subject 1>.",
+)
+
+
+DEFAULT_DRESS_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the performer of <Video 1>: face shape and facial features, hairstyle, hair volume, hair "
+        "colour, makeup, skin tone and body proportion all stay exactly as they are, and any hat, headwear, glasses "
+        "or mask stays as part of the identity. <Subject 2> is the garment in <Picture 1>: cut and silhouette, "
+        "colour and pattern placement, fabric and weave, collar, sleeve, pocket and hardware details. <Picture 1> "
+        "supplies the garment only - its model's face, hair, body and background are never used - and it appears "
+        "exactly once, worn by <Subject 1>."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the specified "
+        "garment is replaced by <Subject 2>; the performer's identity, performance, environment, lighting and "
+        "camera move are fully preserved."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - face, facial features, hairstyle and hair colour, "
+        "makeup, skin tone, body proportion, action, expression and lip movement.\n"
+        "<Subject 2> (appears in [Shot 1]): fully_preserved - cut, colour, pattern placement, fabric and weave, "
+        "collar shape and trim details.\n"
+        "<Video 1> (source video, edit source): partially_preserved - background, props, light direction and colour "
+        "temperature, colour grade, depth of field, framing, shot scale, camera move, editing rhythm and every other "
+        "person are kept; only the specified garment is replaced by <Subject 2>.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the lighting design, colour grade and composition of <Video 1>."
+    ),
+    desc_body=(
+        "Face, hair and body are unchanged and only the garment differs. The new garment fits the body, folds and "
+        "drapes with the motion, keeps every original occlusion and contact point - crossed arms, bag straps, scarves "
+        "and held props still pass in front of or behind it as before - and shows no clipping, no melted sleeves, no "
+        "distorted collar and no leftover edge of the replaced clothing. Collar shape, pattern placement, cut and "
+        "material are identical in every shot. The performer appears only where <Video 1> already shows one; when "
+        "only the back or the hands are visible no front view is invented."
+    ),
+    shot_line="the same performance is kept while the specified garment becomes <Subject 2>.",
+)
+
+
+DEFAULT_ERASE_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the cleaned-up background: scene type, the visible wall, floor, sky and ground materials, "
+        "perspective and vanishing direction, light direction and colour temperature, continuing the real "
+        "environment already present in <Video 1>. If a clean background reference is supplied it only lends "
+        "texture and structure and never appears as content; otherwise <Subject 1> is reconstructed from the "
+        "surrounding real surfaces alone."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the specified "
+        "distracting elements are removed; the emptied areas are filled by the surrounding real background, and "
+        "nothing else in the frame changes."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - background materials and texture, perspective, light "
+        "direction and colour temperature; the reconstructed area is equally sharp as its surroundings.\n"
+        "<Video 1> (source video, edit source): partially_preserved - every kept subject's appearance, action, "
+        "expression and lip movement, all main props, framing, shot scale, depth of field, camera move and editing "
+        "rhythm are kept; only the named distracting elements and their cast shadows, reflections and occluded "
+        "light are removed.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the lighting design, colour grade and composition of <Video 1>."
+    ),
+    desc_body=(
+        "The named distracting elements are gone: each removed area is filled by the surrounding real surface - wall "
+        "plaster, floor tiles, grass, sky - continuing its own texture, perspective, lighting and sharpness, with no "
+        "blur patch, no ghosting, no smeared texture, no warped geometry and no repeated clone pattern. Nothing is "
+        "invented in their place. The reconstructed background follows the original camera move with correct "
+        "parallax: no jelly-like warping and no sliding patch that lags behind the rest of the frame. The edges, "
+        "silhouettes and shadows of every kept subject stay intact. If a target element is not present in this shot, "
+        "the shot stays exactly as <Video 1>."
+    ),
+    shot_line="the scene is the same shot with the named distractions cleanly gone.",
+)
+
+
+DEFAULT_FACESWAP_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is what is kept from <Video 1>'s performer: hairstyle outline, hair volume and colour, bangs, "
+        "sideburns, headwear, hat, helmet or hair ornament, body type, the entire outfit and accessories, and the "
+        "skin tone outside the face. <Subject 2> is the facial identity of <Picture 1>: face shape and its "
+        "length-to-width ratio, brow shape, eye shape and spacing, nose, lips, jaw and cheekbones, age and "
+        "temperament. <Picture 1> supplies the facial identity only - its hairstyle, garments and background are "
+        "never used."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the facial identity "
+        "is replaced by <Subject 2>; hairstyle, headwear, body, outfit, performance, environment, lighting and camera "
+        "move are fully preserved."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - hairstyle outline and colour, headwear, body type, "
+        "entire outfit and accessories, skin tone.\n"
+        "<Subject 2> (appears in [Shot 1]): fully_preserved - facial proportions, brow, eye, nose and lip shape, jaw "
+        "and cheekbones, age and temperament.\n"
+        "<Video 1> (source video, edit source): partially_preserved - action, expression, eye direction, lip "
+        "movement and its timing, staging, framing, shot scale, depth of field, camera move, editing rhythm, "
+        "background, props and every other person are kept; only the facial identity is replaced, lit by the light "
+        "of <Video 1>'s scene.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the lighting design, colour grade and composition of <Video 1>."
+    ),
+    desc_body=(
+        "Hair, headwear and outfit are unchanged and only the face differs. The new face carries every frame's "
+        "micro-expression, eye direction, brow movement and speaking lip shape, and receives the light of "
+        "<Video 1>'s scene: same key light direction, same shadow softness, same colour temperature, same specular "
+        "highlights, with a continuous skin transition into the neck and a natural hairline and jaw edge. There is "
+        "no sticker-like pasted face, no mask edge, no mismatched skin tone and no double jaw line, and out-of-focus "
+        "shots stay equally out of focus. Where <Video 1> shows only a back of head, a silhouette or no face at all, "
+        "the frame is left untouched, and the facial proportions stay consistent in every shot."
+    ),
+    shot_line="the same performance is kept while the facial identity becomes <Subject 2>.",
+)
+
+
+DEFAULT_CLAY_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the fully rendered world: character identity and facial features, skin with subsurface "
+        "scattering and pore detail, hair strands and highlights, garment cut, fabric texture and stitching, "
+        "environment materials and layout, time of day and weather, main light direction and colour temperature, "
+        "depth of field and atmospheric depth, and the overall cinematic rendering style. <Picture 1> is a "
+        "reference only and never appears as content in the shot."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the geometry, motion "
+        "timing and camera move of <Video 1> are reused; everything else is rendered as the real materials, light "
+        "and colour of <Subject 1>."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - identity and facial features, skin and hair, garment "
+        "cut and fabric, scene materials and layout, time and weather, main light direction and colour temperature, "
+        "depth of field and rendering style.\n"
+        "<Video 1> (source video, geometry driver): partially_preserved - limb trajectories and joint angles, "
+        "timing and rhythm, staging and proportion, occlusion, camera move, shot scale and perspective are kept; "
+        "its flat unshaded surface colour and all outline strokes are fully discarded.\n"
+    ),
+    desc_lead=(
+        "The target video is a photoreal, physically lit piece with the materials, colour grade and atmosphere of "
+        "<Subject 1>."
+    ),
+    desc_body=(
+        "The body follows the exact joint angles and timing of <Video 1>, while the surface - identity, skin, hair, "
+        "fabric, environment - comes entirely from <Subject 1>. Skin shows subsurface scattering, fine pore detail "
+        "and natural specular roll-off; hair reads as grouped strands with directional highlights; fabric shows "
+        "weave, weight and folds; the environment reads as real walls, ground, foliage and sky with weather and "
+        "atmospheric depth. Anatomy is corrected to be physically plausible while the motion timing stays identical. "
+        "Photoreal materials and physically consistent lighting hold throughout, with identical main light "
+        "direction, colour temperature, contrast and material response in every shot. Every subject appears only "
+        "where <Video 1> already shows geometry for it."
+    ),
+    shot_line="the motion and camera work of the source are kept and everything is rendered as <Subject 1>.",
+)
+
+
+DEFAULT_MATERIAL_PROMPT = _fb_prompt(
+    subject_lines=(
+        "<Subject 1> is the target material: hue and value, roughness and glossiness, reflectance and refraction, "
+        "texture grain scale and subsurface scattering. When a material reference is supplied it only lends these "
+        "surface properties and never appears as content. <Subject 2> is the target object itself: its geometry, "
+        "silhouette, volume, proportions, per-frame deformation and motion all come from <Video 1>, and only its "
+        "surface material is replaced by <Subject 1>."
+    ),
+    summary=(
+        "[video editing + audio reuse] The target video is an edited version of <Video 1>. Only the surface material "
+        "of the specified region is replaced by <Subject 1>; its geometry, motion and the rest of the frame are "
+        "fully preserved."
+    ),
+    retention_lines=(
+        "<Subject 1> (appears in [Shot 1]): fully_preserved - hue and value, roughness and glossiness, reflectance "
+        "and refraction, texture grain scale.\n"
+        "<Subject 2> (appears in [Shot 1]): fully_preserved - geometry, silhouette, volume, proportions, per-frame "
+        "deformation, motion and every contact point and occlusion.\n"
+        "<Video 1> (source video, edit source): partially_preserved - background, every other subject's appearance "
+        "and action, framing, shot scale, depth of field, light direction and colour temperature, colour grade, "
+        "camera move and editing rhythm are kept; only the surface material of the specified region is replaced, and "
+        "it responds to the real light of the scene.\n"
+    ),
+    desc_lead=(
+        "The target video keeps the lighting design, colour grade and composition of <Video 1>."
+    ),
+    desc_body=(
+        "The silhouette, volume, proportions and per-frame deformation of the target stay 100% identical to "
+        "<Video 1>; only its surface material changes. The material is a surface treatment, not an added effect "
+        "layer and not a particle cloud. It has physically correct optics for its kind - mirror highlights and sharp "
+        "environment reflection for liquid metal, refraction, transmission and coloured fringes for crystal or "
+        "glass, broad soft highlights for matte ceramic, fine rim fuzz for plush, translucency and internal "
+        "inclusions for ice, anisotropic long highlights for silk - and it reflects and refracts the actual "
+        "surroundings and light direction of the scene. The material does not spill onto neighbouring surfaces: no "
+        "halo, no colour bleeding, no added glow and no lens flare. Shadows respond correctly, being softer and "
+        "tinted when the material is translucent. Identical roughness, glossiness, texture scale and reflectance "
+        "hold in every shot, and the target appears only where <Video 1> already shows it."
+    ),
+    shot_line="the object keeps its exact shape and motion while its surface becomes <Subject 1>.",
+)
+
+
+# 「使用原声」时模型不产出声音（音轨在落盘阶段直接复用），提示词里不该出现 <Audio 1> 引用；
+# 「生成音频」时声音由模型生成，overall_soundscape 要描述「该出现什么声音」而不是「沿用原片」。
+_AUDIO_REUSE_LINE = ("The ambience, action sounds and dialogue of <Video 1> are retained unchanged; "
+                     "no new dialogue or music is added.")
+_AUDIO_GEN_LINE = ("Sound is generated as part of this video: ambience and action sounds that match the "
+                   "rendered scene and movement, plus any dialogue the scene implies. No background music "
+                   "is added unless the scene requires it.")
+
+# 传给 LLM 的一句「声音来源」提示：两种模式写 overall_soundscape 的方式完全不同
+_AUDIO_MODE_HINT = {
+    "使用原声": ("使用原声 —— 音轨在落盘阶段直接复用原片，模型不产出声音。"
+                "overall_soundscape 写原片的环境声/动作声/对白原样保留，"
+                "并且**不要在 retention_analysis 里写 `<Audio 1>`**（它不存在）。"),
+    "生成音频": ("生成音频 —— 声音由模型生成。overall_soundscape 要写「成片里应该出现什么声音」"
+                "（环境声/动作声/对白），不要写「沿用原片」，也不要写 `<Audio 1>`。"),
+}
+
+
+def _strip_audio_tag(text):
+    """删掉所有 `<Audio 1>` 行。
+
+    源音轨**从不参与参考编码**（使用原声时只在落盘阶段复用、生成音频时由模型生成），
+    所以提示词里声明 `<Audio 1> ... fully_copy` 是错的：模型看不到这个标签，只会被误导去「复刻声音」。
+    用户自己的自定义 skill 里若还写着这一行，也在这里统一截掉。
+    """
+    lines = [ln for ln in str(text or "").splitlines() if not ln.lstrip().startswith("<Audio 1>")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _apply_audio_mode(text, audio_mode):
+    """按「🎨 视频参数设置 → 声音来源」收尾提示词：先清 `<Audio 1>`，生成音频时改写声音段。"""
+    out = _strip_audio_tag(text)
+    if str(audio_mode or "使用原声") == "生成音频":
+        out = out.replace(_AUDIO_REUSE_LINE, _AUDIO_GEN_LINE)
+    return out
 
 
 def _fill_desc(template, video_desc, image_desc):
@@ -387,19 +897,19 @@ def _fill_prompt(prompt, index, count, start_frame, keep_frames):
                .replace("{frames}", str(int(keep_frames))))
 
 
-def _load_swap_skill(name, tag=TAG, skill_dir=""):
-    """读 skill 文件。
+def _load_swap_skill(name, tag=TAG, custom=False):
+    """读 skill 文件全文。
 
-    skill_dir 非空 = 用户自己选的目录（「📂 选择 skill 文件目录」），直接从那里读；
-    为空时退回插件自带 skills/jzl（与「✨ MiniMax-skill加载」同一目录与规则）。
+    custom=False → 内置目录 skills/jzl/ 里的文件（「内置skill」分支）
+    custom=True  → 自定义子目录 skills/jzl/custom/ 里的文件（「自定义skill」分支）
+    文件不存在/超限/非 UTF-8 时打一行警告并返回 None（调用方回退「系统默认」提示词）。
     """
     try:
-        from .nodes_skill import _read_skill, read_skill_in_dir
-        if str(skill_dir or "").strip():
-            return read_skill_in_dir(skill_dir, name)
-        return _read_skill(name)
+        from .nodes_skill import read_builtin_skill, read_custom_skill
+        return read_custom_skill(name) if custom else read_builtin_skill(name)
     except Exception as e:
-        print(f"[JZL-{tag}] ⚠️ skill 读取失败（{name or '未选择'}）：{e}"
+        where = "自定义" if custom else "内置"
+        print(f"[JZL-{tag}] ⚠️ {where} skill 读取失败（{name or '未选择'}）：{e}"
               f" → 本次回退「系统默认」提示词", flush=True)
         return None
 
@@ -507,71 +1017,292 @@ def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
 
 # 提示词来源（「📝 提示词预设 → 提示词来源」）现在是**两个分支**（与「本地模型 / 在线API」同一交互）：
 #   · 内置skill   → 再选一个具体的内置 skill（pc.builtin）
-#   · 自定义skill → 加载/选择一个本地 .md 文件（pc.skill）
-# 「系统默认」只在 LLM 关闭（或回退）时使用，不再出现在下拉里。
+#   · 自定义skill → skills/jzl/custom/（自定义子目录）里的一个 .md/.txt（pc.skill）
+# 「系统默认」只在 LLM 关闭（或回退）时使用。
+#
+# 内置 skill 文件名（都在插件目录 skills/jzl/ 下；「📥 导入Skill文件」也存到这个目录）
+BUILTIN_SWAP_SKILL = "单人物替换skill.md"
+BUILTIN_MULTI_SKILL = "多人物替换skill.md"
+BUILTIN_OBJECT_SKILL = "单物品替换skill.md"
+BUILTIN_MULTI_OBJECT_SKILL = "多物品替换skill.md"
+BUILTIN_ANIMAL_SWAP_SKILL = "单动物替换skill.md"
+BUILTIN_ANIMAL_SKILL = "动物替换人skill.md"
+BUILTIN_HUMAN_SKILL = "人替换动物skill.md"
+BUILTIN_INANIMATE_SKILL = "非活物替换skill.md"
+BUILTIN_BG_SKILL = "单背景替换skill.md"
+BUILTIN_ACTION_SKILL = "视频动作迁移skill.md"
+BUILTIN_STYLE_SKILL = "风格化转绘skill.md"
+BUILTIN_DRESS_SKILL = "人物换装skill.md"
+BUILTIN_ERASE_SKILL = "视频物体消除skill.md"
+BUILTIN_FACESWAP_SKILL = "视频人物换脸skill.md"
+BUILTIN_CLAY_SKILL = "素模渲染skill.md"
+BUILTIN_MATERIAL_SKILL = "局部材质替换skill.md"
+
 PROMPT_SOURCES = ("系统默认", "内置skill", "自定义skill")
 PROMPT_LLM_SOURCES = ("内置skill", "自定义skill")
 
 # 旧值 → 新分支的内置 skill 名（老工作流兼容：以前每种内置 skill 各占一个来源档位）
 LEGACY_SOURCE_ALIAS = {
-    "内置skill·动物": "动物替换",
+    "内置skill·动物": "动物替换人",
     "内置skill·非活物": "非活物替换",
-    "内置skill·多人": "多人替换",
+    "内置skill·多人": "多人物替换",
 }
 
-# 内置 skill 名 → (skill 文件, 兜底模板(None=人物模板), LLM 指令里额外的一段约束(None=通用换人话术))
+# 旧的内置 skill 名 → 新的内置 skill 名（老工作流里存的是 pc.builtin 的原值）。
+# 「动物替换」在旧版语义是「用动物替换视频里的人」，所以映射到「动物替换人」。
+LEGACY_BUILTIN_ALIAS = {
+    "人物替换": "单人物替换",
+    "多人替换": "多人物替换",
+    "动物替换": "动物替换人",
+}
+
+# 内置 skill 名 → (skill 文件, 兜底模板, LLM 指令里额外的一段约束)
+# 十六个场景各自一份 skill：单/多 人物、单/多 物品、单动物、人→动物、动物→人、非活物、单背景、视频动作迁移、
+# 风格化转绘、人物换装、视频物体消除、视频人物换脸、素模渲染、局部材质替换。
 BUILTIN_SKILLS = {
-    "人物替换": (BUILTIN_SWAP_SKILL, None, None),
-    "动物替换": (
+    "单人物替换": (
+        BUILTIN_SWAP_SKILL, None,
+        "请根据下面的素材描述，写一段用于「**把视频里那一个主体人物整体替换成参考图中的人**」的 MiniMax-H3 提示词。\n"
+        "重点：① 必须**全身**替换（脸/发型/妆容/衣服/鞋/配饰/配色整套），不能只换脸；\n"
+        "② 人数不变，未指定的背景路人保持原样、不被替换；\n"
+        "③ 主体没出现在本段画面时不要凭空生成；④ 各分段外观锚点必须一致。",
+    ),
+    "多人物替换": (
+        BUILTIN_MULTI_SKILL, DEFAULT_MULTI_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把视频里的多个人分别换成对应的多张定妆图**」的 MiniMax-H3 提示词。\n"
+        "重点：这是**逐一对位替换** —— 原来有几个人，换完还是几个人；每个人的动作、时机、站位与遮挡都不变，\n"
+        "不许新增角色、不许有人消失、不许把两个参考图的身份混到一个人身上；\n"
+        "**严禁用「左边/右边/前景」等位置词绑定人物**（人会走位交叉），必须用视觉特征锁定每个 <Subject i> 替换哪个源人物；\n"
+        "某人物没出现在本段画面时不许凭空生成、也不许错位替换到别人身上。",
+    ),
+    "单物品替换": (
+        BUILTIN_OBJECT_SKILL, DEFAULT_OBJECT_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把视频里那一件指定物品替换成参考图中的物品**」的 MiniMax-H3 提示词。\n"
+        "重点：① 只换这一件物品，人物/动物/场景/其他道具全部保留；\n"
+        "② 必须保留原有的遮挡关系与接触点（握持手势不变，不许手指畸形或穿模）；\n"
+        "③ 新物品继承原物品的尺寸、透视角度、运动模糊与环境光影反射；④ 物品没出现在本段时不许凭空生成。",
+    ),
+    "多物品替换": (
+        BUILTIN_MULTI_OBJECT_SKILL, DEFAULT_MULTI_OBJECT_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把视频里的多件物品分别替换成各自对应的参考图物品**」的 MiniMax-H3 提示词。\n"
+        "重点：① 只换指定的那几件，其他道具与背景物体保持原样；\n"
+        "② **严禁用「左边/右边/桌上」等位置词绑定物品**（物品会被拿起放下传递），必须用视觉特征锁定编号映射；\n"
+        "③ 保留遮挡与接触点，继承尺寸/透视/光影；④ 未出场的物品不许凭空插入，也不许错位替换到其他物品上。",
+    ),
+    "单动物替换": (
+        BUILTIN_ANIMAL_SWAP_SKILL, DEFAULT_ANIMAL_SWAP_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把视频里那只主体动物整体替换成参考图中的动物**」的 MiniMax-H3 提示词。\n"
+        "重点：① 必须**整只**替换（物种/毛色/花纹/体型/头脸/耳朵/尾巴/四肢爪子/穿戴配饰），不能只换头，不能残留源动物毛色；\n"
+        "② 原动物消失，画面里不出现第二只动物；③ 若有人抚摸/抱起/牵引，人物外观、手部姿势与接触点不变；\n"
+        "④ 动物没出现在本段时不许凭空生成；⑤ 各分段花纹分布（斑点/条纹位置）锚点必须一致。",
+    ),
+    "动物替换人": (
         BUILTIN_ANIMAL_SKILL, DEFAULT_ANIMAL_PROMPT,
         "请根据下面的素材描述，写一段用于「**用参考图中的动物替换视频里的那个人**」的 MiniMax-H3 提示词。\n"
-        "重点：这是**替换**，不是加入 —— 原本那个人完全消失，由这只动物占住他的位置、拟人化地做同样的动作；\n"
-        "画面里不能出现人类，也不能出现第二只动物，更不能写成动物与人互动。",
+        "重点：这是**替换**，不是加入 —— 原本那个人完全消失，由这只动物占住他的位置、演绎同样的动作轨迹；\n"
+        "必须**整只**替换，不许残留人类皮肤/五官/手部；画面里不能出现人类（背景路人除外），也不能出现第二只动物；\n"
+        "不能写成动物与人互动；人物没出现在本段时不许凭空生成。",
+    ),
+    "人替换动物": (
+        BUILTIN_HUMAN_SKILL, DEFAULT_HUMAN_PROMPT,
+        "请根据下面的素材描述，写一段用于「**用参考图中的人物替换视频里的那只动物**」的 MiniMax-H3 提示词。\n"
+        "重点：① 完全采用正常人类解剖结构，**不许残留动物的耳朵、尾巴、毛发、爪子，也不许把骨骼扭成四足姿态**；\n"
+        "② 只继承原动物的运动路线、节奏、朝向与场景交互逻辑，以人类自然动作呈现；\n"
+        "③ 处理体型差异：在原场景透视里合理呈现人物比例并匹配环境光与接触阴影；\n"
+        "④ 动物没出现在本段时不许凭空生成。",
     ),
     "非活物替换": (
         BUILTIN_INANIMATE_SKILL, DEFAULT_INANIMATE_PROMPT,
         "请根据下面的素材描述，写一段用于「**用参考图中的非活物（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…）"
         "替换视频里的主体**」的 MiniMax-H3 提示词。\n"
         "重点：这是**替换**，不是加入、不是当道具 —— 原本那个人（或动物）完全消失，由这个物件占住他的位置、"
-        "以自身结构做同一套拟人化动作；材质始终保持参考图的样子（毛绒/木质/塑料/金属/砖块），\n"
-        "不能长出人类或动物的皮肤毛发、不能有人类的手脚，画面里不能再有原本的人类/动物，也不能出现第二个同类物件。",
+        "以自身结构做同一套动作；\n"
+        "材质必须始终是参考图的样子（塑料/毛绒/木质/金属/砖块/线条），**绝不能画成穿着道具服的真人**，"
+        "不能有人类皮肤、手指或五官；\n"
+        "画面里不能再有原本的人类/动物，也不能出现第二个同类物件；主体没出现在本段时不许凭空生成。",
     ),
-    "多人替换": (
-        BUILTIN_MULTI_SKILL, DEFAULT_MULTI_PROMPT,
-        "请根据下面的素材描述，写一段用于「**把视频里的多个人分别换成对应的多张定妆图**」的 MiniMax-H3 提示词。\n"
-        "重点：这是**逐一对位替换** —— 原来有几个人，换完还是几个人；每个人的位置、遮挡、动作与时机都不变，\n"
-        "不许新增角色、不许有人消失、不许把两个参考图的身份混到一个人身上；\n"
-        "必须在 subject_definitions 里写清每个 <Subject i> 对应画面里的哪个位置/哪个原角色。",
+    "单背景替换": (
+        BUILTIN_BG_SKILL, DEFAULT_BG_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把视频的背景环境整体换成参考图中的场景**」的 MiniMax-H3 提示词。\n"
+        "注意这是**反向锁定**：参考图给的是环境，不是主体。\n"
+        "重点：① 画面里**所有前景主体保持 100% 原样**（脸/发型/服装/配饰/毛发/手持道具），动作、表情、口型、"
+        "站位构图、人数、运镜与剪辑节奏全部照旧，绝不因换背景而重绘主体；\n"
+        "② **光影与接触阴影必须物理融合**：新背景的环境光方向与色温要作用到主体边缘轮廓光与脚底投影上，"
+        "不许抠图感、不许主体悬空；\n"
+        "③ 背景要有**真实三维纵深**并随原片运镜产生视差，严禁当静止平面贴图；\n"
+        "④ 各分段的空间布局、标志性景物、天气与光线必须一致，避免合并后背景跳变。",
+    ),
+    "视频动作迁移": (
+        BUILTIN_ACTION_SKILL, DEFAULT_ACTION_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把原视频里人物的动作/表情/口型/运镜，迁移到参考图里的那个人身上**」"
+        "的 MiniMax-H3 提示词。\n"
+        "注意这是「**只借动作，不借外观**」：<Video 1> 只是动作驱动源。\n"
+        "重点：① **彻底剥离源视频**——原人物的脸/发型/体型/服装/配饰、以及原视频的场景/建筑/道具/色调"
+        "一律丢弃，绝不能串到成片里；\n"
+        "② **视觉身份与环境全部来自参考图**（场景若由文本另行指定，则环境用文本的、身份仍取参考图）；\n"
+        "③ 大幅度转身、跳跃、特写、夸张表情下，五官与服装结构**必须锁死不走样**；\n"
+        "④ 原片运镜要复刻，但新场景必须有真实纵深并产生自然视差，不许当平面贴图；"
+        "各分段身份/服饰/场景/光照必须一致。",
+    ),
+    "风格化转绘": (
+        BUILTIN_STYLE_SKILL, DEFAULT_STYLE_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把整片画风转成参考图的艺术风格**」的 MiniMax-H3 提示词。\n"
+        "注意这是「内容取自原视频、画风取自参考图」。\n"
+        "重点：① **彻底转绘**——人物、服装、道具、背景、光影全部统一进入目标画风，"
+        "不许局部还是实拍皮肤或真实照片背景（防「半真半假」）；\n"
+        "② **结构锁定**——构图比例、透视、发型轮廓、服装剪裁、场景布局不能变，只换渲染方式；\n"
+        "③ 把画风拆成**线条 / 笔触 / 材质渲染 / 光影处理 / 色彩体系**五个可复述锚点，各分段复用同一套措辞。",
+    ),
+    "人物换装": (
+        BUILTIN_DRESS_SKILL, DEFAULT_DRESS_PROMPT,
+        "请根据下面的素材描述，写一段用于「**只换衣服、不动人**」的 MiniMax-H3 提示词。\n"
+        "重点：① **强锁原人物**——五官、发型发色、妆容、身材、动作口型 100% 不变，"
+        "参考图**只提供服装**（模特图的脸/发型/背景一律不用）；\n"
+        "② **服装动态贴合与遮挡保护**——布料随动作褶皱垂坠，手臂交叉/肩带/手持物遮挡关系不变，不穿模不漏旧衣边；\n"
+        "③ 各分段领口/花纹/版型/材质一致；人物没出现在本段时不许凭空生成。",
+    ),
+    "视频物体消除": (
+        BUILTIN_ERASE_SKILL, DEFAULT_ERASE_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把指定的干扰物从画面里无痕抹除**」的 MiniMax-H3 提示词。\n"
+        "注意：只删点名的那几个，其余一切零变动。\n"
+        "重点：① 用**视觉特征**点名要删的东西（不要用左右位置词），连它的**阴影与反光**一起移除；\n"
+        "② 空缺用**周围真实材质**延续补全，同等清晰，无模糊色块/重影/拉伸/克隆痕迹，"
+        "并随运镜产生正确视差（不滑动、不果冻）；\n"
+        "③ **双向约束**：本段有它就彻底移除，本段本来没有就严格保持原样，且绝不新增任何东西。",
+    ),
+    "视频人物换脸": (
+        BUILTIN_FACESWAP_SKILL, DEFAULT_FACESWAP_PROMPT,
+        "请根据下面的素材描述，写一段用于「**只换面部身份、不换发不换衣**」的 MiniMax-H3 提示词。\n"
+        "重点：① 与「单人物替换」最大的区别：**发型、刘海、头饰帽子、身材、全身服装全部保留原样**，"
+        "参考图只提供面部身份；\n"
+        "② 新脸要承接每帧**微表情、眼神与口型**，并匹配原片受光方向、阴影、色温与景深（防「贴脸面具感」）；\n"
+        "③ 背影/未出场段落不许强行生成脸；各分段五官比例必须一致。",
+    ),
+    "素模渲染": (
+        BUILTIN_CLAY_SKILL, DEFAULT_CLAY_PROMPT,
+        "请根据下面的素材描述，写一段用于「**把红白模/灰模/骨骼预演/线稿渲染成完整成片**」的 MiniMax-H3 提示词。\n"
+        "注意这是「几何与动作取自原视频、材质色彩与身份取自参考图及文本」。\n"
+        "重点：① 在 `retention_analysis` 里明写 `<Video 1>` **只作几何骨架/动作时序/运镜驱动**，"
+        "其表面颜色与素模线稿材质**完全丢弃**；\n"
+        "② **输出正文里严禁出现「白模/灰模/线稿/线框/预演/塑料感」这类字眼**，直接描写渲染后的真实材质与光线；\n"
+        "③ 动作与关节角度照原片但解剖要修正为可信人体；各分段主光方向/色温/材质反应必须一致。",
+    ),
+    "局部材质替换": (
+        BUILTIN_MATERIAL_SKILL, DEFAULT_MATERIAL_PROMPT,
+        "请根据下面的素材描述，写一段用于「**只换表面材质、不改形状**」的 MiniMax-H3 提示词。\n"
+        "重点：① **绝对几何锁定**——目标物体的轮廓、体积、逐帧形变与运动轨迹 100% 保留，"
+        "只改表面物理材质（不许把形状融化或重绘）；\n"
+        "② **物理光学响应**——按材质写清高光/反射/折射/透光/粗糙度，并真实反射当前场景的环境光，"
+        "严禁像贴图、严禁溢出污染周围、不加光效粒子；\n"
+        "③ 各分段粗糙度/光泽/纹理一致；目标没出现在本段时不许凭空生成。",
     ),
 }
-DEFAULT_BUILTIN_SKILL = "人物替换"
+# 目录里一个 skill 都没有时的空值（正常情况下不会用到：清单来自目录扫描）
+DEFAULT_BUILTIN_SKILL = ""
 
 
-def _builtin_skill_file(name):
-    """「内置 skill」下拉里的一个值 → 实际要读的文件名。
+def _skill_stem(filename):
+    """文件名 → 去掉扩展名的短名（下拉显示用）。"""
+    return os.path.splitext(str(filename or ""))[0]
 
-    两种值都认：
-    · 内置四档（人物替换 / 动物替换 / 非活物替换 / 多人替换）→ 对应的自带 skill 文件；
-    · 用户用「📥 导入Skill文件」放进内置目录的自定义文件，值就是文件名本身（.md/.txt）。
-    认不出来的返回 ""（调用方回退默认内置 skill）。
+
+def _skill_key(filename):
+    """文件名 → 元数据查表用的键：短名再去掉结尾的 `skill`。
+
+    `单人物替换skill.md` → `单人物替换`，这样 BUILTIN_SKILLS 的键不必跟着文件名改。
+    """
+    stem = _skill_stem(filename)
+    if stem.lower().endswith("skill"):
+        stem = stem[:-5]
+    return stem.strip()
+
+
+def _builtin_index():
+    """{归一化键: 目录里的真实文件名}，键包含文件名 / 短名 / 去掉 skill 的短名。
+
+    这样无论配置里存的是文件名（`单人物替换skill.md`）、短名（`单人物替换skill`）
+    还是老的 scene 名（`单人物替换` / `人物替换`），都能落到同一个文件上。
+    """
+    idx = {}
+    try:
+        from .nodes_skill import list_builtin_skills
+        files = list_builtin_skills()
+    except Exception:
+        files = []
+    for f in files:
+        for key in (f, _skill_stem(f), _skill_key(f)):
+            k = str(key or "").strip().casefold()
+            if k and k not in idx:
+                idx[k] = f
+    return idx
+
+
+def _canonical_builtin(name):
+    """把内置 skill 名归一化成**目录里真实存在的文件名**（认不出来返回 ""）。
+
+    认的顺序（全部基于目录实际内容，不依赖任何写死的清单）：
+      ① 带扩展名的文件名：直接按文件名匹配（用户明确点的是哪个文件就是哪个）；
+      ② 老的场景名（人物替换 / 多人替换 / 动物替换）→ 经 LEGACY_BUILTIN_ALIAS 换成新场景名再找；
+      ③ 短名 / 去掉 skill 的短名（单人物替换、单人物替换skill）。
     """
     key = str(name or "").strip()
     if not key:
         return ""
-    if key in BUILTIN_SKILLS:
-        return BUILTIN_SKILLS[key][0]
-    if os.path.splitext(key)[1].lower() not in (".md", ".markdown", ".txt"):
+    idx = _builtin_index()
+    if not idx:
         return ""
+    has_ext = os.path.splitext(key)[1].lower() in (".md", ".txt", ".markdown")
+    if has_ext:
+        hit = idx.get(key.casefold())
+        if hit:
+            return hit
+    # 老场景名优先于「同名旧文件」：老工作流存的 `人物替换` 应该落到 `单人物替换skill.md`，
+    # 而不是目录里那份给别的节点用的 `人物替换.md`。
+    # 也认「带扩展名的老名字」（老版本把 pc.builtin 存成 `人物替换.md` 这种形式）。
+    alias = (LEGACY_BUILTIN_ALIAS.get(key)
+             or LEGACY_BUILTIN_ALIAS.get(os.path.splitext(key)[0]))
+    if alias:
+        for cand in (alias, alias + "skill"):
+            hit = idx.get(str(cand).casefold())
+            if hit:
+                return hit
+    for cand in (key, os.path.splitext(key)[0]):
+        hit = idx.get(str(cand).casefold())
+        if hit:
+            return hit
+    return ""
+
+
+def _builtin_skill_file(name):
+    """兼容旧调用：返回解析后的文件名（认不出来返回 ""）。"""
+    return _canonical_builtin(name)
+
+
+def _builtin_meta(filename):
+    """按「去掉 skill 的短名」查该 skill 的专属兜底模板 / LLM 附加指令。
+
+    命中 BUILTIN_SKILLS 就用专属的；用户自己丢进目录的 skill 没有元数据 →
+    用通用话术 + 系统默认模板（不会因为「不认识」而报错）。
+    """
+    return BUILTIN_SKILLS.get(_skill_key(filename))
+
+
+def _default_builtin_file():
+    """目录里第一个内置 skill（配置缺失/失效时的兜底）。"""
     try:
-        from .nodes_skill import _skill_path
-        _skill_path(key)                      # 只认内置目录里真实存在、非符号链接的文件
-        return key
+        from .nodes_skill import list_builtin_skills
+        files = list_builtin_skills()
     except Exception:
-        return ""
+        files = []
+    return files[0] if files else ""
 
 
 def _resolve_prompt_kind(prompt_cfg):
-    """(来源分支, 内置 skill 名, 实际 skill 文件, 兜底模板, LLM 附加指令) —— 面板的两个分支 + 老值兼容。"""
+    """(来源分支, 实际 skill 文件名, 兜底模板, LLM 附加指令)。
+
+    内置 skill 的文件清单**完全来自目录扫描**，这里的 BUILTIN_SKILLS 只用来给
+    「已知的十六个场景」配上更贴切的 lead 与兜底模板；用户自己丢进目录的文件也能用（走通用话术）。
+    """
     source = str(prompt_cfg.get("source") or "系统默认")
     builtin = str(prompt_cfg.get("builtin") or "")
     if source in LEGACY_SOURCE_ALIAS:                    # 老工作流：来源就是某个内置 skill
@@ -580,38 +1311,33 @@ def _resolve_prompt_kind(prompt_cfg):
     if source not in PROMPT_LLM_SOURCES:
         source = "系统默认"
     if source != "内置skill":
-        return source, "", "", None, None
-    skill_file = _builtin_skill_file(builtin)
-    if not skill_file:
-        builtin = DEFAULT_BUILTIN_SKILL
-        skill_file, template, lead = BUILTIN_SKILLS[builtin]
-        return source, builtin, skill_file, template, lead
-    if builtin in BUILTIN_SKILLS:
-        _f, template, lead = BUILTIN_SKILLS[builtin]
-    else:
-        # 导入的 skill：没有专用兜底模板 / 附加指令 → 走通用换人话术（模板用系统默认）
-        template, lead = None, None
-    return source, builtin, skill_file, template, lead
+        return source, "", None, None
+    skill_file = _canonical_builtin(builtin) or _default_builtin_file()
+    if not skill_file:                                   # 目录里一个 skill 都没有
+        return source, "", None, None
+    meta = _builtin_meta(skill_file)
+    template, lead = (meta[1], meta[2]) if meta else (None, None)
+    return source, skill_file, template, lead
 
 
-def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG):
+def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG, audio_mode="使用原声"):
     """按「📝 提示词预设」产出最终提示词。
 
     系统默认 = 内置模板 + 用户填的「视频描述 / 图片描述」；
     内置skill（人物/动物/非活物/多人，以及用户导入到内置目录的 .md）= 对应 skill 当 LLM 设定词；
     自定义skill = 用户选的目录里的 .md 当 LLM 设定词。
     """
-    source, builtin, skill_file, template, lead = _resolve_prompt_kind(prompt_cfg)
-    fallback = _fill_desc(template or DEFAULT_PROMPT, video_desc, image_desc)
+    source, skill_file, template, lead = _resolve_prompt_kind(prompt_cfg)
+    fallback = _apply_audio_mode(
+        _fill_desc(template or DEFAULT_PROMPT, video_desc, image_desc), audio_mode)
     if not bool(prompt_cfg.get("use_llm")) or source == "系统默认":
         return fallback
     if source == "内置skill":
         skill_name = skill_file
-        skill_dir = ""
+        skill = _load_swap_skill(skill_name, tag, custom=False)
     else:
-        skill_name = prompt_cfg.get("skill") or ""
-        skill_dir = prompt_cfg.get("skill_dir") or ""
-    skill = _load_swap_skill(skill_name, tag, skill_dir)
+        skill_name = str(prompt_cfg.get("skill") or "").strip()
+        skill = _load_swap_skill(skill_name, tag, custom=True) if skill_name else None
     if not skill:
         return fallback
     _miss = ("（用户未填写，请按通用替换场景处理）" if source == "内置skill"
@@ -621,7 +1347,8 @@ def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG):
     lead = lead or "请根据下面的素材描述，写一段用于「把视频里的人换成参考图中的人」的 MiniMax-H3 提示词。"
     user_msg = (f"{lead}\n"
                 "必须严格使用 ===H3_PROMPT=== 结构，并用 [SHOT_START] / [SHOT_END] 包裹。\n\n"
-                f"【视频描述】\n{v}\n\n【图片描述】\n{i}")
+                f"【视频描述】\n{v}\n\n【图片描述】\n{i}\n\n"
+                f"【声音来源】{_AUDIO_MODE_HINT.get(str(audio_mode or '使用原声'), _AUDIO_MODE_HINT['使用原声'])}")
     text = _swap_llm_call(prompt_cfg, skill, user_msg, tag)
     if not text:
         return fallback
@@ -631,7 +1358,8 @@ def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG):
         print(f"[JZL-{tag}] ⚠️ 提示词结尾没有 [SHOT_END]：多半是撞上 max_length 被截断了"
               f"（当前 {len(text)} 字）。把「max_length」调大再验证一次。", flush=True)
         text = text + "\n[SHOT_END]"
-    label = f"内置skill·{builtin}" if source == "内置skill" else source
+    text = _apply_audio_mode(text, audio_mode)
+    label = f"内置skill·{_skill_stem(skill_file)}" if source == "内置skill" else "自定义skill"
     print(f"[JZL-{tag}] 提示词：{label} 生成完成（{len(text)} 字）", flush=True)
     return text
 
@@ -814,12 +1542,12 @@ def _fmt_secs(sec):
 def _prompt_cfg_label(pc):
     """「📝 提示词预设」的一句话摘要（配置总览用）。"""
     pc = pc or {}
-    src, builtin, _f, _tpl, _lead = _resolve_prompt_kind(pc)
+    src, _f, _tpl, _lead = _resolve_prompt_kind(pc)
     if src == "系统默认":
         return "关（系统默认模板，不调用 LLM）"
     backend = "在线API" if _is_api_backend(pc) else "本地模型"
     if src == "内置skill":
-        return f"开（内置skill·{builtin} / {backend}）"
+        return f"开（内置skill·{_skill_stem(_f)} / {backend}）"
     return f"开（自定义skill：{pc.get('skill') or '未选择'} / {backend}）"
 
 
@@ -932,10 +1660,10 @@ _SWAP_DEFAULTS = {
     # 📝 提示词预设：LLM 增强 + 提示词来源
     "prompt_cfg": {
         "use_llm": False,                  # 仅由 source 推导（系统默认→False，其余→True），面板不再提供开关
-        "builtin": "人物替换",             # 内置skill 分支用哪一个（人物替换/动物替换/非活物替换/多人替换）
+        "builtin": "单人物替换",           # 内置skill 分支用哪一个（十六档，见 BUILTIN_SKILLS）
         "source": "系统默认",              # 系统默认 | 内置skill | 自定义skill
         "skill": "",                       # 自定义 skill 文件名（用户选的目录里的某个 .md/.txt）
-        "skill_dir": "",                   # 自定义 skill 目录（「📂 选择 skill 文件目录」选的绝对路径）
+        "skill_dir": "",                   # 已废弃（自定义 skill 固定读 skills/jzl/custom/），仅为老工作流保留字段
         # 后端默认必须与面板显示一致（面板缺值时显示「本地模型」）：
         # 若这里默认在线API，就会出现「界面选的是 CLIP，跑起来却请求 API 报 401」
         "llm_backend": "本地模型 [local]",   # 本地模型 [local] | 在线API [api]
@@ -1098,9 +1826,9 @@ def _parse_swap_settings(raw):
         _builtin = LEGACY_SOURCE_ALIAS[_raw_src]
         _raw_src = "内置skill"
     source = _cfg_opt({"source": _raw_src}, "source", "系统默认", PROMPT_SOURCES)
-    # 内置 skill 可以是四档之一，也可以是用户「📥 导入Skill文件」放到内置目录里的文件名
-    if not _builtin_skill_file(_builtin):
-        _builtin = DEFAULT_BUILTIN_SKILL
+    # 内置 skill 可以是 BUILTIN_SKILLS 里的一档，也可以是用户丢进/导入到内置目录里的任意文件名。
+    # 老工作流存的是旧名字（人物替换 / 多人替换 / 动物替换），先归一化再校验。
+    _builtin = _canonical_builtin(_builtin) or _default_builtin_file()
     use_llm = (source != "系统默认")
     api = pc.get("api") or {}
     llm = pc.get("llm") or {}
@@ -1406,7 +2134,8 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
         cfg = _parse_swap_settings(manager_settings)
         gp, sd = cfg["gen_params"], cfg["sample_decode"]
         # 📝 提示词预设：系统默认模板 / 内置skill / 自定义skill（后两者自动走 LLM）
-        prompt = _build_swap_prompt(cfg.get("prompt_cfg") or {}, video_desc, image_desc)
+        prompt = _build_swap_prompt(cfg.get("prompt_cfg") or {}, video_desc, image_desc,
+                                    audio_mode=gp.get("audio_mode"))
         # 「📝 预览提示词」：节点一开始就把最终提示词推给面板（等同一根串联的「预览任意」）
         _emit_ui(jzl_swap_prompt=[prompt],
                  jzl_swap_prompt_src=[_prompt_cfg_label(cfg.get("prompt_cfg") or {})])

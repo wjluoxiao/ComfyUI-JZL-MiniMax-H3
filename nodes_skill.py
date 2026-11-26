@@ -10,6 +10,8 @@ _BUNDLED_SKILL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "s
 # 历史版本把 skill 目录写死成了某个安装路径；仅当它确实存在且与插件自身目录不同时才作为附加目录，
 # 顺序上**插件自身目录优先**（运行时就是当前安装，跨机器安装也能正确读写）。
 _LEGACY_SKILL_DIR = r"Z:\AI_work\ComfyUI\custom_nodes\ComfyUI-JZL-MiniMax-H3\skills\jzl"
+# 自定义 skill 的专用子目录（放在内置目录下面，用户直接往这里丢 .md 就会被识别）
+_CUSTOM_SUBDIR = "custom"
 _SKILL_EXTENSIONS = {".md", ".txt"}
 _MAX_SKILL_BYTES = 1024 * 1024
 _EMPTY_SKILL = "（未找到 .md/.txt skill 文件）"
@@ -23,6 +25,114 @@ def _skill_dirs():
     except Exception:
         pass
     return dirs
+
+
+def builtin_skill_dir():
+    """内置 skill 目录 = 插件自带 skills/jzl（里面的 .md/.txt 就是「内置skill」下拉的全部内容）。"""
+    return _skill_dirs()[0]
+
+
+def custom_skill_dirs():
+    """「自定义skill」专用子目录（每个候选根目录下的 custom/），优先插件自身那个。"""
+    out = []
+    for root in _skill_dirs():
+        out.append(os.path.join(root, _CUSTOM_SUBDIR))
+    return out
+
+
+def ensure_custom_skill_dir():
+    """确保自定义 skill 目录存在（启动时/导入时调用）。
+
+    用户点开面板就能看到这个文件夹在哪，往里丢文件即可；不存在的层级会逐级创建。
+    """
+    for d in custom_skill_dirs():
+        try:
+            os.makedirs(d, exist_ok=True)
+            # 放一个说明文件，用户打开文件夹就知道该怎么用（不会被当成 skill：扩展名不是 .md/.txt）
+            hint = os.path.join(d, "README")   # 故意不带扩展名：.md/.txt 会被当成 skill 列进下拉
+            if not os.path.exists(hint):
+                with open(hint, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(
+                        "把自定义 skill 放在这个文件夹里（.md 或 .txt，UTF-8，≤1MB）。\n"
+                        "节点里的「自定义skill」下拉会自动列出这里的所有文件，增删文件后点「🔄 刷新」即可。\n"
+                    )
+            return d
+        except OSError:
+            continue
+    return ""
+
+
+def list_builtin_skills():
+    """内置 skill 文件名列表（动态扫描 skills/jzl，不含子目录）。"""
+    return list_skills_in_dir(builtin_skill_dir())
+
+
+def list_custom_skills():
+    """自定义 skill 文件名列表（动态扫描 skills/jzl/custom，多个候选目录合并）。"""
+    names = set()
+    for d in custom_skill_dirs():
+        names.update(list_skills_in_dir(d))
+    return sorted(names, key=str.casefold)
+
+
+def resolve_builtin_skill(name):
+    """内置 skill 名 → 绝对路径（只认内置目录里真实存在、非符号链接的文件）。找不到抛异常。"""
+    return _skill_path_in(builtin_skill_dir(), name)
+
+
+def resolve_custom_skill(name):
+    """自定义 skill 名 → 绝对路径（在自定义子目录里找）。找不到抛异常。"""
+    last = None
+    for d in custom_skill_dirs():
+        try:
+            return _skill_path_in(d, name)
+        except Exception as exc:      # 换下一个候选目录继续找
+            last = exc
+    raise last or FileNotFoundError(f"自定义 skill 不存在：{name}")
+
+
+def read_builtin_skill(name):
+    return _read_skill_in(builtin_skill_dir(), name)
+
+
+def read_custom_skill(name):
+    last = None
+    for d in custom_skill_dirs():
+        try:
+            return _read_skill_in(d, name)
+        except Exception as exc:
+            last = exc
+    raise last or FileNotFoundError(f"自定义 skill 不存在：{name}")
+
+
+def _skill_path_in(directory, name):
+    filename = str(name or "").strip()
+    if not filename or os.path.basename(filename) != filename:
+        raise ValueError("请选择一个 .md 或 .txt 文件。")
+    if os.path.splitext(filename)[1].lower() not in _SKILL_EXTENSIONS:
+        raise ValueError("skill 文件只支持 .md 和 .txt 格式。")
+    path = os.path.join(str(directory or ""), filename)
+    if os.path.islink(path) or not os.path.isfile(path):
+        raise FileNotFoundError(f"skill 文件不存在或不允许读取：{filename}")
+    return path
+
+
+def _read_skill_in(directory, name):
+    path = _skill_path_in(directory, name)
+    size = os.path.getsize(path)
+    if size > _MAX_SKILL_BYTES:
+        raise ValueError(f"skill 文件超过 1 MiB 限制：{name}")
+    with open(path, "rb") as stream:
+        raw = stream.read(_MAX_SKILL_BYTES + 1)
+    if len(raw) > _MAX_SKILL_BYTES:
+        raise ValueError(f"skill 文件超过 1 MiB 限制：{name}")
+    try:
+        text = raw.decode("utf-8-sig").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"skill 文件必须使用 UTF-8 编码：{name}") from exc
+    if not text:
+        raise ValueError(f"skill 文件内容为空：{name}")
+    return text
 
 
 def _skill_files():
@@ -178,7 +288,7 @@ class JZL_MiniMaxSkillLoader(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         files = _skill_files()
-        default = "人物替换.md" if "人物替换.md" in files else files[0]
+        default = files[0] if files else ""
         return io.Schema(
             node_id="JZL_MiniMaxSkillLoader",
             display_name="JZL - ✨ MiniMax-skill加载",

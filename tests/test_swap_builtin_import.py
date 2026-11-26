@@ -48,18 +48,35 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
             _SKILL._LEGACY_SKILL_DIR = self._saved_legacy
         self.addCleanup(_restore)
 
+    def _write_scene(self, scene, body="技能正文"):
+        """在临时内置目录里造一份 `<场景>skill.md`（模拟插件自带的九份）。"""
+        name = scene + "skill.md"
+        with open(os.path.join(self.dir, name), "w", encoding="utf-8") as f:
+            f.write(body)
+        return name
+
+    def _write_all_scenes(self):
+        for scene in _MOD.BUILTIN_SKILLS:
+            self._write_scene(scene)
+
     def _write(self, name, text="技能正文"):
         with open(os.path.join(self.dir, name), "w", encoding="utf-8") as f:
             f.write(text)
 
-    def test_builtin_four_still_resolve(self):
-        # 四档内置名不依赖磁盘文件（映射表里写死了文件名）
+    def test_every_builtin_scene_resolves_from_folder(self):
+        """内置名 → 目录里真实存在的文件（清单来自目录扫描，不写死）。"""
+        self._write_all_scenes()
         for name in _MOD.BUILTIN_SKILLS:
-            self.assertTrue(_MOD._builtin_skill_file(name), name)
+            resolved = _MOD._builtin_skill_file(name)
+            self.assertTrue(resolved, name)
+            self.assertIn(resolved, _SKILL.list_builtin_skills(), name)
 
     def test_imported_file_resolves_when_present(self):
+        """往内置目录里丢一个新文件，立刻就能被解析（不写死清单）。"""
         self._write("雨夜情绪.md")
         self.assertEqual(_MOD._builtin_skill_file("雨夜情绪.md"), "雨夜情绪.md")
+        self.assertIn("雨夜情绪.md", _SKILL.list_builtin_skills())
+        self.assertEqual(_MOD._builtin_skill_file("雨夜情绪"), "雨夜情绪.md")   # 短名也认
 
     def test_imported_file_missing_returns_empty(self):
         self.assertEqual(_MOD._builtin_skill_file("不存在.md"), "")
@@ -80,27 +97,38 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
         self.assertEqual(_MOD._builtin_skill_file("../evil.md"), "")
 
     def test_resolve_prompt_kind_uses_imported_file(self):
+        """目录里新放的文件也能被解析；没有元数据 → lead/模板为 None（走通用话术）。"""
         self._write("雨夜情绪.md")
-        src, builtin, skill_file, _tpl, lead = _MOD._resolve_prompt_kind(
+        src, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
             {"source": "内置skill", "builtin": "雨夜情绪.md"})
         self.assertEqual(src, "内置skill")
-        self.assertEqual(builtin, "雨夜情绪.md")
         self.assertEqual(skill_file, "雨夜情绪.md")
-        self.assertIsNone(lead)          # 导入的 skill 没有专用附加指令
+        self.assertIsNone(lead)
+        self.assertIsNone(tpl)
 
     def test_resolve_prompt_kind_keeps_builtin_lead(self):
-        src, builtin, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
-            {"source": "内置skill", "builtin": "动物替换"})
-        self.assertEqual(builtin, "动物替换")
-        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换"][0])
+        self._write_all_scenes()
+        src, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
+            {"source": "内置skill", "builtin": "动物替换人"})
+        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换人"][0])
         self.assertIsNotNone(lead)
         self.assertIsNotNone(tpl)
 
-    def test_resolve_prompt_kind_falls_back_when_missing(self):
-        src, builtin, skill_file, _tpl, _lead = _MOD._resolve_prompt_kind(
+    def test_legacy_builtin_name_resolves_to_new_one(self):
+        """老工作流存的是「动物替换」→ 落到动物替换人那份真正的文件。"""
+        self._write_all_scenes()
+        src, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
+            {"source": "内置skill", "builtin": "动物替换"})
+        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换人"][0])
+        self.assertIsNotNone(lead)
+        self.assertIsNotNone(tpl)
+
+    def test_resolve_prompt_kind_falls_back_to_first_file(self):
+        """配置里的文件名被删了 → 回退到目录里的第一个内置 skill（不是写死的名字）。"""
+        self._write_all_scenes()
+        src, skill_file, _tpl, _lead = _MOD._resolve_prompt_kind(
             {"source": "内置skill", "builtin": "已被删掉.md"})
-        self.assertEqual(builtin, _MOD.DEFAULT_BUILTIN_SKILL)
-        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS[_MOD.DEFAULT_BUILTIN_SKILL][0])
+        self.assertEqual(skill_file, _SKILL.list_builtin_skills()[0])
 
     def test_parse_settings_accepts_imported_builtin(self):
         self._write("雨夜情绪.md")

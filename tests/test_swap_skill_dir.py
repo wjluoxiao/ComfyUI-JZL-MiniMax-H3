@@ -95,41 +95,74 @@ class SkillDirTest(unittest.TestCase):
 
 @unittest.skipIf(_MOD is None, "需要 ComfyUI 环境才能加载 nodes_character_swap")
 class SwapSkillDirWiringTest(unittest.TestCase):
-    """prompt_cfg.skill_dir 一路传到 _load_swap_skill（后端读用户目录）。"""
+    """内置 = skills/jzl，自定义 = skills/jzl/custom；两边严格分开读，清单都来自目录扫描。"""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="jzl_skilldir_")
         self.addCleanup(shutil.rmtree, self.dir, True)
+        self.custom = os.path.join(self.dir, "custom")
+        os.makedirs(self.custom, exist_ok=True)
+        self._saved_bundled = _SKILL._BUNDLED_SKILL_DIR
+        self._saved_legacy = _SKILL._LEGACY_SKILL_DIR
+        _SKILL._BUNDLED_SKILL_DIR = self.dir
+        _SKILL._LEGACY_SKILL_DIR = os.path.join(self.dir, "__none__")
 
-    def test_defaults_include_skill_dir(self):
+        def _restore():
+            _SKILL._BUNDLED_SKILL_DIR = self._saved_bundled
+            _SKILL._LEGACY_SKILL_DIR = self._saved_legacy
+        self.addCleanup(_restore)
+
+    def _write(self, where, name, text="技能正文"):
+        with open(os.path.join(where, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_defaults_include_skill(self):
         pc = _MOD._SWAP_DEFAULTS["prompt_cfg"]
-        self.assertIn("skill_dir", pc)
-        self.assertEqual(pc["skill_dir"], "")
+        self.assertIn("skill", pc)
 
-    def test_parse_keeps_skill_dir(self):
-        raw = '{"prompt_cfg": {"source": "自定义skill", "skill": "a.md", "skill_dir": "E:/my skills"}}'
+    def test_parse_keeps_custom_skill(self):
+        raw = '{"prompt_cfg": {"source": "自定义skill", "skill": "我的.md"}}'
         pc = _MOD._parse_swap_settings(raw)["prompt_cfg"]
-        self.assertEqual(pc["skill_dir"], "E:/my skills")
-        self.assertEqual(pc["skill"], "a.md")
+        self.assertEqual(pc["skill"], "我的.md")
         self.assertTrue(pc["use_llm"])
 
-    def test_parse_drops_non_string_skill_dir(self):
-        pc = _MOD._parse_swap_settings('{"prompt_cfg": {"skill_dir": 123}}')["prompt_cfg"]
-        self.assertEqual(pc["skill_dir"], "123")
+    def test_load_builtin_and_custom_from_separate_folders(self):
+        self._write(self.dir, "内置.md", "内置的技能")
+        self._write(self.custom, "自定.md", "自定义的技能")
+        self.assertEqual(_MOD._load_swap_skill("内置.md", "测试"), "内置的技能")
+        self.assertEqual(_MOD._load_swap_skill("自定.md", "测试", custom=True), "自定义的技能")
+        # 严格分目录：内置的读不到自定义的，反之亦然
+        self.assertIsNone(_MOD._load_swap_skill("自定.md", "测试"))
+        self.assertIsNone(_MOD._load_swap_skill("内置.md", "测试", custom=True))
 
-    def test_load_swap_skill_prefers_chosen_dir(self):
-        with open(os.path.join(self.dir, "only_here.md"), "w", encoding="utf-8") as f:
-            f.write("这是用户目录里的技能")
-        self.assertEqual(_MOD._load_swap_skill("only_here.md", "测试", self.dir),
-                         "这是用户目录里的技能")
-        # 不给目录时读不到（插件目录里没有这个文件）
-        self.assertIsNone(_MOD._load_swap_skill("only_here.md", "测试", ""))
+    def test_folder_lists_are_dynamic(self):
+        """增删文件后列表立刻变化（不写死清单）。"""
+        self.assertEqual(_SKILL.list_builtin_skills(), [])
+        self._write(self.dir, "新来的.md")
+        self.assertEqual(_SKILL.list_builtin_skills(), ["新来的.md"])
+        self.assertEqual(_SKILL.list_custom_skills(), [])
+        self._write(self.custom, "也来了.txt")
+        self.assertEqual(_SKILL.list_custom_skills(), ["也来了.txt"])
+        os.remove(os.path.join(self.dir, "新来的.md"))
+        self.assertEqual(_SKILL.list_builtin_skills(), [])
 
-    def test_load_swap_skill_falls_back_to_plugin_dir(self):
-        # 传了目录但文件只存在于插件目录 → 不回退（严格按用户选的目录走）
-        self.assertIsNone(_MOD._load_swap_skill("人物替换提示词.md", "测试", self.dir))
-        # 不传目录 → 走插件自带的 skills/jzl
-        self.assertTrue(_MOD._load_swap_skill("人物替换提示词.md", "测试", ""))
+    def test_custom_dir_is_created_with_hint_file(self):
+        shutil.rmtree(self.custom)
+        d = _SKILL.ensure_custom_skill_dir()
+        self.assertEqual(os.path.normcase(d), os.path.normcase(self.custom))
+        self.assertTrue(os.path.isdir(d))
+        # 说明文件不带 .md/.txt 扩展名 → 不会被当成 skill
+        self.assertIn("README", os.listdir(d))
+        self.assertEqual(_SKILL.list_custom_skills(), [])
+
+    def test_custom_skill_cannot_escape_dir(self):
+        self._write(self.dir, "outside.md")
+        for bad in ("../outside.md", "sub/outside.md", ""):
+            # 底层读取器直接抛异常
+            with self.assertRaises((ValueError, FileNotFoundError)):
+                _SKILL.read_custom_skill(bad)
+            # 节点侧吞掉异常并回退（不让一次坏配置炸掉整次生成）
+            self.assertIsNone(_MOD._load_swap_skill(bad, "测试", custom=True))
 
 
 if __name__ == "__main__":

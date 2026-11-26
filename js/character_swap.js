@@ -33,6 +33,35 @@ function swapDefaultName(node) {
     return (node && node.type === VIDEO_EDIT_NODE_TYPE) ? "视频编辑" : "人物替换";
 }
 
+// 写剪贴板：优先 Clipboard API（https/localhost），降级到隐藏 textarea + execCommand
+// （ComfyUI 常跑在 http://192.168.x.x 这类非安全上下文里，那时 navigator.clipboard 是 undefined）
+async function jzlCopyText(text) {
+    const t = String(text == null ? "" : text);
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(t);
+            return true;
+        }
+    } catch (_) { /* 落到下面的兜底 */ }
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    const host = document.body || document.documentElement;
+    host.append(ta);
+    let ok = false;
+    try {
+        ta.select();
+        ta.setSelectionRange(0, t.length);
+        ok = document.execCommand("copy");
+    } catch (_) { ok = false; }
+    ta.remove();
+    if (!ok) throw new Error("浏览器拒绝访问剪贴板");
+    return true;
+}
+
 export function swapDefaults() {
     const d = defaultSettings();
     d._schema = SWAP_SETTINGS_SCHEMA;
@@ -316,29 +345,14 @@ export function renderSwapPromptPanel(c, s, d, node) {
     // ── ② 提示词来源：两个分支（方形勾选单选，与「LLM 后端」的 本地/在线 同一交互）──
     c.append(makeSectionTitle("提示词来源"));
     // 老工作流的「内置skill·动物」等值 → 分支 + 内置名
-    const BUILTIN_ALIAS = { "内置skill·动物": "动物替换", "内置skill·非活物": "非活物替换", "内置skill·多人": "多人替换" };
+    const BUILTIN_ALIAS = { "内置skill·动物": "动物替换人", "内置skill·非活物": "非活物替换", "内置skill·多人": "多人物替换" };
     if (BUILTIN_ALIAS[String(pc.source || "")]) {
         pc.builtin = BUILTIN_ALIAS[pc.source];
         pc.source = "内置skill";
     }
     if (!["系统默认", "内置skill", "自定义skill"].includes(String(pc.source || ""))) pc.source = "系统默认";
-    const BUILTIN_HINT = {
-        "人物替换": "把视频里的人换成参考图中的人（最常用）。",
-        "动物替换": "用参考图里的**动物替换**视频里的人，动物拟人化表演；不是加入画面、不与原人互动。",
-        "非活物替换": "用参考图里的**物件替换**视频里的主体（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…），"
-            + "保持自身材质做拟人化动作；不是当道具、也不变活物。",
-        "多人替换": "**多人同时替换**：每个人分别换成对应那张定妆图（图1→第1个人、图2→第2个人…），"
-            + "人数与站位不变、身份不串味。",
-    };
-    const BUILTIN_NAMES = ["人物替换", "动物替换", "非活物替换", "多人替换"];
-    // 内置目录里除四档自带 skill 之外的文件 = 用户「📥 导入Skill文件」放进去的，也出现在这个下拉里
-    const BUILTIN_FILES = ["人物替换提示词.md", "动物替换提示词.md", "非活物替换提示词.md", "多人替换提示词.md"];
-    const importedSkills = ((d?.prompt_skills || []).filter(
-        (f) => f && !f.startsWith("（") && !BUILTIN_FILES.includes(String(f))));
-    const builtinOptions = BUILTIN_NAMES.map((n) => ({ value: n, label: n })).concat(
-        importedSkills.map((f) => ({ value: String(f), label: String(f).replace(/\.[^.]+$/, "") + "（导入）" })));
-    if (!builtinOptions.some((o) => o.value === String(pc.builtin || ""))) pc.builtin = "人物替换";
 
+    // 三个来源的方形勾选单选（与「LLM 后端 本地/在线」同一交互）
     const srcRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;flex-wrap:wrap;");
     const srcCbs = [];
     const mkSrc = (val, label) => {
@@ -369,213 +383,207 @@ export function renderSwapPromptPanel(c, s, d, node) {
     const srcHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
     c.append(srcHint);
 
-    // ── 内置分支：选具体哪一个内置 skill（第一排右侧带「📥 导入Skill文件」）──
-    const builtinBox = el("div", "");
-    const builtinSel = selectControl(builtinOptions, String(pc.builtin),
-        (v) => { pc.builtin = v; syncSource(); commit(); });
-    const btnImportSkill = _jzlSmallBtn("📥 导入Skill文件",
-        "把一个 .md/.txt 导入到本节点的内置 skill 目录（skills/jzl），导入后直接在左边的下拉里选择使用");
-    const builtinRow = el("div", "display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;");
-    builtinRow.append(builtinSel, btnImportSkill);
-    builtinBox.append(field("内置 skill", builtinRow));
-    const importMsg = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;", "");
-    builtinBox.append(importMsg);
-    const builtinHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
-    builtinBox.append(builtinHint);
+    // ── 内置 / 自定义 skill：两边都是「文件夹里有什么就列什么」，不写死清单 ──
+    //    内置  = skills/jzl/*.md
+    //    自定义 = skills/jzl/custom/*.md   ← 用户往这里丢文件，点 🔄 刷新即可
+    const BUILTIN_DIR = String(d?.prompt_skills_dir || "skills/jzl");
+    const CUSTOM_DIR = String(d?.prompt_skills_custom_dir || (BUILTIN_DIR + "/custom"));
+    let builtinList = (d?.prompt_skills || []).filter((f) => f && !f.startsWith("（"));
+    let customList = (d?.custom_skills || []).filter((f) => f && !f.startsWith("（"));
+    const skillStem = (f) => String(f || "").replace(/\.[^.]+$/, "");
+    // 显示名：短名再去掉结尾的 skill（单人物替换skill.md → 单人物替换），与后端 _skill_key 同规则
+    const skillLabel = (f) => skillStem(f).replace(/skill$/i, "");
 
-    // 导入：浏览器选文件 → POST /jzl/swap_skill_import（后端存进插件 skills/jzl，同名自动加序号）
-    const importInput = document.createElement("input");
-    importInput.type = "file";
-    importInput.accept = ".md,.markdown,.txt";
-    importInput.style.display = "none";
-    const doImportSkill = async (file) => {
-        if (!file) return;
-        btnImportSkill.disabled = true;
-        const old = btnImportSkill.textContent;
-        btnImportSkill.textContent = "导入中…";
-        try {
-            const fd = new FormData();
-            fd.append("file", file, file.name || "自定义skill.md");
-            const r = await api.fetchApi("/jzl/swap_skill_import", { method: "POST", body: fd });
-            const j = await r.json().catch(() => ({}));
-            if (!j || !j.ok) throw new Error((j && j.error) || "导入失败");
-            const newId = String(j.id || "");
-            // 把新文件补进下拉并选中（不重渲染面板，避免丢焦点）
-            const label = newId.replace(/\.[^.]+$/, "") + "（导入）";
-            let op = null;
-            for (const c2 of builtinSel.children) {
-                if (String(c2.value) === newId) { op = c2; break; }
+    // 一个「文件夹驱动的 skill 选择器」= 下拉 +（📥 导入，可选）+ 📋 复制内容 + 🔄 刷新
+    // pick 回调拿到文件名（含扩展名，后端按文件名读）
+    const mkSkillPicker = (opts) => {
+        const box = el("div", "");
+        let items = [];
+        const sel = selectControl([], "", (v) => { opts.onPick(String(v)); opts.commit(); });
+        const btnCopy = _jzlSmallBtn("📋 复制skill内容", "把当前选中的 skill 文件全文复制到剪贴板");
+        const btnImport = opts.withImport ? _jzlSmallBtn("📥 导入Skill文件", opts.importTip) : null;
+        const btnRefresh = _jzlSmallBtn("🔄 刷新", "重新扫描文件夹（增删文件后点这里）");
+        const row = el("div", "display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;");
+        row.append(sel, btnCopy);
+        if (btnImport) row.append(btnImport);
+        row.append(btnRefresh);
+        box.append(field(opts.label, row));
+        const msg = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;", "");
+        box.append(msg);
+        const hint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
+        box.append(hint);
+
+        const fill = (list, current) => {
+            items = (list || []).filter((f) => f && !String(f).startsWith("（"));
+            sel.innerHTML = "";
+            if (!items.length) {
+                const op = document.createElement("option");
+                op.value = "";
+                op.textContent = "（文件夹里还没有 .md/.txt）";
+                sel.append(op);
+                sel.value = "";
+                return "";
             }
-            if (!op) {
-                op = document.createElement("option");
-                op.value = newId; op.textContent = label;
-                builtinSel.append(op);
+            for (const it of items) {
+                const op = document.createElement("option");
+                op.value = String(it);
+                op.textContent = skillLabel(it);
+                if (String(it) === String(current || "")) op.selected = true;
+                sel.append(op);
             }
-            builtinSel.value = newId;
-            pc.builtin = newId;
-            syncSource();
-            commit();
-            importMsg.textContent = `✅ 已导入「${newId}」并设为当前内置 skill`;
-            importMsg.style.color = "var(--jz-ok, #57d977)";
-        } catch (e) {
-            importMsg.textContent = "❌ " + String((e && e.message) || e);
-            importMsg.style.color = "var(--jz-error, #e55)";
-        } finally {
-            btnImportSkill.disabled = false;
-            btnImportSkill.textContent = old;
-        }
-    };
-    btnImportSkill.addEventListener("click", () => importInput.click());
-    importInput.addEventListener("change", () => {
-        const f = importInput.files && importInput.files[0];
-        importInput.value = "";
-        doImportSkill(f);
-    });
-    builtinBox.append(importInput);
-    c.append(builtinBox);
+            const cur = String(current || "");
+            const use = items.includes(cur) ? cur : items[0];
+            sel.value = use;
+            return use;
+        };
+        const syncHint = () => {
+            hint.textContent = `目录：${opts.dir()}\n`
+                + (opts.withImport
+                    ? "直接把 .md / .txt 丢进这个文件夹，或点「📥 导入Skill文件」上传，"
+                    : "直接把 .md / .txt 丢进这个文件夹，")
+                + "点「🔄 刷新」就会出现在上面的下拉里（无需重启，也不用在这里选路径）。\n"
+                + "「📋 复制skill内容」= 把所选文件的全文复制到剪贴板。";
+        };
 
-    // ── 自定义分支：先「📂 选择 skill 文件目录」，再在它下面的「已有 skill」里选具体文件 ──
-    //    改成目录之后：技能可以放在任何位置，不必再复制进插件目录；
-    //    换目录 → 下拉自动列出该目录下的 .md/.txt（点「🔄 刷新」可重新扫描）。
-    const PLUGIN_DIR = String(d?.prompt_skills_dir || "skills/jzl");
-    const pluginSkills = (d?.prompt_skills && d.prompt_skills.length) ? d.prompt_skills : [];
-    const customBox = el("div", "");
-
-    // ① 目录行：选择按钮 + 可手填(云机/无桌面)的路径框 + 刷新
-    const dirInput = document.createElement("input");
-    dirInput.className = "jzl-input";
-    dirInput.type = "text";
-    dirInput.spellcheck = false;
-    dirInput.placeholder = "skill 目录（绝对路径），也可手填后点 🔄 刷新";
-    dirInput.value = String(pc.skill_dir || "");
-    dirInput.style.cssText = "flex:1 1 0;min-width:0;font-size:12px;"
-        + "font-family:ui-monospace,Consolas,monospace;padding:6px 10px;"
-        + "background:var(--comfy-input-bg,var(--jz-bg-raise));color:var(--jz-text);"
-        + "border:1px solid var(--jz-border);border-radius:4px;";
-    dirInput.addEventListener("mousedown", (e) => e.stopPropagation());
-    const btnPickDir = _jzlSmallBtn("📂 选择 skill 文件目录",
-        "选一个文件夹（里面的 .md/.txt 会出现在下面的「已有 skill」）；云机无桌面时可在右边手填路径");
-    const btnRefresh = _jzlSmallBtn("🔄 刷新", "重新扫描该目录下的 .md/.txt");
-    const dirRow = el("div", "display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;");
-    dirRow.append(el("label", "flex:0 0 160px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));white-space:nowrap;", "skill 目录"));
-    dirRow.append(dirInput, btnPickDir, btnRefresh);
-    customBox.append(dirRow);
-
-    const dirMsg = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;", "");
-    customBox.append(dirMsg);
-
-    // ② 「已有 skill」下拉：内容 = 当前目录扫描结果（未选目录时先显示插件自带的）
-    const skillSel = selectControl(pluginSkills.length ? pluginSkills : ["（该目录下没有 .md/.txt）"],
-        String(pc.skill || (pluginSkills[0] || "")), (v) => {
-            pc.skill = String(v).startsWith("（") ? "" : v;
-            syncSource();
-            commit();
+        // 📋 复制内容：读所选 skill 的全文 → 剪贴板（面板里改不了时，方便拿去别处用/二次编辑）
+        btnCopy.addEventListener("click", async () => {
+            const name = String(sel.value || "");
+            if (!name) {
+                msg.textContent = "⚠ 这个文件夹里还没有 skill 文件，没东西可复制";
+                msg.style.color = "var(--jz-error, #e55)";
+                return;
+            }
+            btnCopy.disabled = true;
+            const old = btnCopy.textContent;
+            btnCopy.textContent = "复制中…";
+            try {
+                const url = `/jzl/swap_skill_text?target=${encodeURIComponent(opts.target)}`
+                    + `&name=${encodeURIComponent(name)}`;
+                const r = await api.fetchApi(url, { timeoutMs: null });
+                const j = await r.json().catch(() => ({}));
+                if (!j || !j.ok) throw new Error((j && j.error) || "读取失败");
+                const text = String(j.text || "");
+                if (!text) throw new Error("文件内容为空");
+                await jzlCopyText(text);
+                msg.textContent = `✅ 已复制「${skillLabel(name)}」全文（${text.length} 字）`;
+                msg.style.color = "var(--jz-ok, #57d977)";
+            } catch (e) {
+                msg.textContent = "❌ " + String((e && e.message) || e);
+                msg.style.color = "var(--jz-error, #e55)";
+            } finally {
+                btnCopy.disabled = false;
+                btnCopy.textContent = old;
+            }
         });
-    if (!pc.skill && pluginSkills.length) pc.skill = pluginSkills[0];
-    customBox.append(field("已有 skill", skillSel));
 
-    customBox.append(el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
-        "上面选目录，下面选该目录里的哪个文件。整份文件作为 LLM 的设定词（.md / .txt，≤1MB，UTF-8）。\n"
-        + "没选目录时这里显示插件自带的 skills/jzl。技能文件留在原位置即可，不会被复制进插件目录。"));
+        let importInput = null;
+        if (btnImport) {
+            importInput = document.createElement("input");
+            importInput.type = "file";
+            importInput.accept = ".md,.markdown,.txt";
+            importInput.style.display = "none";
+            btnImport.addEventListener("click", () => importInput.click());
+            importInput.addEventListener("change", async () => {
+                const f = importInput.files && importInput.files[0];
+                importInput.value = "";
+                if (!f) return;
+                btnImport.disabled = true;
+                const old = btnImport.textContent;
+                btnImport.textContent = "导入中…";
+                try {
+                    const fd = new FormData();
+                    fd.append("file", f, f.name || "skill.md");
+                    fd.append("target", opts.target);
+                    const r = await api.fetchApi("/jzl/swap_skill_import", { method: "POST", body: fd });
+                    const j = await r.json().catch(() => ({}));
+                    if (!j || !j.ok) throw new Error((j && j.error) || "导入失败");
+                    const newId = String(j.id || "");
+                    const use = fill(j.items && j.items.length ? j.items : items.concat([newId]), newId);
+                    opts.onPick(use || newId);
+                    opts.commit();
+                    syncHint();
+                    msg.textContent = `✅ 已导入「${newId}」到${opts.zhLabel}`;
+                    msg.style.color = "var(--jz-ok, #57d977)";
+                } catch (e) {
+                    msg.textContent = "❌ " + String((e && e.message) || e);
+                    msg.style.color = "var(--jz-error, #e55)";
+                } finally {
+                    btnImport.disabled = false;
+                    btnImport.textContent = old;
+                }
+            });
+            box.append(importInput);
+        }
 
-    // 用扫描结果重建下拉（保留当前选择；文件消失则退回第一个）
-    const fillSkills = (items) => {
-        const list = (items && items.length) ? items : [];
-        skillSel.innerHTML = "";
-        if (!list.length) {
-            const op = document.createElement("option");
-            op.value = ""; op.textContent = "（该目录下没有 .md/.txt）";
-            skillSel.append(op);
-            pc.skill = "";
-            return;
-        }
-        for (const it of list) {
-            const op = document.createElement("option");
-            op.value = String(it); op.textContent = String(it);
-            if (String(it) === String(pc.skill || "")) op.selected = true;
-            skillSel.append(op);
-        }
-        if (!list.includes(String(pc.skill || ""))) pc.skill = list[0];
-        skillSel.value = pc.skill;
+        // 刷新由外层统一做（一个接口同时返回内置 + 自定义两份清单）
+        btnRefresh.addEventListener("click", async () => {
+            btnRefresh.disabled = true;
+            try {
+                await opts.refreshAll();
+                msg.textContent = `✅ 已刷新（内置 ${builtinList.length} / 自定义 ${customList.length}）`;
+                msg.style.color = "var(--jz-ok, #57d977)";
+            } catch (e) {
+                msg.textContent = "❌ " + String((e && e.message) || e);
+                msg.style.color = "var(--jz-error, #e55)";
+            } finally {
+                btnRefresh.disabled = false;
+            }
+        });
+
+        return { box, fill, syncHint, get value() { return sel.value; } };
     };
 
-    // 目录变了：记录 + 重新列文件 + 立即保存
-    const applyDir = (dir, items, note) => {
-        const v = String(dir || "").trim();
-        if (v) pc.skill_dir = v;
-        dirInput.value = String(pc.skill_dir || "");
-        fillSkills(items || []);
+    // 一个接口同时拿到两份清单，两边一起刷新（用户只关心「我丢进去的文件出现了没」）
+    const refreshAll = async () => {
+        const r = await api.fetchApi("/jzl/swap_skills", { timeoutMs: null });
+        const j = await r.json().catch(() => ({}));
+        if (!j || j.ok === false) throw new Error((j && j.error) || "扫描失败");
+        builtinList = (j.builtin || []).filter((f) => f && !String(f).startsWith("（"));
+        customList = (j.custom || []).filter((f) => f && !String(f).startsWith("（"));
+        pc.builtin = builtinPicker.fill(builtinList, pc.builtin);
+        pc.skill = customPicker.fill(customList, pc.skill);
+        builtinPicker.syncHint();
+        customPicker.syncHint();
         syncSource();
         commit();
-        if (note) {
-            dirMsg.textContent = note;
-            dirMsg.style.color = "var(--jz-ok, #57d977)";
-        }
     };
 
-    // 选目录：先问后端弹系统目录框；无桌面时后端会返回 error，提示用户手填
-    const pickDir = async () => {
-        btnPickDir.disabled = true;
-        const old = btnPickDir.textContent;
-        btnPickDir.textContent = "选择中…";
-        try {
-            const r = await api.fetchApi("/jzl/swap_skill_dir", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
-                timeoutMs: 120000,      // 系统弹窗是阻塞的，用户可能要想一会儿
-            });
-            const j = await r.json().catch(() => ({}));
-            if (j && j.error) {
-                dirMsg.textContent = "⚠️ " + String(j.error);
-                dirMsg.style.color = "var(--jz-warn)";
-                return;
-            }
-            if (!j || !j.dir) return;                      // 用户取消了，什么都不做
-            applyDir(j.dir, j.items || [], `✅ 目录：${j.dir}（${(j.items || []).length} 个 skill）`);
-        } catch (e) {
-            dirMsg.textContent = "❌ " + String((e && e.message) || e);
-            dirMsg.style.color = "var(--jz-error, #e55)";
-        } finally {
-            btnPickDir.disabled = false;
-            btnPickDir.textContent = old;
-        }
-    };
-
-    // 刷新：按路径框里的目录（或手填的）重新扫描
-    const refreshDir = async () => {
-        const want = String(dirInput.value || "").trim();
-        if (!want) {
-            dirMsg.textContent = "⚠️ 先选目录，或在路径框里填一个目录";
-            dirMsg.style.color = "var(--jz-warn)";
-            return;
-        }
-        btnRefresh.disabled = true;
-        try {
-            const r = await api.fetchApi(`/jzl/swap_skill_list?dir=${encodeURIComponent(want)}`, { timeoutMs: null });
-            const j = await r.json().catch(() => ({}));
-            if (!j || j.ok === false) {
-                dirMsg.textContent = "⚠️ " + String((j && j.error) || "扫描失败");
-                dirMsg.style.color = "var(--jz-warn)";
-                return;
-            }
-            applyDir(j.dir || want, j.items || [], `✅ 目录：${j.dir || want}（${(j.items || []).length} 个 skill）`);
-        } catch (e) {
-            dirMsg.textContent = "❌ " + String((e && e.message) || e);
-            dirMsg.style.color = "var(--jz-error, #e55)";
-        } finally {
-            btnRefresh.disabled = false;
-        }
-    };
-
-    btnPickDir.addEventListener("click", () => { pickDir(); });
-    btnRefresh.addEventListener("click", () => { refreshDir(); });
-    // 手改路径后回车 = 扫描
-    dirInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") { e.preventDefault(); refreshDir(); }
+    // ① 内置 skill：下拉内容 = skills/jzl 里的文件（插件自带的，旁边按钮是「复制内容」）
+    const builtinPicker = mkSkillPicker({
+        refreshAll: () => refreshAll(),
+        label: "内置 skill",
+        zhLabel: "内置目录",
+        target: "builtin",
+        withImport: false,
+        dir: () => BUILTIN_DIR,
+        listOf: (j) => j.builtin || [],
+        current: () => pc.builtin,
+        onPick: (v) => { pc.builtin = v; },
+        commit: () => { syncSource(); commit(); },
     });
-    dirInput.addEventListener("change", () => { refreshDir(); });
-    c.append(customBox);
+    const firstBuiltin = builtinPicker.fill(builtinList, pc.builtin);
+    pc.builtin = firstBuiltin;
+    builtinPicker.syncHint();
+    c.append(builtinPicker.box);
+
+    // ② 自定义 skill：下拉内容 = skills/jzl/custom 里的文件
+    const customPicker = mkSkillPicker({
+        refreshAll: () => refreshAll(),
+        label: "自定义 skill",
+        zhLabel: "自定义目录",
+        target: "custom",
+        withImport: true,
+        importTip: "把一个 .md/.txt 存进自定义 skill 文件夹（skills/jzl/custom）",
+        dir: () => CUSTOM_DIR,
+        listOf: (j) => j.custom || [],
+        current: () => pc.skill,
+        onPick: (v) => { pc.skill = v; },
+        commit: () => { syncSource(); commit(); },
+    });
+    const firstCustom = customPicker.fill(customList, pc.skill);
+    pc.skill = firstCustom;
+    customPicker.syncHint();
+    c.append(customPicker.box);
 
     const syncSource = () => {
         const SRC_ORDER = ["系统默认", "内置skill", "自定义skill"];
@@ -585,30 +593,25 @@ export function renderSwapPromptPanel(c, s, d, node) {
         srcCbs.forEach((cb, i) => { cb.checked = (String(pc.source || "系统默认") === SRC_ORDER[i]); });
         pc.use_llm = (String(pc.source || "系统默认") !== "系统默认");
         if (typeof syncLlmState === "function") syncLlmState();
-        const isBuiltin = pc.source === "内置skill";
-        builtinBox.style.display = isBuiltin ? "block" : "none";
-        customBox.style.display = (pc.source === "自定义skill") ? "block" : "none";
+        // 两个分支各有自己的选择器：内置只显示内置那块，自定义只显示自定义那块
+        builtinPicker.box.style.display = (pc.source === "内置skill") ? "block" : "none";
+        customPicker.box.style.display = (pc.source === "自定义skill") ? "block" : "none";
         if (pc.source === "自定义skill") {
-            // 提示语里直接点出「目录 + 文件」，省得再去上面两行找
-            const dir = String(pc.skill_dir || "").trim();
-            srcHint.textContent = dir
-                ? `用该目录里的「${String(pc.skill || "（未选择）")}」作为 LLM 设定词，由 LLM 写提示词。`
-                : "用你选的 .md 作为 LLM 设定词，由 LLM 写提示词（还没选目录时用插件自带 skills/jzl）。";
+            const picked = String(pc.skill || "").trim();
+            srcHint.textContent = picked
+                ? `用「${skillStem(picked)}」作为 LLM 设定词，由 LLM 写提示词（来自 skills/jzl/custom）。`
+                : "自定义目录里还没有 .md/.txt：把文件丢进 skills/jzl/custom/ 后点「🔄 刷新」。"
+                  + "（此时会回退「系统默认」模板，不会中断生成）";
             return;
         }
         if (pc.source === "系统默认") {
             srcHint.textContent = "只用内置模板（把两段描述填进 detailed_description），不调用 LLM。";
             return;
         }
-        const name = String(pc.builtin || "人物替换");
-        const isImported = !BUILTIN_NAMES.includes(name);
-        builtinHint.textContent = isImported
-            ? "（导入的 skill）文件放在插件目录 skills/jzl/ 里，整份作为 LLM 设定词；"
-              + "没有专用兜底模板，LLM 失败时回退系统默认模板。"
-            : (BUILTIN_HINT[name] || "");
-        srcHint.textContent = isImported
-            ? `用导入的 skill「${name}」作为 LLM 设定词，由 LLM 写提示词。`
-            : "用插件自带 skill（" + name + "）作为 LLM 设定词，由 LLM 写提示词。";
+        const picked = String(pc.builtin || "").trim();
+        srcHint.textContent = picked
+            ? `用「${skillStem(picked)}」作为 LLM 设定词，由 LLM 写提示词。`
+            : "内置目录里还没有 .md/.txt：把文件丢进 skills/jzl/ 后点「🔄 刷新」。";
     };
     // ── ③ LLM 后端 ──
     const llm = pc.llm || (pc.llm = {});
@@ -757,7 +760,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
         const txt = previewBox.value || "";
         if (!txt) { valState.textContent = "还没有内容（先运行一次节点）"; return; }
         try {
-            await navigator.clipboard.writeText(txt);
+            await jzlCopyText(txt);
             valState.textContent = "📋 已复制";
             valState.style.color = "var(--jz-ok, #57d977)";
         } catch (_) {
@@ -1181,7 +1184,7 @@ export function setupSwapNode(self) {
         // 后面直接跟上来源名，省得再去面板里翻「到底是内置哪一套 skill」。
         const llmSrc = String(pc.source || "系统默认");
         const customName = String(pc.skill || "").trim();
-        const btName = String(pc.builtin || "人物替换").replace(/\.[^.]+$/, "");   // 导入的 skill 去掉扩展名更好看
+        const btName = String(pc.builtin || "单人物替换").replace(/\.[^.]+$/, "");   // 导入的 skill 去掉扩展名更好看
         const llmTxt = llmSrc === "系统默认" ? "LLM关闭 丨 系统默认"
             : llmSrc === "内置skill" ? `LLM开启 丨 内置skill:${btName}`
             : (customName ? `LLM开启 丨 自定义skill:${customName.replace(/\.[^.]+$/, "")}` : "LLM开启 丨 自定义skill");

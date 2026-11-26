@@ -238,6 +238,14 @@ _jzl_install_route_stubs()
 
 WEB_DIRECTORY = os.path.join(_JZL_PACK_DIR, "js")
 
+# 🎭 启动时确保「自定义 skill」子目录存在：用户直接在文件管理器里往
+#    skills/jzl/custom/ 丢 .md/.txt，面板下拉会自动列出来（无需重启）
+try:
+    from .nodes_skill import ensure_custom_skill_dir as _jzl_ensure_custom_dir
+    _jzl_ensure_custom_dir()
+except Exception:
+    pass
+
 # 节点表：(node_id, 显示名)。注册时按 globals() 里是否存在该类筛选 ——
 # 这样任一模块导入失败时，其余节点照样注册（不会再「一个模块挂掉、整包消失」）。
 _JZL_NODE_TABLE = (
@@ -766,17 +774,19 @@ async def jzl_manager_get(request):
         selflift_upscaler_models = _selflift_upscaler_options()
         # 「生成设定 → 语义修正」适配器下拉：models/semantic_bridge/ 下的 .safetensors
         semantic_bridge_adapters = _semantic_bridge_adapters()
-        # 🎭 人物替换「📝 提示词预设」的自定义 skill 下拉：skills/jzl/*.md
-        from .nodes_skill import _skill_dirs as _jzl_skill_dirs, _skill_files as _jzl_skill_files
-        prompt_skills = [f for f in _jzl_skill_files() if not f.startswith("（")]
-        # skill 实际所在目录：面板用它显示完整路径（优先已存在的那个）
-        prompt_skills_dir = ""
-        for _d in _jzl_skill_dirs():
-            if os.path.isdir(_d):
-                prompt_skills_dir = _d
-                break
-        if not prompt_skills_dir:
-            prompt_skills_dir = _jzl_skill_dirs()[-1]
+        # 🎭 人物替换 / 视频编辑「📝 提示词预设」的 skill 下拉：**全部来自目录扫描**
+        #   内置skill   = skills/jzl/*.md          （prompt_skills）
+        #   自定义skill = skills/jzl/custom/*.md   （custom_skills，目录会自动创建）
+        from .nodes_skill import (builtin_skill_dir as _jzl_builtin_dir,
+                                  custom_skill_dirs as _jzl_custom_dirs,
+                                  ensure_custom_skill_dir as _jzl_ensure_custom,
+                                  list_builtin_skills as _jzl_list_builtin,
+                                  list_custom_skills as _jzl_list_custom)
+        _jzl_ensure_custom()
+        prompt_skills = _jzl_list_builtin()
+        custom_skills = _jzl_list_custom()
+        prompt_skills_dir = _jzl_builtin_dir()
+        prompt_skills_custom_dir = (_jzl_custom_dirs()[0] if _jzl_custom_dirs() else "")
         # 本地文本生成的 CLIP 类型：直接取官方 CLIPLoader 的下拉（保持与官方同源）
         try:
             import nodes as _cnodes
@@ -803,6 +813,8 @@ async def jzl_manager_get(request):
         selflift_upscaler_models = ["none"]
         semantic_bridge_adapters = []
         prompt_skills = []
+        custom_skills = []
+        prompt_skills_custom_dir = ""
         clip_types = ["qwen_image"]
         all_clip_models = []
     return web.json_response({
@@ -823,6 +835,8 @@ async def jzl_manager_get(request):
         "semantic_bridge_adapters": semantic_bridge_adapters,
         "prompt_skills": prompt_skills,
         "prompt_skills_dir": prompt_skills_dir,
+        "custom_skills": custom_skills,
+        "prompt_skills_custom_dir": prompt_skills_custom_dir,
         "clip_types": clip_types,
         "all_clip_models": all_clip_models,
     })
@@ -1503,88 +1517,91 @@ async def jzl_swap_prompt_preview(request):
             {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)
 
 
-@PromptServer.instance.routes.post("/jzl/swap_skill_dir")
-async def jzl_swap_skill_dir(request):
-    """🎭 人物替换「自定义skill → 📂 选择 skill 文件目录」。
+@PromptServer.instance.routes.get("/jzl/swap_skills")
+async def jzl_swap_skills(request):
+    """一次返回「内置 / 自定义」两份 skill 文件名清单 + 目录路径（全部来自目录扫描）。
 
-    两种用法：
-    · 不传 dir  → 弹系统目录选择框（本机有桌面时），选完返回该目录与其中的 .md/.txt 列表；
-    · 传 dir    → 直接校验并列出该目录（无桌面/云机/手填路径时用）。
-    返回 {ok, dir, items, error}，前端用它刷新「已有 skill」下拉。
+    用户在文件管理器里增删文件后，前端点「🔄 刷新」重新拉一次即可，无需重启。
+    返回 {ok, builtin:[…], custom:[…], dirs:{builtin,custom}}
     """
-    from .nodes_skill import list_skills_in_dir
-
-    def _resp(directory="", error=""):
-        items = list_skills_in_dir(directory) if directory else []
-        return web.json_response({"ok": bool(directory) and not error, "dir": directory,
-                                  "items": items, "error": error})
-
     try:
-        body = {}
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        manual = str((body or {}).get("dir") or "").strip()
-        if manual:
-            ap = os.path.abspath(os.path.expanduser(manual))
-            if not os.path.isdir(ap):
-                return _resp("", f"目录不存在：{manual}")
-            return _resp(ap, "")
-
-        if not HAS_TKINTER:
-            return _resp("", "当前环境没有桌面弹窗（云机/无 GUI）→ 请在右边的路径框里手填 skill 目录")
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        picked = filedialog.askdirectory(title="选择 skill 文件目录（里面的 .md/.txt 会出现在「已有 skill」）")
-        root.destroy()
-        if not picked:
-            return _resp("", "")            # 用户取消：不是错误
-        ap = os.path.abspath(picked)
-        if not os.path.isdir(ap):
-            return _resp("", f"目录不存在：{picked}")
-        return _resp(ap, "")
+        from .nodes_skill import (builtin_skill_dir as _b, custom_skill_dirs as _c,
+                                  ensure_custom_skill_dir as _ensure,
+                                  list_builtin_skills as _lb, list_custom_skills as _lc)
+        custom_dir = _ensure()
+        return web.json_response({
+            "ok": True,
+            "builtin": _lb(),
+            "custom": _lc(),
+            "dirs": {"builtin": _b(), "custom": custom_dir or (_c()[0] if _c() else "")},
+        })
     except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        return web.json_response({"ok": False, "dir": "", "items": [],
+        return web.json_response({"ok": False, "builtin": [], "custom": [],
+                                  "dirs": {"builtin": "", "custom": ""},
                                   "error": f"{type(exc).__name__}: {exc}"}, status=500)
-
-
-@PromptServer.instance.routes.get("/jzl/swap_skill_list")
-async def jzl_swap_skill_list(request):
-    """按目录重新扫描 skill 列表（目录里新增/删除 .md 后点「🔄 刷新」用）。"""
-    from .nodes_skill import list_skills_in_dir
-    directory = str(request.query.get("dir") or "").strip()
-    if not directory:
-        return web.json_response({"ok": True, "dir": "", "items": []})
-    ap = os.path.abspath(os.path.expanduser(directory))
-    if not os.path.isdir(ap):
-        return web.json_response({"ok": False, "dir": "", "items": [], "error": f"目录不存在：{directory}"})
-    return web.json_response({"ok": True, "dir": ap, "items": list_skills_in_dir(ap), "error": ""})
 
 
 @PromptServer.instance.routes.post("/jzl/swap_skill_import")
 async def jzl_swap_skill_import(request):
-    """🎭「📥 导入Skill文件」：把用户**浏览器**选中的 .md/.txt 存进内置 skill 目录（skills/jzl）。
+    """「📥 导入Skill文件」：把用户**浏览器**选中的 .md/.txt 存进对应 skill 目录。
 
-    走 multipart 上传 → 服务器只负责落盘，**不依赖桌面弹窗**，所以云机也能上传；
-    返回 {ok, id(文件名), path(绝对路径), items(目录下全部 skill 文件名)}，
-    前端用它把新文件塞进「内置 skill」下拉并选中。
+    target=builtin（默认）→ skills/jzl/
+    target=custom        → skills/jzl/custom/
+    走 multipart 上传 → 服务器只负责落盘，**不依赖桌面弹窗**，所以云机也能上传。
+    返回 {ok, id(文件名), path, items, target}，前端刷新下拉并选中新文件。
     """
     try:
-        from .nodes_skill import save_skill_upload
+        from .nodes_skill import (save_skill_upload, builtin_skill_dir, ensure_custom_skill_dir,
+                                  list_builtin_skills, list_custom_skills)
         post = await request.post()
+        target = str(post.get("target") or "builtin").strip().lower()
         file = post.get("file")
         if not file or not getattr(file, "file", None):
             return web.json_response({"ok": False, "error": "未收到文件"}, status=400)
-        res = save_skill_upload(file.file, getattr(file, "filename", "") or "自定义skill.md")
+        if target == "custom":
+            dest = ensure_custom_skill_dir()
+            if not dest:
+                return web.json_response({"ok": False, "error": "自定义 skill 目录创建失败"}, status=500)
+            items_fn = list_custom_skills
+        else:
+            target = "builtin"
+            dest = builtin_skill_dir()
+            items_fn = list_builtin_skills
+        res = save_skill_upload(file.file,
+                                getattr(file, "filename", "") or "自定义skill.md",
+                                dirs=[dest])
+        res["target"] = target
+        if res.get("ok"):
+            res["items"] = items_fn()
         return web.json_response(res, status=200 if res.get("ok") else 400)
     except Exception as exc:
         import traceback
         traceback.print_exc()
         return web.json_response({"ok": False, "error": f"导入失败：{exc}"}, status=500)
+
+
+@PromptServer.instance.routes.get("/jzl/swap_skill_text")
+async def jzl_swap_skill_text(request):
+    """「📋 复制skill内容」：返回某个 skill 文件的全文（前端直接写剪贴板）。
+
+    ?target=builtin|custom & name=<文件名>
+    返回 {ok, name, text}
+    """
+    try:
+        from .nodes_skill import (read_builtin_skill, read_custom_skill,
+                                  ensure_custom_skill_dir)
+        target = str(request.query.get("target") or "builtin").strip().lower()
+        name = str(request.query.get("name") or "").strip()
+        if not name:
+            return web.json_response({"ok": False, "error": "未指定 skill 文件"}, status=400)
+        if target == "custom":
+            ensure_custom_skill_dir()
+            text = read_custom_skill(name)
+        else:
+            text = read_builtin_skill(name)
+        return web.json_response({"ok": True, "name": name, "text": text})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=400)
 
 
 @PromptServer.instance.routes.get("/jzl/skills")
