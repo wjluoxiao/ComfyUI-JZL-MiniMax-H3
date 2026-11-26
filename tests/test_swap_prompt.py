@@ -34,18 +34,18 @@ _MOD, _SKILL = _load_mod()
 class SwapPromptPresetTest(unittest.TestCase):
     """📝 提示词预设：LLM 开关 / 来源联动 / 默认模板填描述 / 内置 skill。"""
 
-    def test_defaults_are_system_template_with_llm_off(self):
+    def test_defaults_are_plain_input_with_llm_off(self):
         pc = _MOD._parse_swap_settings("").get("prompt_cfg") or {}
         self.assertFalse(pc.get("use_llm"))
-        self.assertEqual(pc.get("source"), "系统默认")
+        self.assertEqual(pc.get("source"), "界面输入")
 
     def test_llm_flag_derived_from_source(self):
-        """LLM 开关由「提示词来源」派生：只有系统默认才不调 LLM，旧的 use_llm 字段不再能改来源。"""
+        """LLM 开关由「提示词来源」派生：只有界面输入才不调 LLM，旧的 use_llm 字段不再能改来源。"""
         cfg = _MOD._parse_swap_settings('{"prompt_cfg": {"use_llm": false, "source": "内置skill"}}')
         self.assertEqual(cfg["prompt_cfg"]["source"], "内置skill")
         self.assertTrue(cfg["prompt_cfg"]["use_llm"])
-        cfg = _MOD._parse_swap_settings('{"prompt_cfg": {"use_llm": true, "source": "系统默认"}}')
-        self.assertEqual(cfg["prompt_cfg"]["source"], "系统默认")
+        cfg = _MOD._parse_swap_settings('{"prompt_cfg": {"use_llm": true, "source": "界面输入"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], "界面输入")
         self.assertFalse(cfg["prompt_cfg"]["use_llm"])
 
     def test_llm_on_keeps_source(self):
@@ -54,19 +54,17 @@ class SwapPromptPresetTest(unittest.TestCase):
                 '{"prompt_cfg": {"use_llm": true, "source": "%s"}}' % src)
             self.assertEqual(cfg["prompt_cfg"]["source"], src)
 
-    def test_system_template_fills_descriptions(self):
-        out = _MOD._build_swap_prompt({"use_llm": False, "source": "系统默认"},
+    def test_plain_input_passes_user_text_verbatim(self):
+        """「界面输入」= 不加载任何 skill，用户填的文本原样当提示词。"""
+        out = _MOD._build_swap_prompt({"use_llm": False, "source": "界面输入"},
                                       "女子在雨夜街头撑伞", "黑色及腰长发、米白针织衫")
-        for needle in ("雨夜街头", "米白针织衫", "===H3_PROMPT===", "<Subject 1>", "[SHOT_END]"):
-            self.assertIn(needle, out)
-        self.assertNotIn("{video_desc}", out)
-        self.assertNotIn("{image_desc}", out)
+        self.assertEqual(out, "女子在雨夜街头撑伞\n\n黑色及腰长发、米白针织衫")
+        # 不再有内置模板的痕迹
+        for gone in ("===H3_PROMPT===", "[SHOT_START]", "subject_definitions:", "<Subject 1>"):
+            self.assertNotIn(gone, out)
 
-    def test_empty_descriptions_leave_no_blank_block(self):
-        out = _MOD._build_swap_prompt({"use_llm": False, "source": "系统默认"}, "", "")
-        self.assertNotIn("{video_desc}", out)
-        self.assertNotIn("{image_desc}", out)
-        self.assertNotIn("\n\n\n", out)
+    def test_plain_input_empty_text_stays_empty(self):
+        self.assertEqual(_MOD._build_swap_prompt({"use_llm": False, "source": "界面输入"}, "", ""), "")
 
     BUILTIN_FILES_9 = (
         "单人物替换skill.md", "多人物替换skill.md",
@@ -128,7 +126,7 @@ class SwapPromptPresetTest(unittest.TestCase):
                           "单动物替换", "动物替换人", "人替换动物", "非活物替换",
                           "单背景替换", "视频动作迁移", "风格化转绘", "人物换装",
                           "视频物体消除", "视频人物换脸", "素模渲染", "局部材质替换"})
-        for name, (fname, _tpl, _lead) in _MOD.BUILTIN_SKILLS.items():
+        for name, (fname, _lead) in _MOD.BUILTIN_SKILLS.items():
             self.assertIn("===H3_PROMPT===", _SKILL._read_skill(fname), name)
             self.assertTrue(name in fname or fname in name, f"{name} ↔ {fname} 名字对不上")
 
@@ -180,16 +178,6 @@ class SwapPromptPresetTest(unittest.TestCase):
         for needle in ("motion driver", "丢弃", "视差", "平面贴图", "口型", "运镜",
                        "大幅度", "各分段"):
             self.assertIn(needle, text, f"动作迁移 skill 缺少 {needle}")
-
-    def test_action_transfer_fallback_template_drops_source_look(self):
-        """兜底模板也要写清「源片只提供动作」，否则 LLM 失败时会退化成人物替换。"""
-        out = _MOD._build_swap_prompt(
-            {"use_llm": False, "source": "内置skill", "builtin": "视频动作迁移"}, "", "")
-        for needle in ("supplies motion, expression and camera work only",
-                       "motion driver): partially_preserved",
-                       "fully discarded", "never the person in <Video 1>",
-                       "natural parallax"):
-            self.assertIn(needle, out)
 
     def test_action_transfer_name_resolves_not_to_other_skill(self):
         """`动作迁移` 只映射到 `视频动作迁移skill.md`，不会串到别的 skill 上。"""
@@ -267,32 +255,33 @@ class SwapPromptPresetTest(unittest.TestCase):
         self.assertIn("fully_preserved - x", out)
         self.assertIn("overall_soundscape: z", out)
 
-    def test_audio_mode_switches_soundscape(self):
-        """使用原声 = 原样沿用；生成音频 = 改写声音段，不写「沿用」。"""
-        cfg = {"use_llm": False, "source": "内置skill", "builtin": "单人物替换"}
-        keep = _MOD._build_swap_prompt(cfg, "", "", audio_mode="使用原声")
-        gen = _MOD._build_swap_prompt(cfg, "", "", audio_mode="生成音频")
+    def test_audio_mode_rewrites_llm_output(self):
+        """LLM 输出的总体声音段按「声音来源」改写：使用原声=沿用；生成音频=由模型生成。"""
+        keep = _MOD._apply_audio_mode("overall_soundscape: " + _MOD._AUDIO_REUSE_LINE, "使用原声")
         self.assertIn("retained unchanged", keep)
+        gen = _MOD._apply_audio_mode("overall_soundscape: " + _MOD._AUDIO_REUSE_LINE, "生成音频")
         self.assertNotIn("retained unchanged", gen)
         self.assertIn("Sound is generated as part of this video", gen)
-        # 其余六段不受影响
-        for sec in self.OFFICIAL_SECTIONS:
-            self.assertIn(sec, gen)
 
-    def test_each_builtin_has_distinct_fallback_template(self):
-        """十六个内置 skill 的兜底模板必须各不相同（别都退回同一份）。"""
-        outs = {}
-        for name in _MOD.BUILTIN_SKILLS:
-            outs[name] = _MOD._build_swap_prompt(
-                {"use_llm": False, "source": "内置skill", "builtin": name},
-                "某人在做事", "某参考图")
-        self.assertEqual(len(set(outs.values())), 16)
-        for name, out in outs.items():
-            pos = [out.find(sec) for sec in self.OFFICIAL_SECTIONS]
-            self.assertTrue(all(x >= 0 for x in pos), f"{name} 兜底模板缺段：{pos}")
-            self.assertEqual(pos, sorted(pos), f"{name} 兜底模板六段顺序不对")
-            self.assertIn("[video editing + audio reuse]", out, name)
-            self.assertIn("The target video is an edited version of <Video 1>.", out, name)
+    def test_no_hardcoded_fallback_templates_left(self):
+        """内置模板已全部删除：模块里不应再有 DEFAULT_*_PROMPT / _fb_prompt。"""
+        self.assertFalse(hasattr(_MOD, "_fb_prompt"))
+        leftovers = [n for n in dir(_MOD) if n.startswith("DEFAULT_") and n.endswith("_PROMPT")]
+        self.assertEqual(leftovers, [])
+
+    def test_llm_off_falls_back_to_user_text(self):
+        """skill 分支在没有 LLM 时也回退「界面输入」原文（不再有内置模板）。"""
+        out = _MOD._build_swap_prompt(
+            {"use_llm": False, "source": "内置skill", "builtin": "单人物替换"},
+            "某人在做事", "某参考图")
+        self.assertEqual(out, "某人在做事\n\n某参考图")
+
+    def test_builtin_meta_is_two_tuple(self):
+        """BUILTIN_SKILLS 现在是 (skill 文件, LLM 附加指令) 两项。"""
+        for name, meta in _MOD.BUILTIN_SKILLS.items():
+            self.assertEqual(len(meta), 2, name)
+            self.assertTrue(meta[0].endswith("skill.md"), name)
+            self.assertIsInstance(meta[1], str)
 
     def test_branch_source_and_legacy_alias(self):
         """来源是两分支；老工作流的「内置skill·动物」映射成 内置skill + 动物替换人。"""
@@ -323,19 +312,19 @@ class SwapPromptPresetTest(unittest.TestCase):
         self.assertEqual(cfg["prompt_cfg"]["source"], "自定义skill")
         self.assertEqual(cfg["prompt_cfg"]["skill"], "我的.md")
 
-    def test_system_default_branch_works_with_llm_on(self):
-        """「系统默认」恢复成可选分支：LLM 开着也能选它 → 只用模板、不调 LLM。"""
+    def test_plain_input_branch_works_with_llm_on(self):
+        """「界面输入」始终可选：LLM 开着也选它 → 直接透传文本、不调 LLM。"""
         cfg = _MOD._parse_swap_settings(
-            '{"prompt_cfg": {"use_llm": true, "source": "系统默认"}}')
-        self.assertEqual(cfg["prompt_cfg"]["source"], "系统默认")
+            '{"prompt_cfg": {"use_llm": true, "source": "界面输入"}}')
+        self.assertEqual(cfg["prompt_cfg"]["source"], "界面输入")
+        self.assertFalse(cfg["prompt_cfg"]["use_llm"])
         out = _MOD._build_swap_prompt(
-            {"use_llm": True, "source": "系统默认"}, "女子在雨夜街头撑伞", "黑色及腰长发")
-        self.assertIn("雨夜街头", out)
-        self.assertIn("===H3_PROMPT===", out)
+            {"use_llm": True, "source": "界面输入"}, "女子在雨夜街头撑伞", "黑色及腰长发")
+        self.assertEqual(out, "女子在雨夜街头撑伞\n\n黑色及腰长发")
 
     def test_prompt_cfg_label(self):
         self.assertIn("关", _MOD._prompt_cfg_label({"use_llm": False}))
-        self.assertIn("系统默认", _MOD._prompt_cfg_label({"use_llm": True, "source": "系统默认"}))
+        self.assertIn("界面输入", _MOD._prompt_cfg_label({"use_llm": True, "source": "界面输入"}))
         self.assertIn("多人物替换", _MOD._prompt_cfg_label(
             {"use_llm": True, "source": "内置skill", "builtin": "多人物替换"}))
         self.assertIn("我的.md", _MOD._prompt_cfg_label(

@@ -334,11 +334,11 @@ export function renderSwapPromptPanel(c, s, d, node) {
         + "border-radius:4px;", "");
     c.append(field("当前状态", llmState));
     const syncLlmState = () => {
-        const src = String(pc.source || "系统默认");
-        const on = src !== "系统默认";
+        const src = String(pc.source || "界面输入");
+        const on = src !== "界面输入";
         pc.use_llm = on;
         llmState.textContent = (on ? "✅ 开启" : "⛔ 关闭") + `（来源：${src}）`
-            + (on ? "" : " —— 用内置模板，不加载任何 LLM");
+            + (on ? "" : " —— 直接用你填的文本，不加载任何 skill / LLM");
         llmState.style.color = on ? "var(--jz-ok, #57d977)" : "var(--jz-text-dim)";
     };
 
@@ -350,7 +350,9 @@ export function renderSwapPromptPanel(c, s, d, node) {
         pc.builtin = BUILTIN_ALIAS[pc.source];
         pc.source = "内置skill";
     }
-    if (!["系统默认", "内置skill", "自定义skill"].includes(String(pc.source || ""))) pc.source = "系统默认";
+    // 老值「系统默认」→ 新名字「界面输入」（语义完全一样：不加载 skill，直接透传文本）
+    if (String(pc.source || "") === "系统默认") pc.source = "界面输入";
+    if (!["界面输入", "内置skill", "自定义skill"].includes(String(pc.source || ""))) pc.source = "界面输入";
 
     // 三个来源的方形勾选单选（与「LLM 后端 本地/在线」同一交互）
     const srcRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;flex-wrap:wrap;");
@@ -376,7 +378,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
         return cb;
     };
     c.append(field("来源", srcRow));
-    const cbSystem = mkSrc("系统默认", "系统默认");
+    const cbSystem = mkSrc("界面输入", "界面输入");
     const cbBuiltin = mkSrc("内置skill", "内置skill");
     const cbCustom = mkSrc("自定义skill", "自定义skill");
     const srcRowWrap = srcRow.parentElement;
@@ -586,12 +588,12 @@ export function renderSwapPromptPanel(c, s, d, node) {
     c.append(customPicker.box);
 
     const syncSource = () => {
-        const SRC_ORDER = ["系统默认", "内置skill", "自定义skill"];
+        const SRC_ORDER = ["界面输入", "内置skill", "自定义skill"];
         // 三个选项始终可点；LLM 开不开由选择本身决定（不再有独立开关）
         srcCbs.forEach((cb) => { cb.disabled = false; });
         srcRowWrap.style.opacity = "";
-        srcCbs.forEach((cb, i) => { cb.checked = (String(pc.source || "系统默认") === SRC_ORDER[i]); });
-        pc.use_llm = (String(pc.source || "系统默认") !== "系统默认");
+        srcCbs.forEach((cb, i) => { cb.checked = (String(pc.source || "界面输入") === SRC_ORDER[i]); });
+        pc.use_llm = (String(pc.source || "界面输入") !== "界面输入");
         if (typeof syncLlmState === "function") syncLlmState();
         // 两个分支各有自己的选择器：内置只显示内置那块，自定义只显示自定义那块
         builtinPicker.box.style.display = (pc.source === "内置skill") ? "block" : "none";
@@ -601,11 +603,11 @@ export function renderSwapPromptPanel(c, s, d, node) {
             srcHint.textContent = picked
                 ? `用「${skillStem(picked)}」作为 LLM 设定词，由 LLM 写提示词（来自 skills/jzl/custom）。`
                 : "自定义目录里还没有 .md/.txt：把文件丢进 skills/jzl/custom/ 后点「🔄 刷新」。"
-                  + "（此时会回退「系统默认」模板，不会中断生成）";
+                  + "（此时会回退到「界面输入」的原文，不会中断生成）";
             return;
         }
-        if (pc.source === "系统默认") {
-            srcHint.textContent = "只用内置模板（把两段描述填进 detailed_description），不调用 LLM。";
+        if (pc.source === "界面输入") {
+            srcHint.textContent = "不加载任何 skill：把下面「视频文本 / 图片文本」两段原样作为提示词发给模型。";
             return;
         }
         const picked = String(pc.builtin || "").trim();
@@ -685,7 +687,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
             `⚠️ 本机没有工作流里记录的${_clipMissing ? ` CLIP 模型「${llm.clip_name}」` : ""}`
             + `${_clipTypeMissing ? ` CLIP 类型「${llm.clip_type}」` : ""}，`
             + "已原样保留不改动（不会悄悄换成别的）。\n"
-            + "要用本地 LLM 请重新选一个本机存在的模型；不换则本次按「系统默认」模板走（不会报错）。"));
+            + "要用本地 LLM 请重新选一个本机存在的模型；不换则本次按「界面输入」原文走（不会报错）。"));
     }
     localBox.append(field("max_length", numberControl(llm.max_length ?? 2048, { min: 1, max: 32768, step: 1 },
         (v) => { llm.max_length = Math.round(v); })));
@@ -827,25 +829,20 @@ export function renderSwapPromptPanel(c, s, d, node) {
     p("主模型 / CLIP / 视觉VAE ← 与导演台一致，建议用 ref2va 变体模型。音频VAE 只在「声音来源 = 生成音频」时需要。");
     p("输出只有一个端口「批量视频」：每段一个 VIDEO，接「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条。");
 
-    h("② 两个描述 + 两个提示词来源分支");
-    p("🎬 视频描述：源视频里发生了什么（主体/动作/场景/镜头/光线/节奏）。");
-    p("🖼 图片描述：参考图里主体长什么样 —— 人物：脸型/发型/服装/配饰/配色/气质；动物：品种/毛色花纹/体型/耳朵尾巴/眼神；"
+    h("② 两段文本 + 三个提示词来源");
+    p("🎬 视频文本：源视频里发生了什么（主体/动作/场景/镜头/光线/节奏）。");
+    p("🖼 图片文本：参考图里主体长什么样 —— 人物：脸型/发型/服装/配饰/配色/气质；动物：品种/毛色花纹/体型/耳朵尾巴/眼神；"
         + "非活物：类别/材质/颜色/纹理/比例/结构细节/配饰。越具体越像。");
-    p("来源分两个分支（和「LLM 后端 = 本地模型 / 在线API」一样选一个）：");
-    p("① 内置skill（插件自带）→ 再选四个内置 skill 之一：\n"
-        + "   · 人物替换：把视频里的人换成参考图中的人（最常用）。\n"
-        + "   · 动物替换：用参考图里的动物**替换**视频里的人，动物拟人化表演；不是加入画面、不与原人互动。\n"
-        + "   · 非活物替换：用参考图里的**物件替换**视频里的主体（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…），"
-        + "保持自身材质做拟人化动作；不是当道具、也不变活物。\n"
-        + "   · 多人替换：**多人同时替换**，每个人分别换成对应那张定妆图（图1→第1个人、图2→第2个人…），人数与站位不变、身份不串味。\n"
-        + "   右边的「📥 导入Skill文件」可以把你自己写的 .md/.txt 存进插件的内置 skill 目录（skills/jzl/），"
-        + "导入完直接出现在同一个下拉里（显示为「xxx（导入）」），选中即可用。");
-    p("② 自定义skill → 先点「📂 选择 skill 文件目录」选一个文件夹（云机无桌面时直接在路径框里填绝对路径，回车即扫描），"
-        + "再在它下面的「已有 skill」里选该目录中的哪个 .md/.txt。\n"
-        + "   · 技能文件留在原位不会复制进插件目录，换目录点「🔄 刷新」即可重新列出。\n"
-        + "   · 没选目录时「已有 skill」显示插件自带的 skills/jzl，行为与以前一致。");
-    p("LLM 关闭时两个分支都不可操作，自动用「系统默认」模板（把两段描述填进 detailed_description，不需要任何模型）。");
-    p("LLM 调用失败会自动回退到同名内置模板（人物→人物模板、动物→动物模板…）并打警告，不会中断生成。");
+    p("来源三选一：");
+    p("① 界面输入（默认）→ 不加载任何 skill，把「视频文本 / 图片文本」两段**原样**作为提示词发给模型。"
+        + "适合你自己写完整 H3 提示词，或只想快速试一下。");
+    p("② 内置skill → 用插件 skills/jzl/ 里的 skill 当 LLM 设定词，由 LLM 写出提示词。"
+        + "下拉内容 = 该目录里实际的 .md/.txt（现有 16 个场景：单/多人物、单/多物品、单动物、动物替换人、人替换动物、"
+        + "非活物、单背景、视频动作迁移、风格化转绘、人物换装、视频物体消除、视频人物换脸、素模渲染、局部材质替换）。\n"
+        + "   · 「📋 复制skill内容」把当前选中那份的全文复制到剪贴板；「🔄 刷新」重新扫盘。");
+    p("③ 自定义skill → 用 skills/jzl/custom/ 里的 .md/.txt 当 LLM 设定词。"
+        + "把文件丢进那个文件夹、点「🔄 刷新」就能选到；这里另有「📥 导入Skill文件」可直接上传。");
+    p("LLM 调用失败（没接模型、模型找不到、报错）会自动回退到「界面输入」的原文并打警告，不会中断生成。");
 
     h("③ 怎么跑的（进度条为什么是 12 格）");
     p("整片只有一条降噪轨迹：4 个采样步。每一步内部按顺序算 3 个窗口，所以进度条总数 = 步数 × 段数 = 12 格，右侧实时显示「步 k/4｜段 i/3」。");
@@ -1087,7 +1084,7 @@ export function setupSwapNode(self) {
     container.appendChild(infoRow);
     self.__jzlSwapInfo = infoRow;
 
-    // ── 提示词（两栏 DOM textarea：视频描述 / 图片描述；代理原生 video_desc / image_desc widget）──
+    // ── 提示词（两栏 DOM textarea：视频文本 / 图片文本；代理原生 video_desc / image_desc widget）──
     // 与导演台同一套做法：原生 widget 的渲染高度跟着节点乱跳，改成自己的 textarea 才能「跟着节点变高」。
     const descWrap = el("div", "flex:1 1 auto;min-height:90px;display:flex;flex-direction:column;gap:4px;");
     const mkDesc = (label, wname, placeholder, tip) => {
@@ -1108,10 +1105,10 @@ export function setupSwapNode(self) {
         descWrap.append(lb, box);
         return { ta, wname };
     };
-    const videoField = mkDesc("🎬 视频描述", "video_desc",
+    const videoField = mkDesc("🎬 视频文本", "video_desc",
         "这段源视频里发生了什么：人物、动作、场景、镜头、光线、节奏…",
-        "「📝 提示词预设 → 提示词来源」选「内置skill / 自定义skill」时，它连同「图片描述」一起交给 LLM 写完整 H3 提示词；选「系统默认」时填进内置模板");
-    const imageField = mkDesc("🖼 图片描述", "image_desc",
+        "提示词来源=界面输入：与图片文本一起原样作为提示词；=内置/自定义skill：作为素材描述交给 LLM");
+    const imageField = mkDesc("🖼 图片文本", "image_desc",
         "参考图里的人长什么样：脸型、发型、发色、服装、配饰、配色、年龄气质…（越具体越像）",
         "描述得越具体，换人越像");
     container.appendChild(descWrap);
@@ -1212,10 +1209,10 @@ export function setupSwapNode(self) {
         const audioTxt = String(gp.audio_mode || "使用原声") === "生成音频" ? "生成音频" : "使用原声";
         // LLM 增强由「提示词来源」派生（与后端 use_llm 同规则）；
         // 后面直接跟上来源名，省得再去面板里翻「到底是内置哪一套 skill」。
-        const llmSrc = String(pc.source || "系统默认");
+        const llmSrc = String(pc.source || "界面输入");
         const customName = String(pc.skill || "").trim();
         const btName = String(pc.builtin || "单人物替换").replace(/\.[^.]+$/, "");   // 导入的 skill 去掉扩展名更好看
-        const llmTxt = llmSrc === "系统默认" ? "LLM关闭 丨 系统默认"
+        const llmTxt = llmSrc === "界面输入" ? "LLM关闭 丨 界面输入"
             : llmSrc === "内置skill" ? `LLM开启 丨 内置skill:${btName}`
             : (customName ? `LLM开启 丨 自定义skill:${customName.replace(/\.[^.]+$/, "")}` : "LLM开启 丨 自定义skill");
         // 本节点固定常规采样（联合窗口采样）：旧工作流里存的「SelfLift采样」一律按常规显示

@@ -47,31 +47,6 @@ KIND_COUNT_OPTIONS = {
 # 抽帧硬上限：防止误填（如 cap=0 且视频极长）时一次性吃光内存
 MAX_VIDEO_FRAMES_HARD = 6000
 
-# 加载出来的 IMAGE 张量超过这个体积（GB，CPU 内存）时给一条提示
-VIDEO_MEM_WARN_GB = 4.0
-
-
-def _warn_video_ram(name, frames, fw, fh, est_gb, resized, width, height):
-    """提示「这次加载自己占了多少 CPU 内存」。
-
-    注意：下游编码节点确实会按画布再缩放一次，但那是**之后**的事 ——
-    这里的张量在加载阶段就已经分配好了，并且一直活到编码结束（总线值还引用着它），
-    所以下游缩放**省不掉**这份内存，只能在本节点的「输出宽高 / 帧数上限」里省。
-    """
-    if resized:
-        tip = ("已按「输出宽高」缩放到 %dx%d 仍然偏大，可继续调小宽高，或限制帧数上限"
-               % (fw, fh))
-    else:
-        hw = max(2, int(round(fw * 0.5 / 2.0)) * 2)
-        hh = max(2, int(round(fh * 0.5 / 2.0)) * 2)
-        after = frames * hh * hw * 3 * 4 / float(1024 ** 3)
-        tip = ("原始尺寸未缩放；把「输出宽高」设成 %dx%d 可降到约 %.1f GB"
-               % (hw, hh, after))
-    print("[JZL-素材加载] ⚠️ 视频 %s：%d 帧 %dx%d 要占 %.1f GB CPU 内存（float32）"
-          "—— 这份内存是**加载时**就分配的，编码节点之后虽然会按画布再缩放，但那一步省不掉它。%s"
-          % (name, frames, fw, fh, est_gb, tip))
-
-
 # ── 配置 JSON：解析 / 归一化（前端写什么进来都不能把后端弄崩） ─────────────
 
 def _default_layout():
@@ -409,10 +384,6 @@ def load_video_frames(path, force_rate=0.0, skip=0, width=0, height=0, cap=0):
         print("[JZL-素材加载] ⚠️ 视频 %s 已达安全上限 %d 帧（未填帧数上限），"
               "如需完整加载请在「视频设置」里调高帧数上限" % (os.path.basename(path), limit))
     fh, fw = int(frames[0].shape[0]), int(frames[0].shape[1])
-    est_gb = len(frames) * fh * fw * 3 * 4 / float(1024 ** 3)
-    if est_gb >= VIDEO_MEM_WARN_GB:
-        _warn_video_ram(os.path.basename(path), len(frames), fw, fh, est_gb,
-                        bool(target), width, height)
     # 先按 uint8 拼成整块再一次性转 float32：峰值从「2× 张量」降到「1.5× 张量」
     stacked = np.stack(frames)
     del frames

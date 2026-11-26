@@ -97,36 +97,33 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
         self.assertEqual(_MOD._builtin_skill_file("../evil.md"), "")
 
     def test_resolve_prompt_kind_uses_imported_file(self):
-        """目录里新放的文件也能被解析；没有元数据 → lead/模板为 None（走通用话术）。"""
+        """目录里新放的文件也能被解析；没有元数据 → lead 为 None（走通用话术）。"""
         self._write("雨夜情绪.md")
-        src, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
+        src, skill_file, lead = _MOD._resolve_prompt_kind(
             {"source": "内置skill", "builtin": "雨夜情绪.md"})
         self.assertEqual(src, "内置skill")
         self.assertEqual(skill_file, "雨夜情绪.md")
         self.assertIsNone(lead)
-        self.assertIsNone(tpl)
 
     def test_resolve_prompt_kind_keeps_builtin_lead(self):
         self._write_all_scenes()
-        src, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
+        src, skill_file, lead = _MOD._resolve_prompt_kind(
             {"source": "内置skill", "builtin": "动物替换人"})
         self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换人"][0])
         self.assertIsNotNone(lead)
-        self.assertIsNotNone(tpl)
 
     def test_legacy_builtin_name_resolves_to_new_one(self):
         """老工作流存的是「动物替换」→ 落到动物替换人那份真正的文件。"""
         self._write_all_scenes()
-        src, skill_file, tpl, lead = _MOD._resolve_prompt_kind(
+        src, skill_file, lead = _MOD._resolve_prompt_kind(
             {"source": "内置skill", "builtin": "动物替换"})
         self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换人"][0])
         self.assertIsNotNone(lead)
-        self.assertIsNotNone(tpl)
 
     def test_resolve_prompt_kind_falls_back_to_first_file(self):
         """配置里的文件名被删了 → 回退到目录里的第一个内置 skill（不是写死的名字）。"""
         self._write_all_scenes()
-        src, skill_file, _tpl, _lead = _MOD._resolve_prompt_kind(
+        src, skill_file, _lead = _MOD._resolve_prompt_kind(
             {"source": "内置skill", "builtin": "已被删掉.md"})
         self.assertEqual(skill_file, _SKILL.list_builtin_skills()[0])
 
@@ -142,13 +139,12 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
         self.assertEqual(pc["builtin"], _MOD.DEFAULT_BUILTIN_SKILL)
 
     def test_build_prompt_reads_imported_skill(self):
-        """真正走一遍：LLM 关掉时用兜底模板（不该崩），LLM 打开时把导入的 skill 当设定词。"""
+        """真正走一遍：LLM 关掉时回退原文（不该崩），LLM 打开时把导入的 skill 当设定词。"""
         self._write("雨夜情绪.md", "这是导入的 skills 设定词")
-        # 关闭 LLM → 只出模板，且不因「导入 skill」而报错
+        # 关闭 LLM → 回退「界面输入」原文（不再有内置模板），且不因「导入 skill」而报错
         out = _MOD._build_swap_prompt({"use_llm": False, "source": "内置skill",
                                        "builtin": "雨夜情绪.md"}, "雨夜街头", "黑色长发")
-        for needle in ("===H3_PROMPT===", "雨夜街头", "黑色长发", "[SHOT_END]"):
-            self.assertIn(needle, out)
+        self.assertEqual(out, "雨夜街头\n\n黑色长发")
 
         # 打开 LLM：拦截 LLM 调用，确认 system 里拿到的是导入文件的内容
         seen = {}
@@ -165,7 +161,9 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
         finally:
             _MOD._swap_llm_call = saved
         self.assertEqual(seen.get("system"), "这是导入的 skills 设定词")
-        self.assertIn("把视频里的人换成参考图中的人", seen.get("user", ""))   # 通用话术
+        # 没元数据的 skill 用通用话术（不再写死"换成参考图中的人"这种具体场景）
+        self.assertIn("请根据下面的素材描述", seen.get("user", ""))
+        self.assertIn("【视频文本】", seen.get("user", ""))
         self.assertIn("[SHOT_START]", out2)
 
     def test_import_endpoint_reuses_bundled_dir(self):
