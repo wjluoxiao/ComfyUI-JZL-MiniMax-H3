@@ -649,14 +649,44 @@ export function renderSwapPromptPanel(c, s, d, node) {
 
     // 本地：官方「Load CLIP」+「Generate Text」（models/text_encoders ∪ models/clip）
     const localBox = el("div", "");
+    const _clipPlaceholder = "（models/text_encoders 与 models/clip 里没有模型）";
     const clipModels = (d?.all_clip_models && d.all_clip_models.length) ? d.all_clip_models
-        : ((d?.clip_models && d.clip_models.length) ? d.clip_models : ["（models/text_encoders 与 models/clip 里没有模型）"]);
-    if (!llm.clip_name && clipModels.length && !String(clipModels[0]).startsWith("（")) llm.clip_name = clipModels[0];
+        : ((d?.clip_models && d.clip_models.length) ? d.clip_models : [_clipPlaceholder]);
+    const _hasList = clipModels.length && !String(clipModels[0]).startsWith("（");
     const clipTypes = (d?.clip_types && d.clip_types.length) ? d.clip_types : ["qwen_image"];
-    localBox.append(field("CLIP 模型", selectControl(clipModels, String(llm.clip_name || clipModels[0]),
-        (v) => { llm.clip_name = String(v).startsWith("（") ? "" : v; commit(); })));
-    localBox.append(field("CLIP 类型", selectControl(clipTypes, String(llm.clip_type || "qwen_image"),
+
+    // ⚠️ 这里绝对不能在渲染时把「本机第一个模型」写进 llm.clip_name：
+    //    面板只要渲染就会触发自动保存，于是「A 保存的工作流里根本没有 clip_name」
+    //    → 「B 打开面板看一眼（或改别的选项）就把 B 机器的第一个 CLIP 写进工作流」
+    //    → A 再打开就变成别人的模型，这就是「CLIP 选项会漂移」的根因。
+    //    正确语义：值只由用户**主动选择**写入；本机没有该模型时把它显示成「（本机缺失）」，
+    //    让界面与实际一致，而不是悄悄换成第一项。
+    const _clipMissing = !!llm.clip_name && !clipModels.includes(String(llm.clip_name));
+    const clipOptions = _clipMissing
+        ? [{ value: String(llm.clip_name), label: `${llm.clip_name}（本机缺失，请重选）` }, ...clipModels]
+        : clipModels;
+    const _clipTypeMissing = !!llm.clip_type && !clipTypes.includes(String(llm.clip_type));
+    const clipTypeOptions = _clipTypeMissing
+        ? [{ value: String(llm.clip_type), label: `${llm.clip_type}（本机不支持，请重选）` }, ...clipTypes]
+        : clipTypes;
+
+    localBox.append(field("CLIP 模型", selectControl(clipOptions,
+        String(llm.clip_name || (_hasList ? clipModels[0] : _clipPlaceholder)),
+        (v) => {
+            const s2 = String(v);
+            if (s2.startsWith("（")) { commit(); return; }   // 占位项不是模型名，不写
+            llm.clip_name = s2;
+            commit();
+        })));
+    localBox.append(field("CLIP 类型", selectControl(clipTypeOptions, String(llm.clip_type || "qwen_image"),
         (v) => { llm.clip_type = v; commit(); })));
+    if (_clipMissing || _clipTypeMissing) {
+        localBox.append(el("div", "font-size:11px;color:#ffb86b;margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;",
+            `⚠️ 本机没有工作流里记录的${_clipMissing ? ` CLIP 模型「${llm.clip_name}」` : ""}`
+            + `${_clipTypeMissing ? ` CLIP 类型「${llm.clip_type}」` : ""}，`
+            + "已原样保留不改动（不会悄悄换成别的）。\n"
+            + "要用本地 LLM 请重新选一个本机存在的模型；不换则本次按「系统默认」模板走（不会报错）。"));
+    }
     localBox.append(field("max_length", numberControl(llm.max_length ?? 2048, { min: 1, max: 32768, step: 1 },
         (v) => { llm.max_length = Math.round(v); })));
     localBox.append(field("temperature", numberControl(llm.temperature ?? 0.7, { min: 0.01, max: 2, step: 0.01 },

@@ -914,6 +914,32 @@ def _load_swap_skill(name, tag=TAG, custom=False):
         return None
 
 
+def _auto_pick_local_clip():
+    """本机第一个可用的文本编码器（优先 qwen 系，H3 配套的就是 qwen3vl）。
+
+    只用于「用户从没在面板里选过 CLIP」的情况：**自动挑但不写回工作流**，
+    这样 A 保存的工作流拿到 B 机器上也能跑，且不会把「A 机器第一个模型」固化进 JSON
+    （那正是「CLIP 选项会漂移」的根因）。挑错类型时 load_clip 失败会被上层 try 兜住。
+    """
+    try:
+        import folder_paths as _fp
+    except Exception:
+        return ""
+    names = []
+    for kind in ("text_encoders", "clip"):
+        try:
+            names.extend(list(_fp.get_filename_list(kind) or []))
+        except Exception:
+            continue
+    names = [str(n) for n in names if n]
+    if not names:
+        return ""
+    for n in names:
+        if "qwen" in n.lower():
+            return n
+    return names[0]
+
+
 def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
     """调 LLM 生成提示词。失败返回 None，由调用方回退系统默认（绝不因 LLM 挂掉而中断生成）。
 
@@ -939,7 +965,14 @@ def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
             llm = prompt_cfg.get("llm") or {}
             clip_name = str(llm.get("clip_name") or "").strip()
             if not clip_name:
-                print(f"[JZL-{tag}] ⚠️ 未选择本地 CLIP 模型 → 回退「系统默认」提示词", flush=True)
+                clip_name = _auto_pick_local_clip()
+                if clip_name:
+                    print(f"[JZL-{tag}] 未指定本地 CLIP 模型 → 自动使用本机「{clip_name}」"
+                          f"（想固定就在「📝 提示词预设 → CLIP 模型」里选一次，"
+                          f"没选时不会写进工作流，换机器也能跑）", flush=True)
+            if not clip_name:
+                print(f"[JZL-{tag}] ⚠️ 未选择本地 CLIP 模型，本机也没有可用的文本编码器"
+                      f" → 回退「系统默认」提示词", flush=True)
                 return None
             import comfy.sd
             import folder_paths as _fp
