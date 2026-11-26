@@ -269,6 +269,82 @@ class SwapPromptPresetTest(unittest.TestCase):
         leftovers = [n for n in dir(_MOD) if n.startswith("DEFAULT_") and n.endswith("_PROMPT")]
         self.assertEqual(leftovers, [])
 
+    def test_skills_stay_plain_text(self):
+        """skill 是给 LLM 读的纯文本：不许有表格 / 引用块 / 分隔线，加粗也要克制。"""
+        import re as _re
+        for name in self.BUILTIN_FILES_9:
+            text = _SKILL._read_skill(name)
+            self.assertNotIn("|", text.replace("||", ""), f"{name} 还留着表格")
+            self.assertNotRegex(text, r"(?m)^---", f"{name} 还留着分隔线")
+            self.assertNotRegex(text, r"(?m)^>", f"{name} 还留着引用块")
+            bolds = text.count("**") // 2
+            self.assertLessEqual(bolds, 16, f"{name} 加粗 {bolds} 处，太多")
+
+    def test_every_skill_ends_with_output_contract(self):
+        """每份 skill 结尾都要有「输出约定」，掐掉格式回声（模型照抄标题/表格/加粗）。"""
+        for name in self.BUILTIN_FILES_9:
+            text = _SKILL._read_skill(name).rstrip()
+            self.assertIn("## 输出约定", text, name)
+            self.assertIn("不要输出标题、表格、加粗、引用符号", text, name)
+
+    def test_every_skill_declares_video_editing_is_not_t2v(self):
+        """每份 skill 都必须讲清「视频编辑 ≠ 文生视频/图生视频」，否则 LLM 会自己补外观。"""
+        for name in self.BUILTIN_FILES_9:
+            text = _SKILL._read_skill(name)
+            self.assertIn("视频编辑 ≠ 文生视频", text, name)
+            self.assertIn("视觉特征只能来自用户填的两段文本", text, name)
+
+    def test_every_skill_forbids_inventing_appearance(self):
+        """每份 skill 都要有「用户没写的一个词都不许补」+ 自检里查无依据的外观词。"""
+        for name in self.BUILTIN_FILES_9:
+            text = _SKILL._read_skill(name)
+            self.assertIn("一个词都不许补", text, name)
+            self.assertIn("找不到依据", text, name)
+
+    def test_no_skill_orders_llm_to_enumerate_appearance(self):
+        """禁止「写清脸型/发型/…」这种命令式列举（会逼 LLM 编造）。"""
+        import re as _re
+        bad = _re.compile(r"写清(脸型|发型|发色|肤色|体型|五官)")
+        for name in self.BUILTIN_FILES_9:
+            for ln in _SKILL._read_skill(name).splitlines():
+                self.assertFalse(bad.search(ln), f"{name}: {ln.strip()[:60]}")
+
+    def test_guard_is_prepended_to_every_skill(self):
+        """后端共享总纲必须拼在 skill 前面（内置 / 自定义 / 导入 全部生效）。"""
+        self.assertIn("视觉特征白名单制", _MOD._PROMPT_GUARD)
+        seen = {}
+
+        def _fake_llm(prompt_cfg, system_prompt, user_msg, tag=""):
+            seen["system"] = system_prompt
+            return "[SHOT_START]\nOK\n[SHOT_END]"
+        saved = _MOD._swap_llm_call
+        _MOD._swap_llm_call = _fake_llm
+        try:
+            _MOD._build_swap_prompt(
+                {"use_llm": True, "source": "内置skill", "builtin": "单人物替换"},
+                "把白模人物换成图1的女人", "")
+        finally:
+            _MOD._swap_llm_call = saved
+        self.assertTrue(seen["system"].startswith(_MOD._PROMPT_GUARD))
+        self.assertIn("单人物替换提示词生成器", seen["system"])
+
+    def test_empty_text_tells_llm_not_to_describe(self):
+        """用户两段文本为空时，提示词里必须明确「不要描述外观」，而不是「按通用要求处理」。"""
+        seen = {}
+
+        def _fake_llm(prompt_cfg, system_prompt, user_msg, tag=""):
+            seen["user"] = user_msg
+            return "[SHOT_START]\nOK\n[SHOT_END]"
+        saved = _MOD._swap_llm_call
+        _MOD._swap_llm_call = _fake_llm
+        try:
+            _MOD._build_swap_prompt(
+                {"use_llm": True, "source": "内置skill", "builtin": "单人物替换"}, "", "")
+        finally:
+            _MOD._swap_llm_call = saved
+        self.assertIn("不要描述任何外观细节", seen["user"])
+        self.assertIn("宁可省略也不要编造", seen["user"])
+
     def test_llm_off_falls_back_to_user_text(self):
         """skill 分支在没有 LLM 时也回退「界面输入」原文（不再有内置模板）。"""
         out = _MOD._build_swap_prompt(

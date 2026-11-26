@@ -160,7 +160,9 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
                                             "builtin": "雨夜情绪.md"}, "雨夜街头", "黑色长发")
         finally:
             _MOD._swap_llm_call = saved
-        self.assertEqual(seen.get("system"), "这是导入的 skills 设定词")
+        # 后端会在 skill 前面拼「反幻想总纲」，导入的文件内容必须完整保留在后面
+        self.assertTrue(seen.get("system", "").startswith(_MOD._PROMPT_GUARD))
+        self.assertTrue(seen.get("system", "").endswith("这是导入的 skills 设定词"))
         # 没元数据的 skill 用通用话术（不再写死"换成参考图中的人"这种具体场景）
         self.assertIn("请根据下面的素材描述", seen.get("user", ""))
         self.assertIn("【视频文本】", seen.get("user", ""))

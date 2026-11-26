@@ -4472,6 +4472,12 @@ export function stepperControl(value, opts, onChange) {
     left.addEventListener("click", () => apply(Number(inp.value) - step));
     right.addEventListener("click", () => apply(Number(inp.value) + step));
     inp.addEventListener("change", () => apply(inp.value));
+    // 打字过程中也实时通知（不夹值、不回写，避免打断输入）→ 面板里的联动预览能跟着动。
+    // 最终值仍由上面的 change 处理（夹值 + 补发 change 用于自动保存）。
+    inp.addEventListener("input", () => {
+        const n = Number(inp.value);
+        if (isFinite(n) && String(inp.value).trim() !== "") onChange(n);
+    });
     wrap.append(left, inp, right);
     return wrap;
 }

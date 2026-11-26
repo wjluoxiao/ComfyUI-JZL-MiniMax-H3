@@ -225,12 +225,13 @@ export function renderSwapVideoParamsPanel(c, s, node) {
         [{ value: "放大倍数", label: "面积倍数（推荐，宽高比自动跟随一采）" },
          { value: "目标分辨率", label: "目标分辨率（固定宽×高，竖屏慎用）" }],
         String(gp.second_mode || "放大倍数"), v => { gp.second_mode = v; syncSecMode(); touch(); })));
+    // 三个旋钮都必须顺手刷新「二采画布」预览：只 touch() 的话，◀/▶ 改完预览还停在旧数字
     const fSecW = field("二采目标宽度", stepperControl(Number(gp.second_width ?? 1280),
-        { min: 32, max: 4096, step: 32 }, v => { gp.second_width = Math.round(v); touch(); }));
+        { min: 32, max: 4096, step: 32 }, v => { gp.second_width = Math.round(v); syncSecMode(); touch(); }));
     const fSecH = field("二采目标高度", stepperControl(Number(gp.second_height ?? 704),
-        { min: 32, max: 4096, step: 32 }, v => { gp.second_height = Math.round(v); touch(); }));
+        { min: 32, max: 4096, step: 32 }, v => { gp.second_height = Math.round(v); syncSecMode(); touch(); }));
     const fSecScale = field("面积倍数", stepperControl(Number(gp.upscale_scale ?? 2.0),
-        { min: 1.0, max: 4.0, step: 0.1 }, v => { gp.upscale_scale = v; touch(); }));
+        { min: 1.0, max: 4.0, step: 0.1 }, v => { gp.upscale_scale = v; syncSecMode(); touch(); }));
     c.append(fSecScale, fSecW, fSecH);
     const secBox = el("div", "font-size:11px;color:var(--jz-warn);padding:5px 10px;"
         + "background:var(--comfy-input-bg,var(--jz-bg-raise));border:1px solid var(--border-color,var(--jz-border));"
