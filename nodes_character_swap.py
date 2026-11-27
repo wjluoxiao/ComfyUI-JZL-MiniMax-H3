@@ -355,20 +355,17 @@ _PROMPT_GUARD = """【最高优先级 · 视觉特征白名单制（违反即整
 """
 
 
-def _load_swap_skill(name, tag=None, custom=False, custom_dir=""):
+def _load_swap_skill(name, tag=None, custom=False):
     """读 skill 文件全文。
 
     custom=False → 内置目录 skills/jzl/ 里的文件（「内置skill」分支）
-    custom=True  → 用户自己指定的 skill 目录里的文件（「自定义skill」分支）；
-                   custom_dir 为空时退回默认的 skills/jzl/custom/
+    custom=True  → 自定义子目录 skills/jzl/custom/ 里的文件（「自定义skill」分支）
     文件不存在/超限/非 UTF-8 时打一行警告并返回 None（调用方回退「界面输入」原文）。
     """
     tag = tag or TAG
     try:
         from .nodes_skill import read_builtin_skill, read_custom_skill
-        if custom:
-            return read_custom_skill(name, custom_dir)
-        return read_builtin_skill(name)
+        return read_custom_skill(name) if custom else read_builtin_skill(name)
     except Exception as e:
         where = "自定义" if custom else "内置"
         print(f"[JZL-{tag}] ⚠️ {where} skill 读取失败（{name or '未选择'}）：{e}"
@@ -939,8 +936,7 @@ def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=None, audio_mode=
         skill = _load_swap_skill(skill_name, tag, custom=False)
     else:
         skill_name = str(prompt_cfg.get("skill") or "").strip()
-        skill_dir = str(prompt_cfg.get("custom_dir") or "").strip()
-        skill = _load_swap_skill(skill_name, tag, custom=True, custom_dir=skill_dir) if skill_name else None
+        skill = _load_swap_skill(skill_name, tag, custom=True) if skill_name else None
     if not skill:
         return fallback
     skill = _PROMPT_GUARD + skill

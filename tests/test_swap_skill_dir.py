@@ -156,52 +156,6 @@ class SwapSkillDirWiringTest(unittest.TestCase):
         self.assertIn("README", os.listdir(d))
         self.assertEqual(_SKILL.list_custom_skills(), [])
 
-    def test_custom_dir_param_is_used(self):
-        """「📂 选择skill目录」：给了目录就只扫那一个，且能读到里面的文件（完全独立于插件）。"""
-        tmp = tempfile.mkdtemp()
-        try:
-            with open(os.path.join(tmp, "我的.md"), "w", encoding="utf-8") as f:
-                f.write("我的自定义 skill 正文")
-            self.assertEqual(_SKILL.list_custom_skills(tmp), ["我的.md"])
-            self.assertEqual(_SKILL.read_custom_skill("我的.md", tmp), "我的自定义 skill 正文")
-            self.assertEqual(_SKILL.resolve_custom_skill("我的.md", tmp),
-                             os.path.join(tmp, "我的.md"))
-            # 空目录 → 空清单（不回退到插件自带目录，否则就"不独立"了）
-            empty = tempfile.mkdtemp()
-            try:
-                self.assertEqual(_SKILL.list_custom_skills(empty), [])
-            finally:
-                shutil.rmtree(empty, ignore_errors=True)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_custom_dir_still_validates_filename(self):
-        """自定义目录里也不许用路径穿越读别的文件。"""
-        tmp = tempfile.mkdtemp()
-        try:
-            self.assertRaises(ValueError, _SKILL.read_custom_skill, "../secrets.md", tmp)
-            self.assertRaises(ValueError, _SKILL.read_custom_skill, "a.txt.exe", tmp)
-            self.assertRaises(FileNotFoundError, _SKILL.read_custom_skill, "没有.md", tmp)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_list_subdirs_helper(self):
-        """目录浏览：只列子目录，且不接受不存在的路径（返回空而不是抛异常）。"""
-        tmp = tempfile.mkdtemp()
-        try:
-            os.makedirs(os.path.join(tmp, "sub_a"))
-            os.makedirs(os.path.join(tmp, "sub_b"))
-            with open(os.path.join(tmp, "file.md"), "w", encoding="utf-8") as f:
-                f.write("x")
-            cur, dirs, parent = _SKILL.list_subdirs(tmp)
-            self.assertEqual(cur, os.path.abspath(tmp))
-            self.assertEqual(dirs, ["sub_a", "sub_b"])      # 文件不在列表里
-            self.assertTrue(parent)
-            cur2, dirs2, _p2 = _SKILL.list_subdirs(os.path.join(tmp, "不存在"))
-            self.assertEqual(dirs2, [])
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
     def test_video_edit_node_has_no_audio_port(self):
         """参考音频只有人物替换有端口；视频编辑全部素材走总线。"""
         edit = getattr(_MOD, "JZL_MiniMaxVideoEdit", None)

@@ -1526,8 +1526,6 @@ async def jzl_swap_skills(request):
     """一次返回「内置 / 自定义」两份 skill 文件名清单 + 目录路径（全部来自目录扫描）。
 
     用户在文件管理器里增删文件后，前端点「🔄 刷新」重新拉一次即可，无需重启。
-    ?custom_dir=<用户自己指定的 skill 目录>：给了就只扫这个目录（随节点配置保存，完全独立于插件）；
-    没给则退回默认的 skills/jzl/custom。
     返回 {ok, builtin:[…], custom:[…], descs:{…}, dirs:{builtin,custom}}
     """
     try:
@@ -1535,19 +1533,13 @@ async def jzl_swap_skills(request):
                                   ensure_custom_skill_dir as _ensure,
                                   list_builtin_skills as _lb, list_custom_skills as _lc,
                                   read_skill_descriptions as _rd)
-        want_dir = str(request.query.get("custom_dir") or "").strip()
-        if want_dir:
-            custom_dir = want_dir
-            custom = _lc(custom_dir)
-        else:
-            custom_dir = _ensure() or (_c()[0] if _c() else "")
-            custom = _lc()
+        custom_dir = _ensure()
         return web.json_response({
             "ok": True,
             "builtin": _lb(),
-            "custom": custom,
+            "custom": _lc(),
             "descs": _rd(),
-            "dirs": {"builtin": _b(), "custom": custom_dir},
+            "dirs": {"builtin": _b(), "custom": custom_dir or (_c()[0] if _c() else "")},
         })
     except Exception as exc:
         return web.json_response({"ok": False, "builtin": [], "custom": [], "descs": {},
@@ -1594,33 +1586,11 @@ async def jzl_swap_skill_import(request):
         return web.json_response({"ok": False, "error": f"导入失败：{exc}"}, status=500)
 
 
-@PromptServer.instance.routes.get("/jzl/swap_ls")
-async def jzl_swap_ls(request):
-    """「📂 选择skill目录」用：列出某个路径下的**子目录**，供前端做一个目录浏览器。
-
-    ?path=<绝对路径>（空则从用户主目录起步）
-    返回 {ok, path, parent, dirs:[子目录名…], count}
-    """
-    try:
-        from .nodes_skill import list_subdirs, list_skills_in_dir
-        cur, dirs, parent = list_subdirs(str(request.query.get("path") or "").strip())
-        try:
-            skill_count = len(list_skills_in_dir(cur))
-        except Exception:
-            skill_count = 0
-        return web.json_response({"ok": True, "path": cur, "parent": parent,
-                                  "dirs": dirs, "count": len(dirs),
-                                  "skill_count": skill_count})
-    except Exception as exc:
-        return web.json_response({"ok": False, "path": "", "parent": "", "dirs": [],
-                                  "error": f"{type(exc).__name__}: {exc}"}, status=400)
-
-
 @PromptServer.instance.routes.get("/jzl/swap_skill_text")
 async def jzl_swap_skill_text(request):
     """「📋 复制skill内容」：返回某个 skill 文件的全文（前端直接写剪贴板）。
 
-    ?target=builtin|custom & name=<文件名> & dir=<自定义 skill 目录>
+    ?target=builtin|custom & name=<文件名>
     返回 {ok, name, text}
     """
     try:
@@ -1628,13 +1598,11 @@ async def jzl_swap_skill_text(request):
                                   ensure_custom_skill_dir)
         target = str(request.query.get("target") or "builtin").strip().lower()
         name = str(request.query.get("name") or "").strip()
-        want_dir = str(request.query.get("dir") or request.query.get("custom_dir") or "").strip()
         if not name:
             return web.json_response({"ok": False, "error": "未指定 skill 文件"}, status=400)
         if target == "custom":
-            if not want_dir:
-                ensure_custom_skill_dir()
-            text = read_custom_skill(name, want_dir or None)
+            ensure_custom_skill_dir()
+            text = read_custom_skill(name)
         else:
             text = read_builtin_skill(name)
         return web.json_response({"ok": True, "name": name, "text": text})
