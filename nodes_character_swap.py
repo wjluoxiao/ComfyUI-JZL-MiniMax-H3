@@ -775,16 +775,72 @@ def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG, audio_mode="
     text = _swap_llm_call(prompt_cfg, skill, user_msg, tag)
     if not text:
         return fallback
-    if "[SHOT_START]" not in text:
-        text = "[SHOT_START]\n\n" + text + "\n[SHOT_END]"
-    elif "[SHOT_END]" not in text:
-        print(f"[JZL-{tag}] ⚠️ 提示词结尾没有 [SHOT_END]：多半是撞上 max_length 被截断了"
-              f"（当前 {len(text)} 字）。把「max_length」调大再验证一次。", flush=True)
-        text = text + "\n[SHOT_END]"
+    if text.lstrip().startswith("{") or "===H3_PROMPT===" not in text:
+        print(f"[JZL-{tag}] ⚠️ LLM 输出不是标准六段式（疑似 JSON / 缺 ===H3_PROMPT===）"
+              f" → 已自动还原成字段格式", flush=True)
+    text = _normalize_llm_prompt(text)
     text = _apply_audio_mode(text, audio_mode)
     label = f"内置skill·{_skill_stem(skill_file)}" if source == "内置skill" else "自定义skill"
     print(f"[JZL-{tag}] 提示词：{label} 生成完成（{len(text)} 字）", flush=True)
     return text
+
+
+# Ref2VA 六段式的字段名（顺序固定）。模型偶尔会「换一种序列化方式」输出同一批内容 ——
+# 最常见的是 JSON（小模型看到「六个字段」就往结构化输出跑），其次是 YAML / 代码围栏。
+# 这里统一把它掰回官方的「字段名: 正文」纯文本形态，保证下游拿到的永远是一份合规提示词。
+_H3_SECTIONS = ("subject_definitions", "summary", "retention_analysis",
+                "detailed_description", "overall_soundscape", "non_diegetic_music")
+
+
+def _h3_rebuild_from_json(obj):
+    """把 {字段: 值} 的 dict 还原成官方六段式纯文本（值可以是 str / list）。"""
+    def val(v):
+        if isinstance(v, (list, tuple)):
+            return "\n".join(str(x) for x in v)
+        if isinstance(v, dict):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v if v is not None else "")
+    parts = []
+    for key in _H3_SECTIONS:
+        if key in obj and val(obj[key]).strip():
+            parts.append(f"{key}:\n{val(obj[key]).strip()}")
+    for key, v in obj.items():                     # 模型自己加的多余键也保留，别丢信息
+        if key not in _H3_SECTIONS and val(v).strip():
+            parts.append(f"{key}:\n{val(v).strip()}")
+    return "\n\n".join(parts)
+
+
+def _normalize_llm_prompt(text):
+    """把 LLM 的输出统一成 [SHOT_START] + ===H3_PROMPT=== + 六段 + [SHOT_END]。
+
+    容错（不打断生成，只做修正）：
+      · 去掉 ``` 代码围栏；
+      · JSON / {…} 包裹 → 还原成字段名: 正文；
+      · 缺 ===H3_PROMPT=== / [SHOT_START] / [SHOT_END] → 补齐。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return t
+    t = re.sub(r"^\s*```[\w-]*\s*\n?", "", t)
+    t = re.sub(r"\n?\s*```\s*$", "", t).strip()
+    # JSON 形态 → 字段形态（JSON 可能夹在 [SHOT_START] / [SHOT_END] 之间，所以按大括号切片找）
+    if "{" in t and "}" in t and "===H3_PROMPT===" not in t:
+        try:
+            obj = json.loads(t[t.index("{"): t.rindex("}") + 1])
+        except Exception:
+            obj = None
+        if isinstance(obj, dict) and any(k in obj for k in _H3_SECTIONS):
+            t = _h3_rebuild_from_json(obj)
+    if not t:
+        return t
+    if not t.startswith("[SHOT_START]"):
+        t = "[SHOT_START]\n\n" + t
+    if "===H3_PROMPT===" not in t:
+        t = t.replace("[SHOT_START]", "[SHOT_START]\n\n===H3_PROMPT===", 1)
+    if "[SHOT_END]" not in t:
+        t = t.rstrip() + "\n[SHOT_END]"
+    return re.sub(r"\n{3,}", "\n\n", t).strip()
+
 
 
 def _resolve_overlap(want, seg_len, enabled=True):

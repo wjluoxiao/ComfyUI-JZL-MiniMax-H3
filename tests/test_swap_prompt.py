@@ -269,6 +269,35 @@ class SwapPromptPresetTest(unittest.TestCase):
         leftovers = [n for n in dir(_MOD) if n.startswith("DEFAULT_") and n.endswith("_PROMPT")]
         self.assertEqual(leftovers, [])
 
+    def test_output_format_has_no_code_fence(self):
+        """格式示例不能包在 ``` 里 —— 否则模型会把它当「数据格式」, 转头输出 JSON。"""
+        for name in self.BUILTIN_FILES_9:
+            text = _SKILL._read_skill(name)
+            self.assertNotIn("```", text, f"{name} 还留着代码围栏")
+            self.assertIn("严禁输出 JSON", text, name)
+            self.assertIn("===H3_PROMPT===", text, name)
+
+    def test_normalize_turns_json_into_sections(self):
+        """LLM 若把六段塞进 JSON，后端必须还原成字段格式（不能直接送给模型）。"""
+        bad = ('[SHOT_START]\n\n'
+               '{"subject_definitions": "A.", "summary": "B.", "retention_analysis": "C.", '
+               '"detailed_description": "D.", "overall_soundscape": "E.", '
+               '"non_diegetic_music": "N/A"}\n[SHOT_END]')
+        out = _MOD._normalize_llm_prompt(bad)
+        self.assertNotIn("{", out)
+        self.assertIn("===H3_PROMPT===", out)
+        for sec in _MOD._H3_SECTIONS:
+            self.assertIn(sec + ":", out)
+        self.assertTrue(out.startswith("[SHOT_START]"))
+        self.assertTrue(out.endswith("[SHOT_END]"))
+
+    def test_normalize_strips_fence_and_keeps_good_output(self):
+        self.assertEqual(
+            _MOD._normalize_llm_prompt("```text\n[SHOT_START]\n\n===H3_PROMPT===\nx\n[SHOT_END]\n```"),
+            "[SHOT_START]\n\n===H3_PROMPT===\nx\n[SHOT_END]")
+        good = "[SHOT_START]\n\n===H3_PROMPT===\nsubject_definitions:\nx\n[SHOT_END]"
+        self.assertEqual(_MOD._normalize_llm_prompt(good), good)
+
     def test_skills_stay_plain_text(self):
         """skill 是给 LLM 读的纯文本：不许有表格 / 引用块 / 分隔线，加粗也要克制。"""
         import re as _re

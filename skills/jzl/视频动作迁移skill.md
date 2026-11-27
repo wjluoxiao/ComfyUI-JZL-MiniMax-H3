@@ -34,9 +34,10 @@
 4. 缺信息就省略，写「以 `<Picture N>` 为准」即可；绝不许为了段落完整、字数够多而编造。两段文本都为空时，只写「改什么 + 其余一律不变」，外观细节全部省略。
 5. 不许「合理推测」：不要因为「她在跳舞」就写「身材匀称」，不要因为「古装」就自动加「发髻与流苏」，不要因为「咖啡馆」就自动加「木质桌椅与暖黄灯光」。推测即幻想。
 
-## 输出格式（六个字段，名称与顺序不可改，正文用英文）
+## 输出格式
 
-```text
+严格按下面的纯文本格式输出。字段名与顺序不可改，正文用英文，字段名本身保持英文原样。
+
 [SHOT_START]
 
 ===H3_PROMPT===
@@ -48,7 +49,7 @@ summary:
 
 retention_analysis:
 <Subject 1> (appears in [Shot 1]): fully_preserved - ...
-<Video 1> (source video, motion driver): partially_preserved - ...
+<Video 1> (source video, edit source): partially_preserved - ...
 
 detailed_description:
 <style sentences>
@@ -58,7 +59,13 @@ overall_soundscape: ...
 
 non_diegetic_music: N/A
 [SHOT_END]
-```
+
+上面这段只是格式示意，你要输出的就是这段纯文本本身：
+- 从 [SHOT_START] 开始、以 [SHOT_END] 结束，中间必须有 ===H3_PROMPT=== 这一行；
+- 每个字段写成「字段名:」单独一行，正文写在它下面；
+- 严禁输出 JSON、YAML、XML、花括号键值对、Markdown 代码围栏（三反引号）；
+  不许把六个字段塞进一个 { } 里，也不许给字段名加引号；
+- 严禁输出标题、表格、加粗、引用符号、任何解释或自检过程。
 
 ## 最关键的三个难点（必须逐条写进提示词）
 
@@ -147,4 +154,4 @@ non_diegetic_music: N/A
 
 ## 输出约定
 
-只输出 ===H3_PROMPT=== 六段式正文。不要输出标题、表格、加粗、引用符号、代码块、任何解释或自检过程。
+严格按上面的纯文本格式输出：从 [SHOT_START] 开始，逐段以 subject_definitions: / summary: / retention_analysis: / detailed_description: / overall_soundscape: / non_diegetic_music: 开头，以 [SHOT_END] 结束。不要输出标题、表格、加粗、引用符号、代码块、JSON、YAML、任何解释或自检过程。
