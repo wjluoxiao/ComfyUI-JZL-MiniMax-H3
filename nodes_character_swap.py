@@ -70,6 +70,8 @@ from .nodes import _resize, align_frame_count
 from . import h3_windows as _win
 
 TAG = "人物替换"
+# 注意：任何函数都别用 `tag=TAG` 当默认参数 —— 那会在定义时冻结成「人物替换」。
+# 统一写 `tag=None`，函数体里 `tag = tag or TAG`，视频编辑节点切换前缀才会全程生效。
 
 # 参考视频只给这几档（都是实测/推导出来有意义的档，不给自由输入）：
 #   面积倍数：token 数 ∝ 面积，0.5 约省一半编码，0.25 已经明显糊（再低换人就失效）
@@ -275,13 +277,14 @@ _PROMPT_GUARD = """【最高优先级 · 视觉特征白名单制（违反即整
 """
 
 
-def _load_swap_skill(name, tag=TAG, custom=False):
+def _load_swap_skill(name, tag=None, custom=False):
     """读 skill 文件全文。
 
     custom=False → 内置目录 skills/jzl/ 里的文件（「内置skill」分支）
     custom=True  → 自定义子目录 skills/jzl/custom/ 里的文件（「自定义skill」分支）
     文件不存在/超限/非 UTF-8 时打一行警告并返回 None（调用方回退「界面输入」原文）。
     """
+    tag = tag or TAG
     try:
         from .nodes_skill import read_builtin_skill, read_custom_skill
         return read_custom_skill(name) if custom else read_builtin_skill(name)
@@ -318,7 +321,7 @@ def _auto_pick_local_clip():
     return names[0]
 
 
-def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
+def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=None):
     """调 LLM 生成提示词。失败返回 None，由调用方回退「界面输入」原文（绝不因 LLM 挂掉而中断生成）。
 
     「本地模型(CLIP)」与「在线API」两条分支**完全独立**：
@@ -326,6 +329,7 @@ def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
       · 走在线时只读 prompt_cfg["api"]，绝不碰 clip。
     后端判定统一走 _resolve_llm_backend，与面板显示的勾选项永远一致。
     """
+    tag = tag or TAG
     api_mode = _is_api_backend(prompt_cfg)
     backend_label = "在线API" if api_mode else "本地模型"
     print(f"[JZL-{tag}] LLM 后端：{backend_label}（只使用该后端的参数）", flush=True)
@@ -818,7 +822,7 @@ def _user_prompt_text(video_desc, image_desc):
     return "\n\n".join([p for p in parts if p])
 
 
-def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG, audio_mode="使用原声"):
+def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=None, audio_mode="使用原声"):
     """按「📝 提示词预设」产出最终提示词。
 
     界面输入   = 不做任何加工，直接把用户填的「视频文本 / 图片文本」当提示词（不加载任何 skill）；
@@ -826,6 +830,7 @@ def _build_swap_prompt(prompt_cfg, video_desc, image_desc, tag=TAG, audio_mode="
     自定义skill = 自定义目录里的 .md 当 LLM 设定词。
     任何一步失败都回退到「界面输入」的原文，绝不中断生成。
     """
+    tag = tag or TAG
     source, skill_file, lead = _resolve_prompt_kind(prompt_cfg)
     fallback = _user_prompt_text(video_desc, image_desc)
     if source == "界面输入" or not bool(prompt_cfg.get("use_llm")):
@@ -1005,13 +1010,14 @@ def _resample_to_24(frames, src_fps, dst_fps=float(VIDEO_FPS)):
     return frames.index_select(0, idx)
 
 
-def _cache_source(frames, max_gb, tag=TAG):
+def _cache_source(frames, max_gb, tag=None):
     """可选：把源片一次性转成 uint8 缓存（内存降到 1/4），供逐段切片使用。
 
     为什么不一次性 resize 成画布：那要额外一份 float32 副本，长片上峰值反而更高。
     uint8 用「预分配 + 逐块填充」，峰值只有「原张量 + 目标张量」，填完立刻丢掉原张量。
     代价：1/255 量化误差（源片只是参考/对齐用，不影响生成质量）。
     """
+    tag = tag or TAG
     if frames is None or not hasattr(frames, "shape"):
         return frames, False
     total, h, w = int(frames.shape[0]), int(frames.shape[1]), int(frames.shape[2])
@@ -1467,13 +1473,14 @@ def _ram_gb():
         return None
 
 
-def _free_before_sampling(tag=TAG):
+def _free_before_sampling(tag=None):
     """采样前把 VAE / 文本编码器退回内存，把整张卡的显存留给 UNET。
 
     长片窗口采样时，32B 的文本编码器（int4 也有十几 GB）如果还驻留，
     就会和 UNET 抢显存 → 反复换出换入，表现就是「一步几十秒还卡」。这里只是
     把「当前不需要的模型」卸掉，UNET 会在采样开始时正常加载。
     """
+    tag = tag or TAG
     try:
         import comfy.model_management as mm
     except Exception:
@@ -1496,8 +1503,9 @@ def _free_before_sampling(tag=TAG):
         print(f"[JZL-{tag}] 采样前已用 {after[0]:.1f}/{after[1]:.1f} GB", flush=True)
 
 
-def _log_peak(tag=TAG, label="采样峰值"):
+def _log_peak(tag=None, label="采样峰值"):
     """打印这一步的显存占用：torch 峰值 + 整张卡已用（判断会不会 OOM 看后者）。"""
+    tag = tag or TAG
     try:
         import torch
         if not torch.cuda.is_available():

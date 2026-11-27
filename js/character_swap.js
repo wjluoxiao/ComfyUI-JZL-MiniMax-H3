@@ -348,7 +348,7 @@ export function renderSwapSavePanel(c, s, node) {
         + "要把分段拼成一整条：把输出端口「批量视频」接到「XB-BOX - 🎬 视频批量拼接」，\n"
         + "勾选「拼接保存」（stream copy 无损，不重新编码）；不想留分段就再勾「拼接后删除分段视频」。"));
     const _pfxW = (node?.widgets || []).find((w) => w.name === "story_name");
-    const _pfx = jzlSplitOutPrefix(String(_pfxW?.value ?? "") || "视频/人物替换");
+    const _pfx = jzlSplitOutPrefix(String(_pfxW?.value ?? "") || ("视频/" + swapDefaultName(node)));
     c.append(el("div", "font-size:12px;color:var(--descrip-text,var(--jz-text-dim));margin:0 0 8px 172px;line-height:1.8;",
         "落盘：「分段输出」= 文件夹/视频名称 → output/" + (_pfx.dir ? _pfx.dir + "/" : "")
         + _pfx.name + "_2次生成分段1_00001.mp4"));
@@ -1004,8 +1004,10 @@ export function swapLooksLikeConfig(v) {
 }
 
 // console 在某些宿主/早期前端里可能不可用；日志失败绝不能中断修复流程
-export function swapLog(msg) {
-    try { console.log(msg); } catch (_) {}
+export function swapLog(msg, node) {
+    // 传了 node 就把前缀换成该节点的名字：视频编辑节点不该满屏都是「人物替换」
+    const text = node ? String(msg).replace(/^\[JZL-[^\]]+\]/, `[JZL-${swapDefaultName(node)}]`) : msg;
+    try { console.log(text); } catch (_) {}
 }
 
 // 看起来像不像「换人提示词正文」（用于把错位到 story_name 的正文搬回来）
@@ -1041,7 +1043,7 @@ export function reorderSwapInputs(self) {
         if (lk) lk.target_slot = idx;
     });
     self.setDirtyCanvas?.(true, true);
-    swapLog("[JZL-人物替换] 端口顺序已归位为标准顺序");
+    swapLog("[JZL-人物替换] 端口顺序已归位为标准顺序", self);
 }
 
 export function healSwapNodeLegacy(self) {
@@ -1059,7 +1061,7 @@ export function healSwapNodeLegacy(self) {
                 const lk = (self.graph && self.graph.links && self.graph.links[linkId])
                     || (self.graph && self.graph._links && self.graph._links.get && self.graph._links.get(linkId));
                 if (lk) { lk.target_slot = newIdx; lk.target_id = self.id; }
-                swapLog("[JZL-人物替换] 已把旧端口 source_frames 的连线迁移到 source_video");
+                swapLog("[JZL-人物替换] 已把旧端口 source_frames 的连线迁移到 source_video", self);
             }
             self.setDirtyCanvas?.(true, true);
         }
@@ -1086,7 +1088,7 @@ export function healSwapNodeLegacy(self) {
                     } else {
                         setWidgetValue(cand, swapDefaultName(self));
                     }
-                    swapLog("[JZL-人物替换] 已把错位的节点配置 JSON 移回 manager_settings");
+                    swapLog("[JZL-人物替换] 已把错位的节点配置 JSON 移回 manager_settings", self);
                     break;
                 }
             }
@@ -1097,7 +1099,7 @@ export function healSwapNodeLegacy(self) {
             if (swapLooksLikePrompt(sv) && !swapLooksLikeConfig(sv)) {
                 if (prW && !String(readWidgetValue(prW) || "").trim()) setWidgetValue(prW, sv);
                 setWidgetValue(snW, swapDefaultName(self));
-                swapLog("[JZL-人物替换] 已把错位的提示词正文移回提示词框");
+                swapLog("[JZL-人物替换] 已把错位的提示词正文移回提示词框", self);
             }
         }
         // ⑤ 提示词仍为空（错位后彻底丢失）→ 填回默认提示词，避免用户面对空白框
@@ -1108,7 +1110,7 @@ export function healSwapNodeLegacy(self) {
         //    一句「把人物换成 <Picture 1>」会被参考视频压过去，导致换人不生效）
         if (prW && swapPromptLooksLegacy(readWidgetValue(prW))) {
             setWidgetValue(prW, SWAP_DEFAULT_PROMPT);
-            swapLog("[JZL-人物替换] 默认提示词已升级为结构化格式（===H3_PROMPT===）");
+            swapLog("[JZL-人物替换] 默认提示词已升级为结构化格式（===H3_PROMPT===）", self);
         }
         try { self.__jzlSwapSyncPrompt?.(); } catch (_) {}
         try { self.__jzlUpdateDisplay?.(); } catch (_) {}

@@ -1,3 +1,6 @@
+import contextlib
+import inspect
+import io
 import os
 import sys
 import unittest
@@ -551,6 +554,24 @@ class SwapPromptPresetTest(unittest.TestCase):
             {"use_llm": True, "source": "内置skill", "builtin": "多人替换"}))
         self.assertIn("我的.md", _MOD._prompt_cfg_label(
             {"use_llm": True, "source": "自定义skill", "skill": "我的.md"}))
+
+    def test_log_tag_follows_current_global(self):
+        """日志前缀必须取运行时的 TAG：视频编辑节点整条链路都该打「视频编辑」。
+
+        用 `tag=TAG` 当默认参数会在函数定义时冻结成「人物替换」，所以这里锁死必须是 None。
+        """
+        for fn in (_MOD._load_swap_skill, _MOD._swap_llm_call, _MOD._build_swap_prompt,
+                   _MOD._cache_source, _MOD._free_before_sampling, _MOD._log_peak):
+            self.assertIsNone(inspect.signature(fn).parameters["tag"].default, fn.__name__)
+        saved = _MOD.TAG
+        try:
+            _MOD.TAG = "视频编辑"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _MOD._load_swap_skill("回归测试-不存在的skill文件.md")
+            self.assertIn("[JZL-视频编辑]", buf.getvalue())
+        finally:
+            _MOD.TAG = saved
 
     def test_fmt_secs(self):
         self.assertEqual(_MOD._fmt_secs(49.6), "49.6 秒")
