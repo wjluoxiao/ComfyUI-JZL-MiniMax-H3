@@ -130,12 +130,51 @@ def list_builtin_skills():
     return list_skills_in_dir(builtin_skill_dir())
 
 
-def list_custom_skills():
-    """自定义 skill 文件名列表（动态扫描 skills/jzl/custom，多个候选目录合并）。"""
+def list_custom_skills(directory=None):
+    """自定义 skill 文件名列表。
+
+    directory 给了就只扫那一个目录（用户自己指定的 skill 目录，随节点配置保存）；
+    没给就退回默认的几个候选目录（skills/jzl/custom）。
+    """
+    if str(directory or "").strip():
+        return list_skills_in_dir(str(directory).strip())
     names = set()
     for d in custom_skill_dirs():
         names.update(list_skills_in_dir(d))
     return sorted(names, key=str.casefold)
+
+
+def list_subdirs(path=None, max_entries=400):
+    """目录浏览用：返回 (当前目录, 子目录列表, 父目录)。
+
+    只列**目录**（skill 是文件，用户要选的是"存 skill 的文件夹"）。
+    给空 path 时从「用户主目录」起步；不可读的项跳过，绝不抛异常给前端。
+    """
+    cur = str(path or "").strip()
+    if not cur:
+        cur = os.path.expanduser("~")
+    cur = os.path.abspath(os.path.expanduser(cur))
+    dirs = []
+    try:
+        with os.scandir(cur) as it:
+            for entry in it:
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                if entry.name.startswith("."):
+                    continue
+                dirs.append(entry.name)
+                if len(dirs) >= max_entries:
+                    break
+    except OSError:
+        dirs = []
+    dirs.sort(key=str.casefold)
+    parent = os.path.dirname(cur)
+    if parent == cur:
+        parent = ""
+    return cur, dirs, parent
 
 
 def resolve_builtin_skill(name):
@@ -143,8 +182,10 @@ def resolve_builtin_skill(name):
     return _skill_path_in(builtin_skill_dir(), name)
 
 
-def resolve_custom_skill(name):
-    """自定义 skill 名 → 绝对路径（在自定义子目录里找）。找不到抛异常。"""
+def resolve_custom_skill(name, directory=None):
+    """自定义 skill 名 → 绝对路径（在自定义目录里找）。找不到抛异常。"""
+    if str(directory or "").strip():
+        return _skill_path_in(str(directory).strip(), name)
     last = None
     for d in custom_skill_dirs():
         try:
@@ -158,7 +199,9 @@ def read_builtin_skill(name):
     return _read_skill_in(builtin_skill_dir(), name)
 
 
-def read_custom_skill(name):
+def read_custom_skill(name, directory=None):
+    if str(directory or "").strip():
+        return _read_skill_in(str(directory).strip(), name)
     last = None
     for d in custom_skill_dirs():
         try:

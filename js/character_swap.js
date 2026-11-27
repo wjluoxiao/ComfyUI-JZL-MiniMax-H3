@@ -104,7 +104,8 @@ export function pruneSwapSettings(v) {
             "scale_factor", "upscale_scale", "second_mode", "second_width", "second_height",
             "audio_mode", "video_shrink", "vision_shrink"]),
         // 📝 提示词预设：LLM 开关 / 来源 / skill / 后端配置
-        prompt_cfg: pick(v.prompt_cfg, ["use_llm", "source", "builtin", "skill", "skill_dir", "llm_backend", "llm", "api"]),
+        prompt_cfg: pick(v.prompt_cfg, ["use_llm", "source", "builtin", "skill", "skill_dir",
+            "custom_dir", "llm_backend", "llm", "api"]),
         sample_decode: Object.assign(
             pick(sd, ["sample_mode", "sampler", "scheduler", "sigmas_mode", "custom_sigmas",
                 "steps", "cfg", "denoise", "seed", "seed_mode", "decode_cleanup"]),
@@ -246,28 +247,21 @@ export function renderSwapVideoParamsPanel(c, s, node) {
     showSegLen();
 
     c.append(makeSectionTitle("声音"));
-    c.append(field("声音来源", selectControl(["使用原声", "生成音频", "参考音频", "外部音频", "静音"],
+    c.append(field("声音来源", selectControl(["使用原声", "参考音频", "模型生成"],
         String(gp.audio_mode || "使用原声"),
         v => { gp.audio_mode = v; showAudioHint(); touch(); })));
     const audioHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
     c.append(audioHint);
     function showAudioHint() {
         const mode = String(gp.audio_mode || "使用原声");
-        audioHint.textContent = mode === "生成音频"
-            ? "解码模型生成的音轨（需要接「音频VAE」）。源片原声依旧不参与参考编码。\n"
-              + "注意：模型生成的音频是它自己「编」的，与源片对白/音效无关。"
-            : mode === "参考音频"
-            ? "**音色进编码**：把 AUDIO 接到「参考音频」端口（视频编辑可留空，自动取素材总线里的音频1），"
-              + "它会被编码成 <Audio 1> 的参考块交给模型，模型据此生成**同音色的音轨**和**对得上的口型**。\n"
-              + "必须接「音频VAE」，并且主模型要用 ref2va 变体 —— 参考音频只走 reference blocks，"
-              + "换 t2va/fl2va 会完全无效且不报错。\n"
-              + "效果不可控，配合「23-口播修改 / 24-唱歌修改」两档 skill 使用。"
-            : mode === "外部音频"
-            ? "用另一条音频**整体替换**成片音轨：把 AUDIO 接到「替换音轨」端口（视频编辑可留空，"
-              + "自动取素材总线里的音频1）。\n按 24fps 帧号与成片对齐 —— 比成片短的部分补静音、长的部分截掉；"
-              + "源片原声不再使用，也不需要「音频VAE」。"
-            : mode === "静音"
-            ? "成片不带任何音轨（画面正常生成）。源片原声与「音频VAE」都不使用。"
+        audioHint.textContent = mode === "参考音频"
+            ? "音色进编码：把 AUDIO 接到「参考音频」端口，它会编码成 <Audio 1> 的参考块交给模型，"
+              + "模型据此生成同音色的音轨并按它的时序对口型。\n"
+              + "必须接「音频VAE」，主模型必须是 ref2va 变体（换 t2va/fl2va 会完全无效且不报错）。\n"
+              + "效果不可控；配套 skill：「23-口播修改」「24-唱歌修改」。"
+            : mode === "模型生成"
+            ? "解码模型自己生成的音轨（需要接「音频VAE」）。源片原声不参与参考编码。\n"
+              + "注意：模型生成的声音是它自己「编」的，与源片对白/音效无关。"
             : "用源片原声：原声不参与参考编码，只在最后按帧号精确切给每段落盘（对白/音效原样保留）。\n"
               + "此时不需要接「音频VAE」，latent 里的音频也完全不解码。";
     }
@@ -477,18 +471,99 @@ export function renderSwapPromptPanel(c, s, d, node) {
     // 下拉里保留编号（方便对照顺序），但不带扩展名与结尾 skill
     const skillOptionLabel = (f) => skillStem(f).replace(/skill$/i, "");
 
-    // 一个「文件夹驱动的 skill 选择器」= 下拉 +（📥 导入，可选）+ 📋 复制内容 + 🔄 刷新
+    // 📂 目录浏览器：列出 /jzl/swap_ls 返回的子目录，点进去、返回上一级、或选用当前目录。
+    // 返回 Promise<string|null>（用户取消 → null）。
+    const pickSkillDir = (startPath) => new Promise((resolve) => {
+        const overlay = el("div", "position:fixed;inset:0;z-index:10020;background:rgba(0,0,0,.55);"
+            + "display:flex;align-items:center;justify-content:center;");
+        const box = el("div", "width:min(760px,92vw);max-height:80vh;display:flex;flex-direction:column;"
+            + "background:var(--comfy-menu-bg,#2b2b2b);color:var(--fg-color,#ddd);"
+            + "border:1px solid var(--border-color,#555);border-radius:8px;padding:14px 16px;gap:10px;");
+        const title = el("div", "font-size:14px;font-weight:700;", "选择存放 skill 的文件夹");
+        const pathIn = el("input", "jzl-input");
+        pathIn.type = "text";
+        pathIn.value = String(startPath || "");
+        pathIn.style.width = "100%";
+        const list = el("div", "flex:1;min-height:220px;max-height:52vh;overflow:auto;"
+            + "border:1px solid var(--border-color,#555);border-radius:6px;padding:6px;"
+            + "background:var(--comfy-input-bg,#1e1e1e);");
+        const tip = el("div", "font-size:12px;color:var(--descrip-text,#999);line-height:1.7;"
+            + "white-space:pre-line;", "");
+        const btnRow = el("div", "display:flex;gap:10px;justify-content:flex-end;");
+        const bUp = _jzlSmallBtn("⬆ 上一级", "回到父目录");
+        const bGo = _jzlSmallBtn("跳转", "打开输入框里的路径");
+        const bOk = _jzlSmallBtn("✅ 选用此目录", "把当前目录设为自定义 skill 目录");
+        const bCancel = _jzlSmallBtn("取消", "关闭");
+        btnRow.append(bUp, bGo, el("span", "flex:1", ""), bCancel, bOk);
+        box.append(title, pathIn, list, tip, btnRow);
+        overlay.append(box);
+        (document.body || document.documentElement).append(overlay);
+
+        const close = (val) => { try { overlay.remove(); } catch (_) {} resolve(val || null); };
+        bCancel.addEventListener("click", () => close(null));
+        overlay.addEventListener("click", (e) => { if (e.target === overlay) close(null); });
+        bOk.addEventListener("click", () => close(String(pathIn.value || "").trim() || curPath));
+
+        let curPath = String(startPath || "");
+        const load = async (path) => {
+            list.textContent = "读取中…";
+            try {
+                const url = "/jzl/swap_ls?path=" + encodeURIComponent(path || "");
+                const r = await api.fetchApi(url, { timeoutMs: null });
+                const j = await r.json().catch(() => ({}));
+                if (!j || !j.ok) throw new Error((j && j.error) || "无法读取该目录");
+                curPath = String(j.path || "");
+                pathIn.value = curPath;
+                list.textContent = "";
+                const parent = String(j.parent || "");
+                if (parent) {
+                    const up = el("div", "padding:6px 8px;border-radius:4px;cursor:pointer;"
+                        + "font-size:13px;color:#8ab4f8;", "⬆ ..（上一级）");
+                    up.addEventListener("click", () => load(parent));
+                    list.append(up);
+                }
+                const dirs = j.dirs || [];
+                if (!dirs.length) {
+                    list.append(el("div", "padding:6px 8px;font-size:12px;color:var(--descrip-text,#999);",
+                        "（这个目录下没有子文件夹）"));
+                }
+                for (const name of dirs) {
+                    const row2 = el("div", "padding:6px 8px;border-radius:4px;cursor:pointer;font-size:13px;"
+                        + "display:flex;gap:8px;align-items:center;");
+                    row2.append(el("span", "", "📁"), el("span", "flex:1;min-width:0;overflow:hidden;"
+                        + "text-overflow:ellipsis;white-space:nowrap;", String(name)));
+                    row2.addEventListener("mouseenter", () => { row2.style.background = "var(--jz-border,#3a3a3a)"; });
+                    row2.addEventListener("mouseleave", () => { row2.style.background = ""; });
+                    row2.addEventListener("click", () => load((curPath.endsWith("\\") ? curPath : curPath + "\\") + name));
+                    list.append(row2);
+                }
+                const mdCount = Number(j.skill_count || 0);
+                tip.textContent = `当前：${curPath}\n`
+                    + (mdCount ? `已发现 ${mdCount} 个 .md/.txt skill 文件。` : "这个目录里还没有 .md/.txt（可以继续进入子目录，或直接选用它）。")
+                    + "\n选用后「🔄 刷新」会按这个目录重新扫描。";
+            } catch (e) {
+                list.textContent = "";
+                tip.textContent = "⚠ " + String((e && e.message) || e);
+            }
+        };
+        bUp.addEventListener("click", () => load(""));
+        bGo.addEventListener("click", () => load(String(pathIn.value || "").trim()));
+        pathIn.addEventListener("keydown", (e) => { if (e.key === "Enter") load(String(pathIn.value || "").trim()); });
+        load(startPath);
+    });
+
+    // 一个「文件夹驱动的 skill 选择器」= 下拉 +（📂 选目录，可选）+ 📋 复制内容 + 🔄 刷新
     // pick 回调拿到文件名（含扩展名，后端按文件名读）
     const mkSkillPicker = (opts) => {
         const box = el("div", "");
         let items = [];
         const sel = selectControl([], "", (v) => { opts.onPick(String(v)); opts.commit(); syncDesc(); });
         const btnCopy = _jzlSmallBtn("📋 复制skill内容", "把当前选中的 skill 文件全文复制到剪贴板");
-        const btnImport = opts.withImport ? _jzlSmallBtn("📥 导入Skill文件", opts.importTip) : null;
+        const btnPickDir = opts.withPickDir ? _jzlSmallBtn("📂 选择skill目录", opts.pickDirTip) : null;
         const btnRefresh = _jzlSmallBtn("🔄 刷新", "重新扫描文件夹（增删文件后点这里）");
         const row = el("div", "display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;");
         row.append(sel, btnCopy);
-        if (btnImport) row.append(btnImport);
+        if (btnPickDir) row.append(btnPickDir);
         row.append(btnRefresh);
         box.append(field(opts.label, row));
         // 下拉正下方的 skill 说明（30~40 字），随选择实时变化 —— 防用户分不清这些 skill 的区别
@@ -533,10 +608,11 @@ export function renderSwapPromptPanel(c, s, d, node) {
         };
         const syncHint = () => {
             hint.textContent = `目录：${opts.dir()}\n`
-                + (opts.withImport
-                    ? "直接把 .md / .txt 丢进这个文件夹，或点「📥 导入Skill文件」上传，"
+                + (opts.withPickDir
+                    ? "点「📂 选择skill目录」可以直接指向你自己存放 skill 的文件夹（随节点保存，"
+                      + "与插件完全独立）；\n也可以在资源管理器里把 .md / .txt 丢进这个目录，"
                     : "直接把 .md / .txt 丢进这个文件夹，")
-                + "点「🔄 刷新」就会出现在上面的下拉里（无需重启，也不用在这里选路径）。\n"
+                + "再点「🔄 刷新」就会出现在上面的下拉里（无需重启）。\n"
                 + "「📋 复制skill内容」= 把所选文件的全文复制到剪贴板。";
         };
 
@@ -552,8 +628,10 @@ export function renderSwapPromptPanel(c, s, d, node) {
             const old = btnCopy.textContent;
             btnCopy.textContent = "复制中…";
             try {
+                const extra = (opts.target === "custom" && opts.dir)
+                    ? `&dir=${encodeURIComponent(opts.dir())}` : "";
                 const url = `/jzl/swap_skill_text?target=${encodeURIComponent(opts.target)}`
-                    + `&name=${encodeURIComponent(name)}`;
+                    + `&name=${encodeURIComponent(name)}${extra}`;
                 const r = await api.fetchApi(url, { timeoutMs: null });
                 const j = await r.json().catch(() => ({}));
                 if (!j || !j.ok) throw new Error((j && j.error) || "读取失败");
@@ -571,43 +649,22 @@ export function renderSwapPromptPanel(c, s, d, node) {
             }
         });
 
-        let importInput = null;
-        if (btnImport) {
-            importInput = document.createElement("input");
-            importInput.type = "file";
-            importInput.accept = ".md,.markdown,.txt";
-            importInput.style.display = "none";
-            btnImport.addEventListener("click", () => importInput.click());
-            importInput.addEventListener("change", async () => {
-                const f = importInput.files && importInput.files[0];
-                importInput.value = "";
-                if (!f) return;
-                btnImport.disabled = true;
-                const old = btnImport.textContent;
-                btnImport.textContent = "导入中…";
+        // 📂 选择skill目录：打开一个目录浏览器，直接把「自定义 skill」指向用户自己的文件夹。
+        //    路径存在 prompt_cfg.custom_dir 里（随节点保存），插件自带目录只是默认值。
+        if (btnPickDir) {
+            btnPickDir.addEventListener("click", async () => {
                 try {
-                    const fd = new FormData();
-                    fd.append("file", f, f.name || "skill.md");
-                    fd.append("target", opts.target);
-                    const r = await api.fetchApi("/jzl/swap_skill_import", { method: "POST", body: fd });
-                    const j = await r.json().catch(() => ({}));
-                    if (!j || !j.ok) throw new Error((j && j.error) || "导入失败");
-                    const newId = String(j.id || "");
-                    const use = fill(j.items && j.items.length ? j.items : items.concat([newId]), newId);
-                    opts.onPick(use || newId);
-                    opts.commit();
+                    const picked = await pickSkillDir(opts.dir());
+                    if (!picked) return;
+                    opts.onPickDir(picked);
                     syncHint();
-                    msg.textContent = `✅ 已导入「${newId}」到${opts.zhLabel}`;
+                    msg.textContent = `✅ 已切换到「${picked}」`;
                     msg.style.color = "var(--jz-ok, #57d977)";
                 } catch (e) {
                     msg.textContent = "❌ " + String((e && e.message) || e);
                     msg.style.color = "var(--jz-error, #e55)";
-                } finally {
-                    btnImport.disabled = false;
-                    btnImport.textContent = old;
                 }
             });
-            box.append(importInput);
         }
 
         // 刷新由外层统一做（一个接口同时返回内置 + 自定义两份清单）
@@ -630,7 +687,9 @@ export function renderSwapPromptPanel(c, s, d, node) {
 
     // 一个接口同时拿到两份清单，两边一起刷新（用户只关心「我丢进去的文件出现了没」）
     const refreshAll = async () => {
-        const r = await api.fetchApi("/jzl/swap_skills", { timeoutMs: null });
+        const _cd = String(pc.custom_dir || "").trim();
+        const r = await api.fetchApi("/jzl/swap_skills"
+            + (_cd ? `?custom_dir=${encodeURIComponent(_cd)}` : ""), { timeoutMs: null });
         const j = await r.json().catch(() => ({}));
         if (!j || j.ok === false) throw new Error((j && j.error) || "扫描失败");
         builtinList = (j.builtin || []).filter((f) => f && !String(f).startsWith("（"));
@@ -651,7 +710,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
         label: "内置 skill",
         zhLabel: "内置目录",
         target: "builtin",
-        withImport: false,
+        withPickDir: false,
         dir: () => BUILTIN_DIR,
         listOf: (j) => j.builtin || [],
         current: () => pc.builtin,
@@ -672,12 +731,13 @@ export function renderSwapPromptPanel(c, s, d, node) {
         label: "自定义 skill",
         zhLabel: "自定义目录",
         target: "custom",
-        withImport: true,
-        importTip: "把一个 .md/.txt 存进自定义 skill 文件夹（skills/jzl/custom）",
-        dir: () => CUSTOM_DIR,
+        withPickDir: true,
+        pickDirTip: "指定你自己存放 skill 的文件夹（完全独立于插件自带目录）",
+        dir: () => String(pc.custom_dir || "").trim() || CUSTOM_DIR,
         listOf: (j) => j.custom || [],
         current: () => pc.skill,
         onPick: (v) => { pc.skill = v; },
+        onPickDir: (d) => { pc.custom_dir = d; refreshAll().catch(() => {}); },
         commit: () => { syncSource(); commit(); },
     });
     const firstCustom = customPicker.fill(customList, pc.skill);
@@ -698,9 +758,10 @@ export function renderSwapPromptPanel(c, s, d, node) {
         customPicker.box.style.display = (pc.source === "自定义skill") ? "block" : "none";
         if (pc.source === "自定义skill") {
             const picked = String(pc.skill || "").trim();
+            const cdir = String(pc.custom_dir || "").trim() || CUSTOM_DIR;
             srcHint.textContent = picked
-                ? `用「${skillStem(picked)}」作为 LLM 设定词，由 LLM 写提示词（来自 skills/jzl/custom）。`
-                : "自定义目录里还没有 .md/.txt：把文件丢进 skills/jzl/custom/ 后点「🔄 刷新」。"
+                ? `用「${skillStem(picked)}」作为 LLM 设定词，由 LLM 写提示词（来自 ${cdir}）。`
+                : `${cdir} 里还没有 .md/.txt：点「📂 选择skill目录」指向你自己的目录，或把文件丢进去后点「🔄 刷新」。`
                   + "（此时会回退到「界面输入」的原文，不会中断生成）";
             return;
         }
@@ -923,10 +984,10 @@ export function renderSwapPromptPanel(c, s, d, node) {
     h("① 接线");
     p("源视频 ← 「加载视频 / GetVideoComponents」的 IMAGE 输出（按 24fps 解释。源片不是 24fps 时，节点会用原声真实时长自动反推帧率并升/降帧，时长不变）。");
     p("源视频原声 ← 同一条时间轴上的 AUDIO。它不参与参考编码，只在「声音来源 = 使用原声」时按帧号切给每段落盘。");
-    p("替换音轨 ← 想整体换掉成片音频时接这里（「声音来源 = 外部音频」才用），按帧号切片、短了补静音。"
-        + "视频编辑节点可留空，会自动取素材总线里的音频1。");
+    p("参考音频 ← 「声音来源 = 参考音频」时接这里：它会被编码成 <Audio 1> 的参考块，"
+        + "模型据此生成同音色的音轨并按它的时序对口型（需「音频VAE」+ ref2va 变体模型）。");
     p("定妆图 ref_image_0..8 ← 新演员参考图（<Picture 1..9>），建议正面清晰、单人。");
-    p("主模型 / CLIP / 视觉VAE ← 与导演台一致，建议用 ref2va 变体模型。音频VAE 只在「声音来源 = 生成音频」时需要。");
+    p("主模型 / CLIP / 视觉VAE ← 与导演台一致，建议用 ref2va 变体模型。音频VAE 在「参考音频 / 模型生成」时需要。");
     p("输出只有一个端口「批量视频」：每段一个 VIDEO，接「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条。");
 
     h("② 两段文本 + 三个提示词来源");
@@ -941,7 +1002,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
         + "换脸、动作迁移、风格转绘、物体消除、素模渲染、材质替换、组合编辑、添加物体、人物消失、局部移除、黑白上色、氛围改造、口播修改、唱歌修改）。\n"
         + "   · 「📋 复制skill内容」把当前选中那份的全文复制到剪贴板；「🔄 刷新」重新扫盘。");
     p("③ 自定义skill → 用 skills/jzl/custom/ 里的 .md/.txt 当 LLM 设定词。"
-        + "把文件丢进那个文件夹、点「🔄 刷新」就能选到；这里另有「📥 导入Skill文件」可直接上传。");
+        + "或者在节点里点「📂 选择skill目录」直接指向你自己存放 skill 的文件夹（随节点保存，与插件完全独立）。");
     p("LLM 调用失败（没接模型、模型找不到、报错）会自动回退到「界面输入」的原文并打警告，不会中断生成。");
 
     h("③ 怎么跑的（进度条为什么是 12 格）");
@@ -1309,7 +1370,7 @@ export function setupSwapNode(self) {
         const secPerSeg = `${Math.round(f / 24)}秒/每段`;
         // 声音来源：直接显示面板里选的那一项，一眼知道成片有没有声音、是谁的声音
         const _am = String(gp.audio_mode || "使用原声");
-        const audioTxt = _am === "静音" ? "静音" : _am;
+        const audioTxt = _am;
         // LLM 增强由「提示词来源」派生（与后端 use_llm 同规则）；
         // 后面直接跟上来源名，省得再去面板里翻「到底是内置哪一套 skill」。
         const llmSrc = String(pc.source || "界面输入");

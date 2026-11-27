@@ -68,116 +68,79 @@ class AudioIsolationTest(unittest.TestCase):
         self.assertIn("_pick_output_audio(", self.src)
         self.assertIn("audio_vae is not None)", self.src)
 
-    def test_audio_mode_has_four_choices(self):
+    def test_audio_mode_has_three_choices(self):
         cfg = self.mod._parse_swap_settings("")
         self.assertEqual(cfg["gen_params"]["audio_mode"], "使用原声")
-        for mode in ("生成音频", "外部音频", "静音"):
+        for mode in ("参考音频", "模型生成"):
             got = self.mod._parse_swap_settings(
                 '{"gen_params": {"audio_mode": "%s"}}' % mode)["gen_params"]["audio_mode"]
             self.assertEqual(got, mode)
-        cfg3 = self.mod._parse_swap_settings(
-            '{"gen_params": {"audio_mode": "乱写"}}')
-        self.assertEqual(cfg3["gen_params"]["audio_mode"], "使用原声")
+        # 老工作流里的旧名字要映射到新三档
+        self.assertEqual(self.mod._parse_swap_settings(
+            '{"gen_params": {"audio_mode": "生成音频"}}')["gen_params"]["audio_mode"], "模型生成")
+        for legacy in ("外部音频", "静音", "乱写"):
+            self.assertEqual(self.mod._parse_swap_settings(
+                '{"gen_params": {"audio_mode": "%s"}}' % legacy)["gen_params"]["audio_mode"],
+                "使用原声", legacy)
 
     def test_audio_mode_prompt_rewrite(self):
-        """四种模式都不许留下 `<Audio 1>`，且声音段按模式改写。"""
+        """三档的声音段改写：使用原声/模型生成删 <Audio 1>，参考音频保留它并补 retention。"""
         reuse = self.mod._AUDIO_REUSE_LINE
-        for mode, expect in (("使用原声", reuse),
-                             ("生成音频", self.mod._AUDIO_GEN_LINE),
-                             ("外部音频", self.mod._AUDIO_EXT_LINE),
-                             ("静音", self.mod._AUDIO_MUTE_LINE)):
+        for mode, expect in (("使用原声", reuse), ("模型生成", self.mod._AUDIO_GEN_LINE)):
             out = self.mod._apply_audio_mode("<Audio 1> fully_copy\n" + reuse, mode)
             self.assertNotIn("<Audio 1>", out, mode)
             self.assertIn(expect, out, mode)
-        for mode in ("使用原声", "生成音频", "外部音频", "静音"):
+        ref = self.mod._apply_audio_mode("retention_analysis:\n<Subject 1>: fully_preserved - a\n"
+                                         "overall_soundscape: " + reuse, "参考音频")
+        self.assertIn("<Audio 1>", ref)
+        self.assertIn(self.mod._AUDIO_REF_LINE, ref)
+        self.assertIn("attribute_transfer", ref)       # 自动补进 retention_analysis
+        for mode in ("使用原声", "参考音频", "模型生成"):
             self.assertIn(mode, self.mod._AUDIO_MODE_HINT)
-            self.assertIn("<Audio 1>", self.mod._AUDIO_MODE_HINT[mode])
 
-    def test_external_audio_is_the_slicing_source(self):
-        """外部音频优先于源片原声作为切片来源；没给就退回源声。"""
-        self.assertEqual(self.src.count("_slice_audio(cut_audio"), 2)
-        # 落盘音轨四选一的标签必须齐全
-        for label in ("生成音频（模型音轨）", "外部音频（整体替换）", "静音（无音轨）"):
-            self.assertIn(label, self.src)
+    def test_external_audio_and_mute_are_gone(self):
+        """方案 A（外部音频 / 静音）已移除：代码里不该再残留这两档的常量与逻辑。"""
+        for gone in ("_AUDIO_EXT_LINE", "_AUDIO_MUTE_LINE", "_SOUNDSCAPE_FORCED",
+                     "_force_soundscape"):
+            self.assertFalse(hasattr(self.mod, gone), gone)
 
     def test_pick_output_audio_matrix(self):
-        """「声音来源」四选一 → 成片音轨来源的正确性（纯函数，逐档验证）。"""
-        import torch
-        wf = torch.zeros(1, 2, 32000)
-        src = {"waveform": wf, "sample_rate": 32000}
-        ext = {"waveform": torch.ones(1, 2, 32000), "sample_rate": 32000}
-        pick = self.mod._pick_output_audio
-
-        # 使用原声：切源声，不用模型音轨
-        use_model, cut, muted, got_ext, ref = pick("使用原声", src, ext, False)
-        self.assertFalse(use_model)
-        self.assertIs(cut["waveform"], wf)               # 内容来自源声
-        self.assertEqual(cut["sample_rate"], 32000)
-        self.assertFalse(muted)
-        self.assertIsNone(got_ext)                       # 外部音频不该被误用
-        self.assertIsNone(ref)                           # 也不会进参考编码
-
-        # 生成音频（有音频VAE）：模型音轨；cut 由解码结果给
-        self.assertEqual(pick("生成音频", src, ext, True), (True, None, False, None, None))
-
-        # 生成音频（没接音频VAE）：回退源声
-        use_model, cut, muted, _e, _r = pick("生成音频", src, ext, False)
-        self.assertFalse(use_model)
-        self.assertIs(cut["waveform"], wf)
-
-        # 外部音频：优先用外部那条，源声不再使用
-        use_model, cut, muted, got_ext, _r = pick("外部音频", src, ext, False)
-        self.assertFalse(use_model)
-        self.assertIs(cut["waveform"], ext["waveform"])  # 用的是外部那条
-        self.assertFalse(muted)
-        self.assertIsNotNone(got_ext)
-
-        # 外部音频但没接替换音轨：退回源声
-        use_model, cut, muted, got_ext, _r = pick("外部音频", src, None, False)
-        self.assertIs(cut["waveform"], wf)               # 退回源声
-        self.assertIsNone(got_ext)
-        # 源声也没有 → 成片无声
-        self.assertIsNone(pick("外部音频", None, None, False)[1])
-
-        # 静音：一律无音轨，外部音频也不用
-        self.assertEqual(pick("静音", src, ext, False)[0:3], (False, None, True))
-
-        # 静音不受源声影响
-        self.assertIsNone(pick("静音", None, None, False)[1])
-
-    def test_pick_output_audio_reference_mode(self):
-        """「参考音频」= 方案 B：音频进参考编码，同时解码模型生成的音轨。"""
+        """三档 → 成片音轨来源 + 是否进参考编码（纯函数，逐档验证）。"""
         import torch
         wf = torch.zeros(1, 2, 32000)
         src = {"waveform": wf, "sample_rate": 32000}
         ref = {"waveform": torch.ones(1, 2, 32000), "sample_rate": 32000}
         pick = self.mod._pick_output_audio
 
-        use_model, cut, muted, ext, got_ref = pick("参考音频", src, ref, True)
-        self.assertTrue(use_model)                            # 模型生成音轨（按参考音色）
+        # 使用原声：切源声，不解码模型音轨，也不进参考编码
+        use_model, cut, ref_enc = pick("使用原声", src, ref, True)
+        self.assertFalse(use_model)
+        self.assertIs(cut["waveform"], wf)
+        self.assertIsNone(ref_enc)                      # 参考音频不该被误用
+
+        # 参考音频：进参考编码 + 解码模型音轨
+        use_model, cut, ref_enc = pick("参考音频", src, ref, True)
+        self.assertTrue(use_model)
         self.assertIsNone(cut)
-        self.assertFalse(muted)
-        self.assertIsNone(ext)                                # 不走整体替换
-        self.assertIs(got_ref["waveform"], ref["waveform"])    # 参考音频进编码
+        self.assertIs(ref_enc["waveform"], ref["waveform"])
 
-        # 没接参考音频 → 回退使用原声
-        use_model, cut, muted, ext, got_ref = pick("参考音频", src, None, True)
+        # 参考音频但没接参考音频 → 回退使用原声
+        use_model, cut, ref_enc = pick("参考音频", src, None, True)
         self.assertFalse(use_model)
-        self.assertIsNone(got_ref)
         self.assertIs(cut["waveform"], wf)
+        self.assertIsNone(ref_enc)
 
-        # 没接音频VAE → 无法编码参考音频，回退使用原声
-        use_model, cut, muted, ext, got_ref = pick("参考音频", src, ref, False)
+        # 参考音频但没接音频VAE → 无法编码，回退使用原声
+        use_model, cut, ref_enc = pick("参考音频", src, ref, False)
         self.assertFalse(use_model)
-        self.assertIsNone(got_ref)
-        self.assertIs(cut["waveform"], wf)
+        self.assertIsNone(ref_enc)
 
-    def test_audio_duration_helper(self):
-        import torch
-        wf = torch.zeros(1, 2, 48000)
-        self.assertAlmostEqual(self.mod._audio_duration({"waveform": wf, "sample_rate": 32000}), 1.5, 3)
-        self.assertEqual(self.mod._audio_duration(None), 0.0)
-        self.assertEqual(self.mod._audio_duration({"waveform": None}), 0.0)
+        # 模型生成：解析模型音轨，参考音频不参与
+        self.assertEqual(pick("模型生成", src, ref, True), (True, None, None))
+        # 模型生成但没音频VAE → 回退使用原声
+        use_model, cut, ref_enc = pick("模型生成", src, ref, False)
+        self.assertFalse(use_model)
+        self.assertIs(cut["waveform"], wf)
 
     def test_audio_input_types(self):
         import torch

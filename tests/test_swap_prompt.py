@@ -107,44 +107,29 @@ class SwapPromptPresetTest(unittest.TestCase):
         for name in on_disk:
             self.assertIn(_MOD._skill_key(name), _MOD.BUILTIN_SKILLS, name)
 
-    def test_external_audio_forces_soundscape_for_any_skill(self):
-        """「外部音频 / 静音」是**正交**开关：不管哪一档 skill、LLM 写了什么，
-        overall_soundscape 都必须被强制改写成「不生成声音」，其余字段保持原样。"""
+    def test_reference_audio_mode_keeps_audio_tag_for_any_skill(self):
+        """「参考音频」是**正交**开关：不管哪一档 skill、LLM 写了什么，
+        <Audio 1> 都保留、声音段改成「音色取自 <Audio 1>」、retention 里补一行，其余字段一字不动。"""
         body = ("[SHOT_START]\n===H3_PROMPT===\n"
                 "subject_definitions:\n<Subject 1> from <Picture 1>\n"
                 "summary:\n[video editing + audio reuse] . The target video is an edited version of <Video 1>.\n"
                 "retention_analysis:\n<Subject 1>: fully_preserved - a\n"
                 "detailed_description:\n[Shot 1] y\n"
-                "overall_soundscape: The ambience, action sounds and dialogue of <Video 1> are retained unchanged; "
-                "no new dialogue or music is added.\n"
+                "overall_soundscape: " + _MOD._AUDIO_REUSE_LINE + "\n"
                 "non_diegetic_music: N/A\n[SHOT_END]")
-        for mode, expect in (("外部音频", _MOD._AUDIO_EXT_LINE),
-                             ("静音", _MOD._AUDIO_MUTE_LINE)):
-            out = _MOD._apply_audio_mode(body, mode)
-            self.assertIn(expect, out, mode)
-            self.assertNotIn("are retained unchanged", out, mode)
-            # 其它字段一个字都不许动
-            for keep in ("subject_definitions:", "retention_analysis:",
-                         "detailed_description:", "non_diegetic_music: N/A", "[SHOT_END]"):
-                self.assertIn(keep, out, mode)
-        # 「参考音频」：<Audio 1> 必须保留，且不能把声音段改成「沿用原片」
-        ref_body = ("[SHOT_START]\n===H3_PROMPT===\n"
-                    "subject_definitions:\n<Subject 1> from <Picture 1>\n"
-                    "summary:\n[video editing + audio reuse] . The target video is an edited version of <Video 1>.\n"
-                    "retention_analysis:\n<Subject 1>: fully_preserved - a\n"
-                    "detailed_description:\n[Shot 1] y\n"
-                    "overall_soundscape: " + _MOD._AUDIO_REUSE_LINE + "\n"
-                    "non_diegetic_music: N/A\n[SHOT_END]")
-        out_ref = _MOD._apply_audio_mode(ref_body, "参考音频")
-        self.assertIn("<Audio 1>", out_ref)
-        self.assertIn(_MOD._AUDIO_REF_LINE, out_ref)
-        self.assertIn("attribute_transfer", out_ref)      # 自动补的 retention 行
-        self.assertNotIn("are retained unchanged", out_ref)
-        self.assertIn("non_diegetic_music: N/A", out_ref)
+        out = _MOD._apply_audio_mode(body, "参考音频")
+        self.assertIn("<Audio 1>", out)
+        self.assertIn(_MOD._AUDIO_REF_LINE, out)
+        self.assertIn("attribute_transfer", out)
+        self.assertNotIn("are retained unchanged", out)
+        for keep in ("subject_definitions:", "retention_analysis:",
+                     "detailed_description:", "non_diegetic_music: N/A", "[SHOT_END]"):
+            self.assertIn(keep, out)
 
-        # 「使用原声 / 生成音频」不做强制改写
-        self.assertIn("are retained unchanged", _MOD._apply_audio_mode(body, "使用原声"))
-        self.assertIn(_MOD._AUDIO_GEN_LINE, _MOD._apply_audio_mode(body, "生成音频"))
+        # 「使用原声 / 模型生成」反过来必须把 <Audio 1> 清掉
+        for mode in ("使用原声", "模型生成"):
+            out2 = _MOD._apply_audio_mode(body, mode)
+            self.assertNotIn("<Audio 1>", out2, mode)
 
     def test_audio_edit_skills_keep_audio_out_of_prompt(self):
         """口播/唱歌两条 skill 必须写清「模型看不到替换音轨」，且不许出现 <Audio 1>。"""
@@ -340,7 +325,7 @@ class SwapPromptPresetTest(unittest.TestCase):
         """LLM 输出的总体声音段按「声音来源」改写：使用原声=沿用；生成音频=由模型生成。"""
         keep = _MOD._apply_audio_mode("overall_soundscape: " + _MOD._AUDIO_REUSE_LINE, "使用原声")
         self.assertIn("retained unchanged", keep)
-        gen = _MOD._apply_audio_mode("overall_soundscape: " + _MOD._AUDIO_REUSE_LINE, "生成音频")
+        gen = _MOD._apply_audio_mode("overall_soundscape: " + _MOD._AUDIO_REUSE_LINE, "模型生成")
         self.assertNotIn("retained unchanged", gen)
         self.assertIn("Sound is generated as part of this video", gen)
 
