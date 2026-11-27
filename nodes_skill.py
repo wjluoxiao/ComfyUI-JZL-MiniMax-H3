@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 
 from comfy_api.latest import io
 
@@ -60,6 +61,68 @@ def ensure_custom_skill_dir():
         except OSError:
             continue
     return ""
+
+
+_DESC_FILE = os.path.join(_CUSTOM_SUBDIR, "..", "_meta", "skill说明.txt")
+_DESC_NO_HINT = "（暂无说明）"
+
+
+def skill_desc_path(directory=None):
+    """skill 说明文件路径：<内置目录>/_meta/skill说明.txt（放在子目录里，不会被当成 skill 列出来）。"""
+    root = str(directory or builtin_skill_dir() or "")
+    return os.path.normpath(os.path.join(root, "_meta", "skill说明.txt"))
+
+
+def read_skill_descriptions(directory=None):
+    """读 {短名: 说明}。
+
+    文件格式（一行一条，`=` 或制表符分隔，`#` 开头是注释）：
+        01-单人物替换 = 把视频里那一个主体人物整体换成参考图中的人
+    键会同时登记「带编号的文件名」「去掉编号的短名」，所以配置里存哪种都能查到。
+    """
+    out = {}
+    path = skill_desc_path(directory)
+    try:
+        if not os.path.isfile(path):
+            return out
+        size = os.path.getsize(path)
+        if size > _MAX_SKILL_BYTES:
+            return out
+        with open(path, "rb") as stream:
+            text = stream.read(_MAX_SKILL_BYTES).decode("utf-8-sig")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        sep = "\t" if "\t" in line else ("=" if "=" in line else None)
+        if not sep:
+            continue
+        left, right = line.split(sep, 1)
+        key = os.path.splitext(left.strip())[0]
+        desc = right.strip()
+        if not key or not desc:
+            continue
+        out[key] = desc
+        out.setdefault(strip_skill_number(key), desc)
+    return out
+
+
+def strip_skill_number(name):
+    """去掉文件名的 `01-` / `02-` 这类排序编号。"""
+    stem = str(name or "")
+    return re.sub(r"^\d{1,3}-", "", stem)
+
+
+def skill_description(name, directory=None):
+    """查一个 skill 的说明；查不到返回「（暂无说明）」。"""
+    descs = read_skill_descriptions(directory)
+    key = os.path.splitext(str(name or ""))[0]
+    return (descs.get(key)
+            or descs.get(strip_skill_number(key))
+            or descs.get(key.replace("skill", ""))
+            or _DESC_NO_HINT)
 
 
 def list_builtin_skills():

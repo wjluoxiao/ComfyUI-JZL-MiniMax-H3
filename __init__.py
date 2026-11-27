@@ -781,10 +781,12 @@ async def jzl_manager_get(request):
                                   custom_skill_dirs as _jzl_custom_dirs,
                                   ensure_custom_skill_dir as _jzl_ensure_custom,
                                   list_builtin_skills as _jzl_list_builtin,
-                                  list_custom_skills as _jzl_list_custom)
+                                  list_custom_skills as _jzl_list_custom,
+                                  read_skill_descriptions as _jzl_read_descs)
         _jzl_ensure_custom()
         prompt_skills = _jzl_list_builtin()
         custom_skills = _jzl_list_custom()
+        skill_descs = _jzl_read_descs()
         prompt_skills_dir = _jzl_builtin_dir()
         prompt_skills_custom_dir = (_jzl_custom_dirs()[0] if _jzl_custom_dirs() else "")
         # 本地文本生成的 CLIP 类型：直接取官方 CLIPLoader 的下拉（保持与官方同源）
@@ -814,6 +816,7 @@ async def jzl_manager_get(request):
         semantic_bridge_adapters = []
         prompt_skills = []
         custom_skills = []
+        skill_descs = {}
         prompt_skills_custom_dir = ""
         clip_types = ["qwen_image"]
         all_clip_models = []
@@ -836,6 +839,7 @@ async def jzl_manager_get(request):
         "prompt_skills": prompt_skills,
         "prompt_skills_dir": prompt_skills_dir,
         "custom_skills": custom_skills,
+        "skill_descs": skill_descs,
         "prompt_skills_custom_dir": prompt_skills_custom_dir,
         "clip_types": clip_types,
         "all_clip_models": all_clip_models,
@@ -1527,16 +1531,18 @@ async def jzl_swap_skills(request):
     try:
         from .nodes_skill import (builtin_skill_dir as _b, custom_skill_dirs as _c,
                                   ensure_custom_skill_dir as _ensure,
-                                  list_builtin_skills as _lb, list_custom_skills as _lc)
+                                  list_builtin_skills as _lb, list_custom_skills as _lc,
+                                  read_skill_descriptions as _rd)
         custom_dir = _ensure()
         return web.json_response({
             "ok": True,
             "builtin": _lb(),
             "custom": _lc(),
+            "descs": _rd(),
             "dirs": {"builtin": _b(), "custom": custom_dir or (_c()[0] if _c() else "")},
         })
     except Exception as exc:
-        return web.json_response({"ok": False, "builtin": [], "custom": [],
+        return web.json_response({"ok": False, "builtin": [], "custom": [], "descs": {},
                                   "dirs": {"builtin": "", "custom": ""},
                                   "error": f"{type(exc).__name__}: {exc}"}, status=500)
 

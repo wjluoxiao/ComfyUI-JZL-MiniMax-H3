@@ -133,4 +133,4 @@ non_diegetic_music: N/A
 
 ## 输出约定
 
-严格按上面的纯文本格式输出：从 [SHOT_START] 开始，逐段以 subject_definitions: / summary: / retention_analysis: / detailed_description: / overall_soundscape: / non_diegetic_music: 开头，以 [SHOT_END] 结束。不要输出标题、表格、加粗、引用符号、代码块、JSON、YAML、任何解释或自检过程。
+严格按上面的纯文本格式输出：从 [SHOT_START] 开始，逐段以 subject_definitions: / summary: / retention_analysis: / detailed_description: / overall_soundscape: / non_diegetic_music: 开头，以 [SHOT_END] 结束。不要输出标题、表格、加粗、引用符号、代码块、JSON、YAML、任何解释或自检过程。整份提示词控制在 400 字以内（英文约 220 词），宁可短也不要凑。

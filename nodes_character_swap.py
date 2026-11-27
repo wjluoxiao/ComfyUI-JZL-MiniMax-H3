@@ -432,22 +432,28 @@ def _swap_llm_call(prompt_cfg, system_prompt, user_msg, tag=TAG):
 # 「界面输入」= 不加载任何 skill，直接把用户填的文本当提示词。
 #
 # 内置 skill 文件名（都在插件目录 skills/jzl/ 下；「📥 导入Skill文件」也存到这个目录）
-BUILTIN_SWAP_SKILL = "单人物替换skill.md"
-BUILTIN_MULTI_SKILL = "多人物替换skill.md"
-BUILTIN_OBJECT_SKILL = "单物品替换skill.md"
-BUILTIN_MULTI_OBJECT_SKILL = "多物品替换skill.md"
-BUILTIN_ANIMAL_SWAP_SKILL = "单动物替换skill.md"
-BUILTIN_ANIMAL_SKILL = "动物替换人skill.md"
-BUILTIN_HUMAN_SKILL = "人替换动物skill.md"
-BUILTIN_INANIMATE_SKILL = "非活物替换skill.md"
-BUILTIN_BG_SKILL = "单背景替换skill.md"
-BUILTIN_ACTION_SKILL = "视频动作迁移skill.md"
-BUILTIN_STYLE_SKILL = "风格化转绘skill.md"
-BUILTIN_DRESS_SKILL = "人物换装skill.md"
-BUILTIN_ERASE_SKILL = "视频物体消除skill.md"
-BUILTIN_FACESWAP_SKILL = "视频人物换脸skill.md"
-BUILTIN_CLAY_SKILL = "素模渲染skill.md"
-BUILTIN_MATERIAL_SKILL = "局部材质替换skill.md"
+BUILTIN_SWAP_SKILL = "01-单人替换skill.md"
+BUILTIN_MULTI_SKILL = "02-多人替换skill.md"
+BUILTIN_OBJECT_SKILL = "03-单物替换skill.md"
+BUILTIN_MULTI_OBJECT_SKILL = "04-多物替换skill.md"
+BUILTIN_ANIMAL_SWAP_SKILL = "05-动物替换skill.md"
+BUILTIN_ANIMAL_SKILL = "06-动物换人skill.md"
+BUILTIN_HUMAN_SKILL = "07-人换动物skill.md"
+BUILTIN_INANIMATE_SKILL = "08-死物替换skill.md"
+BUILTIN_BG_SKILL = "09-背景替换skill.md"
+BUILTIN_ACTION_SKILL = "12-动作迁移skill.md"
+BUILTIN_STYLE_SKILL = "13-风格转绘skill.md"
+BUILTIN_DRESS_SKILL = "10-人物换装skill.md"
+BUILTIN_ERASE_SKILL = "14-物体消除skill.md"
+BUILTIN_FACESWAP_SKILL = "11-人物换脸skill.md"
+BUILTIN_CLAY_SKILL = "15-素模渲染skill.md"
+BUILTIN_MATERIAL_SKILL = "16-材质替换skill.md"
+BUILTIN_COMBO_SKILL = "17-组合编辑skill.md"
+BUILTIN_ADD_SKILL = "18-添加物体skill.md"
+BUILTIN_VANISH_SKILL = "19-人物消失skill.md"
+BUILTIN_PARTREMOVE_SKILL = "20-局部移除skill.md"
+BUILTIN_COLORIZE_SKILL = "21-黑白上色skill.md"
+BUILTIN_ATMOS_SKILL = "22-氛围改造skill.md"
 
 PROMPT_SOURCES = ("界面输入", "内置skill", "自定义skill")
 PROMPT_LLM_SOURCES = ("内置skill", "自定义skill")
@@ -455,31 +461,44 @@ PROMPT_LLM_SOURCES = ("内置skill", "自定义skill")
 # 旧值 → 新分支的内置 skill 名（老工作流兼容：以前每种内置 skill 各占一个来源档位）
 LEGACY_SOURCE_ALIAS = {
     "系统默认": "界面输入",          # 老名字「系统默认」= 现在的「界面输入」（直接透传用户文本）
-    "内置skill·动物": "动物替换人",
-    "内置skill·非活物": "非活物替换",
-    "内置skill·多人": "多人物替换",
+    "内置skill·动物": "动物换人",
+    "内置skill·非活物": "死物替换",
+    "内置skill·多人": "多人替换",
 }
 
 # 旧的内置 skill 名 → 新的内置 skill 名（老工作流里存的是 pc.builtin 的原值）。
-# 「动物替换」在旧版语义是「用动物替换视频里的人」，所以映射到「动物替换人」。
+# 键同时接受短名和「带编号的文件名」形式，_canonical_builtin 会用 _skill_key() 再兜一次。
 LEGACY_BUILTIN_ALIAS = {
-    "人物替换": "单人物替换",
-    "多人替换": "多人物替换",
-    "动物替换": "动物替换人",
+    # 改名兼容（老工作流里 pc.builtin 存的是旧名字）
+    "视频动作迁移": "动作迁移",
+    "视频人物换脸": "人物换脸",
+    "风格化转绘": "风格转绘",
+    "视频物体消除": "物体消除",
+    "局部材质替换": "材质替换",
+    "人物替换": "单人替换",
+    # 2026-11 精简名（四字档）之前的老名字
+    "单人物替换": "单人替换",
+    "多人物替换": "多人替换",
+    "单物品替换": "单物替换",
+    "多物品替换": "多物替换",
+    "单动物替换": "动物替换",
+    "动物替换人": "动物换人",
+    "人替换动物": "人换动物",
+    "非活物替换": "死物替换",
+    "单背景替换": "背景替换",
 }
 
 # 内置 skill 名 → (skill 文件, LLM 指令里额外的一段约束)
-# 十六个场景各自一份 skill：单/多 人物、单/多 物品、单动物、人→动物、动物→人、非活物、单背景、视频动作迁移、
-# 风格化转绘、人物换装、视频物体消除、视频人物换脸、素模渲染、局部材质替换。
+# 二十档在开头：单/多 人、单/多 物、动物、动物换人、人换动物、死物、背景；后面是换装/换脸/动作/风格等改造类。
 BUILTIN_SKILLS = {
-    "单人物替换": (
+    "单人替换": (
         BUILTIN_SWAP_SKILL,
         "请根据下面的素材描述，写一段用于「**把视频里那一个主体人物整体替换成参考图中的人**」的 MiniMax-H3 提示词。\n"
         "重点：① 必须**全身**替换（脸/发型/妆容/衣服/鞋/配饰/配色整套），不能只换脸；\n"
         "② 人数不变，未指定的背景路人保持原样、不被替换；\n"
         "③ 主体没出现在本段画面时不要凭空生成；④ 各分段外观锚点必须一致。",
     ),
-    "多人物替换": (
+    "多人替换": (
         BUILTIN_MULTI_SKILL,
         "请根据下面的素材描述，写一段用于「**把视频里的多个人分别换成对应的多张定妆图**」的 MiniMax-H3 提示词。\n"
         "重点：这是**逐一对位替换** —— 原来有几个人，换完还是几个人；每个人的动作、时机、站位与遮挡都不变，\n"
@@ -487,35 +506,35 @@ BUILTIN_SKILLS = {
         "**严禁用「左边/右边/前景」等位置词绑定人物**（人会走位交叉），必须用视觉特征锁定每个 <Subject i> 替换哪个源人物；\n"
         "某人物没出现在本段画面时不许凭空生成、也不许错位替换到别人身上。",
     ),
-    "单物品替换": (
+    "单物替换": (
         BUILTIN_OBJECT_SKILL,
         "请根据下面的素材描述，写一段用于「**把视频里那一件指定物品替换成参考图中的物品**」的 MiniMax-H3 提示词。\n"
         "重点：① 只换这一件物品，人物/动物/场景/其他道具全部保留；\n"
         "② 必须保留原有的遮挡关系与接触点（握持手势不变，不许手指畸形或穿模）；\n"
         "③ 新物品继承原物品的尺寸、透视角度、运动模糊与环境光影反射；④ 物品没出现在本段时不许凭空生成。",
     ),
-    "多物品替换": (
+    "多物替换": (
         BUILTIN_MULTI_OBJECT_SKILL,
         "请根据下面的素材描述，写一段用于「**把视频里的多件物品分别替换成各自对应的参考图物品**」的 MiniMax-H3 提示词。\n"
         "重点：① 只换指定的那几件，其他道具与背景物体保持原样；\n"
         "② **严禁用「左边/右边/桌上」等位置词绑定物品**（物品会被拿起放下传递），必须用视觉特征锁定编号映射；\n"
         "③ 保留遮挡与接触点，继承尺寸/透视/光影；④ 未出场的物品不许凭空插入，也不许错位替换到其他物品上。",
     ),
-    "单动物替换": (
+    "动物替换": (
         BUILTIN_ANIMAL_SWAP_SKILL,
         "请根据下面的素材描述，写一段用于「**把视频里那只主体动物整体替换成参考图中的动物**」的 MiniMax-H3 提示词。\n"
         "重点：① 必须**整只**替换（物种/毛色/花纹/体型/头脸/耳朵/尾巴/四肢爪子/穿戴配饰），不能只换头，不能残留源动物毛色；\n"
         "② 原动物消失，画面里不出现第二只动物；③ 若有人抚摸/抱起/牵引，人物外观、手部姿势与接触点不变；\n"
         "④ 动物没出现在本段时不许凭空生成；⑤ 各分段花纹分布（斑点/条纹位置）锚点必须一致。",
     ),
-    "动物替换人": (
+    "动物换人": (
         BUILTIN_ANIMAL_SKILL,
         "请根据下面的素材描述，写一段用于「**用参考图中的动物替换视频里的那个人**」的 MiniMax-H3 提示词。\n"
         "重点：这是**替换**，不是加入 —— 原本那个人完全消失，由这只动物占住他的位置、演绎同样的动作轨迹；\n"
         "必须**整只**替换，不许残留人类皮肤/五官/手部；画面里不能出现人类（背景路人除外），也不能出现第二只动物；\n"
         "不能写成动物与人互动；人物没出现在本段时不许凭空生成。",
     ),
-    "人替换动物": (
+    "人换动物": (
         BUILTIN_HUMAN_SKILL,
         "请根据下面的素材描述，写一段用于「**用参考图中的人物替换视频里的那只动物**」的 MiniMax-H3 提示词。\n"
         "重点：① 完全采用正常人类解剖结构，**不许残留动物的耳朵、尾巴、毛发、爪子，也不许把骨骼扭成四足姿态**；\n"
@@ -523,7 +542,7 @@ BUILTIN_SKILLS = {
         "③ 处理体型差异：在原场景透视里合理呈现人物比例并匹配环境光与接触阴影；\n"
         "④ 动物没出现在本段时不许凭空生成。",
     ),
-    "非活物替换": (
+    "死物替换": (
         BUILTIN_INANIMATE_SKILL,
         "请根据下面的素材描述，写一段用于「**用参考图中的非活物（玩具/玩偶/毛绒玩具/木头人/火柴人/机器人/砖头人…）"
         "替换视频里的主体**」的 MiniMax-H3 提示词。\n"
@@ -533,7 +552,7 @@ BUILTIN_SKILLS = {
         "不能有人类皮肤、手指或五官；\n"
         "画面里不能再有原本的人类/动物，也不能出现第二个同类物件；主体没出现在本段时不许凭空生成。",
     ),
-    "单背景替换": (
+    "背景替换": (
         BUILTIN_BG_SKILL,
         "请根据下面的素材描述，写一段用于「**把视频的背景环境整体换成参考图中的场景**」的 MiniMax-H3 提示词。\n"
         "注意这是**反向锁定**：参考图给的是环境，不是主体。\n"
@@ -544,7 +563,7 @@ BUILTIN_SKILLS = {
         "③ 背景要有**真实三维纵深**并随原片运镜产生视差，严禁当静止平面贴图；\n"
         "④ 各分段的空间布局、标志性景物、天气与光线必须一致，避免合并后背景跳变。",
     ),
-    "视频动作迁移": (
+    "动作迁移": (
         BUILTIN_ACTION_SKILL,
         "请根据下面的素材描述，写一段用于「**把原视频里人物的动作/表情/口型/运镜，迁移到参考图里的那个人身上**」"
         "的 MiniMax-H3 提示词。\n"
@@ -556,7 +575,7 @@ BUILTIN_SKILLS = {
         "④ 原片运镜要复刻，但新场景必须有真实纵深并产生自然视差，不许当平面贴图；"
         "各分段身份/服饰/场景/光照必须一致。",
     ),
-    "风格化转绘": (
+    "风格转绘": (
         BUILTIN_STYLE_SKILL,
         "请根据下面的素材描述，写一段用于「**把整片画风转成参考图的艺术风格**」的 MiniMax-H3 提示词。\n"
         "注意这是「内容取自原视频、画风取自参考图」。\n"
@@ -573,7 +592,7 @@ BUILTIN_SKILLS = {
         "② **服装动态贴合与遮挡保护**——布料随动作褶皱垂坠，手臂交叉/肩带/手持物遮挡关系不变，不穿模不漏旧衣边；\n"
         "③ 各分段领口/花纹/版型/材质一致；人物没出现在本段时不许凭空生成。",
     ),
-    "视频物体消除": (
+    "物体消除": (
         BUILTIN_ERASE_SKILL,
         "请根据下面的素材描述，写一段用于「**把指定的干扰物从画面里无痕抹除**」的 MiniMax-H3 提示词。\n"
         "注意：只删点名的那几个，其余一切零变动。\n"
@@ -582,10 +601,10 @@ BUILTIN_SKILLS = {
         "并随运镜产生正确视差（不滑动、不果冻）；\n"
         "③ **双向约束**：本段有它就彻底移除，本段本来没有就严格保持原样，且绝不新增任何东西。",
     ),
-    "视频人物换脸": (
+    "人物换脸": (
         BUILTIN_FACESWAP_SKILL,
         "请根据下面的素材描述，写一段用于「**只换面部身份、不换发不换衣**」的 MiniMax-H3 提示词。\n"
-        "重点：① 与「单人物替换」最大的区别：**发型、刘海、头饰帽子、身材、全身服装全部保留原样**，"
+        "重点：① 与「单人替换」最大的区别：**发型、刘海、头饰帽子、身材、全身服装全部保留原样**，"
         "参考图只提供面部身份；\n"
         "② 新脸要承接每帧**微表情、眼神与口型**，并匹配原片受光方向、阴影、色温与景深（防「贴脸面具感」）；\n"
         "③ 背影/未出场段落不许强行生成脸；各分段五官比例必须一致。",
@@ -599,7 +618,7 @@ BUILTIN_SKILLS = {
         "② **输出正文里严禁出现「白模/灰模/线稿/线框/预演/塑料感」这类字眼**，直接描写渲染后的真实材质与光线；\n"
         "③ 动作与关节角度照原片但解剖要修正为可信人体；各分段主光方向/色温/材质反应必须一致。",
     ),
-    "局部材质替换": (
+    "材质替换": (
         BUILTIN_MATERIAL_SKILL,
         "请根据下面的素材描述，写一段用于「**只换表面材质、不改形状**」的 MiniMax-H3 提示词。\n"
         "重点：① **绝对几何锁定**——目标物体的轮廓、体积、逐帧形变与运动轨迹 100% 保留，"
@@ -607,6 +626,51 @@ BUILTIN_SKILLS = {
         "② **物理光学响应**——按材质写清高光/反射/折射/透光/粗糙度，并真实反射当前场景的环境光，"
         "严禁像贴图、严禁溢出污染周围、不加光效粒子；\n"
         "③ 各分段粗糙度/光泽/纹理一致；目标没出现在本段时不许凭空生成。",
+    ),
+    "组合编辑": (
+        BUILTIN_COMBO_SKILL,
+        "请根据下面的素材描述，写一段用于「**在同一条提示词里一次完成多件事**」的 MiniMax-H3 提示词。\n"
+        "重点：① 先把用户文本拆成「操作 → 目标 → 参考图」清单，**清单里没有的事一件都不做**；\n"
+        "② 每件改动都要在 retention_analysis 里单独占一行并声明保留等级"
+        "（fully_preserved / partially_preserved / attribute_transfer）；\n"
+        "③ 改动之间不许串味（换 A 的衣服不等于能改 B 的发型），没点名的全部保持原样。",
+    ),
+    "添加物体": (
+        BUILTIN_ADD_SKILL,
+        "请根据下面的素材描述，写一段用于「**往画面里新增一个物体、原有的一切不动**」的 MiniMax-H3 提示词。\n"
+        "重点：① 必须写死「新增（added），不是替换」—— 模型极易把加东西做成换东西；\n"
+        "② 新物体要有接触点、接触阴影、正确透视与尺度，前后遮挡关系正确；\n"
+        "③ 一次只加一个，不加人、不加光效，未指定出现的时段不许凭空生成。",
+    ),
+    "人物消失": (
+        BUILTIN_VANISH_SKILL,
+        "请根据下面的素材描述，写一段用于「**把指定的人物从画面里彻底抹除、只留背景**」的 MiniMax-H3 提示词。\n"
+        "重点：① 连他的阴影、反光、倒影一起移除；② 被挡住的那片背景要用周围真实材质无痕补全、同等锐利；\n"
+        "③ 其他人/物零改动；④ 双向约束：本段本来没有这个人就严格保持原样，且绝不补一个新人进来。",
+    ),
+    "局部移除": (
+        BUILTIN_PARTREMOVE_SKILL,
+        "请根据下面的素材描述，写一段用于「**只去掉人物身上或画面局部的一个小元素**」的 MiniMax-H3 提示词"
+        "（帽子 / 眼镜 / 口罩 / 首饰 / 纹身 / Logo / 水印 / 字幕条 / 时间码）。\n"
+        "重点：① 关键不是删，而是**还原被遮住的部分**（摘眼镜还原眼睛、摘帽子还原头发、去水印还原底纹）；\n"
+        "② 目标区域以外零改动，不美化不换脸；③ 不做「换一顶帽子」这种替换，只做移除；\n"
+        "④ 各分段缺失状态必须一致（不能上一段去掉了、下一段又戴回来）。",
+    ),
+    "黑白上色": (
+        BUILTIN_COLORIZE_SKILL,
+        "请根据下面的素材描述，写一段用于「**把黑白/单色/老片上成自然彩色**」的 MiniMax-H3 提示词。\n"
+        "重点：① 结构与质感零改动，只增加颜色（不锐化、不降噪、不磨皮、不修颗粒与划痕）；\n"
+        "② 唯一的例外：黑白片没有色彩信息，所以**固有色**（肤色/天空/植被/金属/血色）可按物理常识给色，"
+        "但仅限颜色，款式/图案/材质/文字一个都不许编；\n"
+        "③ 同一主体跨帧跨段颜色必须一致，肤色优先可信（宁可保守也不要绿脸紫脸）。",
+    ),
+    "氛围改造": (
+        BUILTIN_ATMOS_SKILL,
+        "请根据下面的素材描述，写一段用于「**同一场景只改光照与氛围**」的 MiniMax-H3 提示词"
+        "（白天↔夜晚 / 晴↔雨雪雾 / 换季节 / 改色温 / 霓虹或胶片质感）。\n"
+        "重点：① 场景实体零位移，只改光（模型极易顺手把整个场景重画）；\n"
+        "② 新光源要有明确方向，所有受光面、投影方向、高光同时跟着改，物理自洽；\n"
+        "③ 只许加氛围元素（雨雪雾光），不许加建筑/道具/人；④ 各分段主光方向与色温一致防闪烁。",
     ),
 }
 # 目录里一个 skill 都没有时的空值（正常情况下不会用到：清单来自目录扫描）
@@ -618,12 +682,17 @@ def _skill_stem(filename):
     return os.path.splitext(str(filename or ""))[0]
 
 
-def _skill_key(filename):
-    """文件名 → 元数据查表用的键：短名再去掉结尾的 `skill`。
+def _strip_no(name):
+    """去掉文件名的 `01-` 这类排序编号。"""
+    return re.sub(r"^\d{1,3}-", "", str(name or ""))
 
-    `单人物替换skill.md` → `单人物替换`，这样 BUILTIN_SKILLS 的键不必跟着文件名改。
+
+def _skill_key(filename):
+    """文件名 → 元数据查表用的键：去掉编号、去掉结尾的 `skill`。
+
+    `01-单人替换skill.md` → `单人替换`，这样 BUILTIN_SKILLS 的键不必跟着文件名改。
     """
-    stem = _skill_stem(filename)
+    stem = _strip_no(_skill_stem(filename))
     if stem.lower().endswith("skill"):
         stem = stem[:-5]
     return stem.strip()
@@ -632,8 +701,8 @@ def _skill_key(filename):
 def _builtin_index():
     """{归一化键: 目录里的真实文件名}，键包含文件名 / 短名 / 去掉 skill 的短名。
 
-    这样无论配置里存的是文件名（`单人物替换skill.md`）、短名（`单人物替换skill`）
-    还是老的 scene 名（`单人物替换` / `人物替换`），都能落到同一个文件上。
+    这样无论配置里存的是文件名（`单人替换skill.md`）、短名（`单人替换skill`）
+    还是老的 scene 名（`单人替换` / `人物替换`），都能落到同一个文件上。
     """
     idx = {}
     try:
@@ -642,7 +711,12 @@ def _builtin_index():
     except Exception:
         files = []
     for f in files:
-        for key in (f, _skill_stem(f), _skill_key(f)):
+        # 文件名 / 短名 / 去编号短名 / 去 skill 的短名 / 去 skill 保留编号 —— 配置里存哪种都能落到同一份文件
+        stem = _skill_stem(f)
+        keys = [f, stem, _strip_no(stem), _skill_key(f)]
+        if stem.lower().endswith("skill"):
+            keys.append(stem[:-5])          # 01-单人替换
+        for key in keys:
             k = str(key or "").strip().casefold()
             if k and k not in idx:
                 idx[k] = f
@@ -655,7 +729,7 @@ def _canonical_builtin(name):
     认的顺序（全部基于目录实际内容，不依赖任何写死的清单）：
       ① 带扩展名的文件名：直接按文件名匹配（用户明确点的是哪个文件就是哪个）；
       ② 老的场景名（人物替换 / 多人替换 / 动物替换）→ 经 LEGACY_BUILTIN_ALIAS 换成新场景名再找；
-      ③ 短名 / 去掉 skill 的短名（单人物替换、单人物替换skill）。
+      ③ 短名 / 去掉 skill 的短名（单人替换、单人替换skill）。
     """
     key = str(name or "").strip()
     if not key:
@@ -668,11 +742,13 @@ def _canonical_builtin(name):
         hit = idx.get(key.casefold())
         if hit:
             return hit
-    # 老场景名优先于「同名旧文件」：老工作流存的 `人物替换` 应该落到 `单人物替换skill.md`，
+    # 老场景名优先于「同名旧文件」：老工作流存的 `人物替换` 应该落到 `单人替换skill.md`，
     # 而不是目录里那份给别的节点用的 `人物替换.md`。
-    # 也认「带扩展名的老名字」（老版本把 pc.builtin 存成 `人物替换.md` 这种形式）。
+    # 也认「带扩展名的老名字」（老版本把 pc.builtin 存成 `人物替换.md` 这种形式），
+    # 以及「带编号的老文件名」（`06-动物替换人skill.md` 经 _skill_key() 归一成 `动物替换人`）。
     alias = (LEGACY_BUILTIN_ALIAS.get(key)
-             or LEGACY_BUILTIN_ALIAS.get(os.path.splitext(key)[0]))
+             or LEGACY_BUILTIN_ALIAS.get(os.path.splitext(key)[0])
+             or LEGACY_BUILTIN_ALIAS.get(_skill_key(key)))
     if alias:
         for cand in (alias, alias + "skill"):
             hit = idx.get(str(cand).casefold())
@@ -713,7 +789,7 @@ def _resolve_prompt_kind(prompt_cfg):
     """(来源分支, 实际 skill 文件名, LLM 附加指令)。
 
     内置 skill 的文件清单**完全来自目录扫描**，这里的 BUILTIN_SKILLS 只用来给
-    「已知的十六个场景」配上更贴切的 lead；用户自己丢进目录的文件也能用（走通用话术）。
+    「已知的二十二个场景」配上更贴切的 lead；用户自己丢进目录的文件也能用（走通用话术）。
     """
     source = str(prompt_cfg.get("source") or "界面输入")
     builtin = str(prompt_cfg.get("builtin") or "")
@@ -1156,7 +1232,7 @@ _SWAP_DEFAULTS = {
     # 📝 提示词预设：LLM 增强 + 提示词来源
     "prompt_cfg": {
         "use_llm": False,                  # 仅由 source 推导（界面输入→False，其余→True），面板不再提供开关
-        "builtin": "单人物替换",           # 内置skill 分支用哪一个（十六档，见 BUILTIN_SKILLS）
+        "builtin": "单人替换",           # 内置skill 分支用哪一个（二十二档，见 BUILTIN_SKILLS）
         "source": "界面输入",              # 界面输入 | 内置skill | 自定义skill
         "skill": "",                       # 自定义 skill 文件名（用户选的目录里的某个 .md/.txt）
         "skill_dir": "",                   # 已废弃（自定义 skill 固定读 skills/jzl/custom/），仅为老工作流保留字段

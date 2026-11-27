@@ -67,14 +67,28 @@ class SwapPromptPresetTest(unittest.TestCase):
         self.assertEqual(_MOD._build_swap_prompt({"use_llm": False, "source": "界面输入"}, "", ""), "")
 
     BUILTIN_FILES_9 = (
-        "单人物替换skill.md", "多人物替换skill.md",
-        "单物品替换skill.md", "多物品替换skill.md",
-        "单动物替换skill.md", "动物替换人skill.md",
-        "人替换动物skill.md", "非活物替换skill.md",
-        "单背景替换skill.md", "视频动作迁移skill.md",
-        "风格化转绘skill.md", "人物换装skill.md",
-        "视频物体消除skill.md", "视频人物换脸skill.md",
-        "素模渲染skill.md", "局部材质替换skill.md",
+        "01-单人替换skill.md",
+        "02-多人替换skill.md",
+        "03-单物替换skill.md",
+        "04-多物替换skill.md",
+        "05-动物替换skill.md",
+        "06-动物换人skill.md",
+        "07-人换动物skill.md",
+        "08-死物替换skill.md",
+        "09-背景替换skill.md",
+        "10-人物换装skill.md",
+        "11-人物换脸skill.md",
+        "12-动作迁移skill.md",
+        "13-风格转绘skill.md",
+        "14-物体消除skill.md",
+        "15-素模渲染skill.md",
+        "16-材质替换skill.md",
+        "17-组合编辑skill.md",
+        "18-添加物体skill.md",
+        "19-人物消失skill.md",
+        "20-局部移除skill.md",
+        "21-黑白上色skill.md",
+        "22-氛围改造skill.md",
     )
     OFFICIAL_SECTIONS = ("subject_definitions:", "summary:", "retention_analysis:",
                          "detailed_description:", "overall_soundscape:", "non_diegetic_music:")
@@ -114,7 +128,7 @@ class SwapPromptPresetTest(unittest.TestCase):
 
     def test_every_skill_forbids_position_words(self):
         """多人物/多物品必须要求「用视觉特征锁定」，不许用左右位置词。"""
-        for name in ("多人物替换skill.md", "多物品替换skill.md"):
+        for name in ("02-多人替换skill.md", "04-多物替换skill.md"):
             text = _SKILL._read_skill(name)
             self.assertIn("位置词", text, name)
             self.assertIn("视觉特征", text, name)
@@ -122,10 +136,12 @@ class SwapPromptPresetTest(unittest.TestCase):
     def test_builtin_skill_names_match_files(self):
         """每个内置 skill 名都必须能真的读到文件（否则 LLM 分支会静默回退）。"""
         self.assertEqual(set(_MOD.BUILTIN_SKILLS),
-                         {"单人物替换", "多人物替换", "单物品替换", "多物品替换",
-                          "单动物替换", "动物替换人", "人替换动物", "非活物替换",
-                          "单背景替换", "视频动作迁移", "风格化转绘", "人物换装",
-                          "视频物体消除", "视频人物换脸", "素模渲染", "局部材质替换"})
+                         {"单人替换", "多人替换", "单物替换", "多物替换",
+                          "动物替换", "动物换人", "人换动物", "死物替换",
+                          "背景替换", "动作迁移", "风格转绘", "人物换装",
+                          "物体消除", "人物换脸", "素模渲染", "材质替换",
+                          "组合编辑", "添加物体", "人物消失", "局部移除",
+                          "黑白上色", "氛围改造"})
         for name, (fname, _lead) in _MOD.BUILTIN_SKILLS.items():
             self.assertIn("===H3_PROMPT===", _SKILL._read_skill(fname), name)
             self.assertTrue(name in fname or fname in name, f"{name} ↔ {fname} 名字对不上")
@@ -181,9 +197,9 @@ class SwapPromptPresetTest(unittest.TestCase):
 
     def test_action_transfer_name_resolves_not_to_other_skill(self):
         """`动作迁移` 只映射到 `视频动作迁移skill.md`，不会串到别的 skill 上。"""
-        self.assertEqual(_MOD._canonical_builtin("视频动作迁移"), _MOD.BUILTIN_ACTION_SKILL)
-        self.assertEqual(_MOD._canonical_builtin("视频动作迁移skill"), _MOD.BUILTIN_ACTION_SKILL)
-        self.assertEqual(_MOD._canonical_builtin("视频动作迁移skill.md"), _MOD.BUILTIN_ACTION_SKILL)
+        self.assertEqual(_MOD._canonical_builtin("动作迁移"), _MOD.BUILTIN_ACTION_SKILL)
+        self.assertEqual(_MOD._canonical_builtin("动作迁移skill"), _MOD.BUILTIN_ACTION_SKILL)
+        self.assertEqual(_MOD._canonical_builtin("12-动作迁移skill.md"), _MOD.BUILTIN_ACTION_SKILL)
 
     def test_style_skill_forces_whole_frame_restyle(self):
         """风格化转绘：全片统一画风（防半真半假）+ 结构锁定 + 五类风格锚点。"""
@@ -321,6 +337,75 @@ class SwapPromptPresetTest(unittest.TestCase):
         good = "[SHOT_START]\n\n===H3_PROMPT===\nsubject_definitions:\nx\n[SHOT_END]"
         self.assertEqual(_MOD._normalize_llm_prompt(good), good)
 
+    def test_combo_skill_declares_each_change(self):
+        """组合编辑：每件改动都要单独声明保留等级，且不许自作主张多做。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_COMBO_SKILL)
+        for needle in ("改动清单", "每件事都要有自己的保留声明", "绝不自作主张加第四件",
+                       "不许串味", "默认不变"):
+            self.assertIn(needle, text, f"组合编辑 skill 缺少 {needle}")
+
+    def test_add_object_skill_is_add_not_replace(self):
+        """添加物体：只增不减（模型最容易做成替换）。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_ADD_SKILL)
+        for needle in ("只加不换", "ADDED", "接触阴影", "一次只加一个", "不加人"):
+            self.assertIn(needle, text, f"添加物体 skill 缺少 {needle}")
+
+    def test_vanish_skill_removes_traces(self):
+        """人物消失：连阴影/反光/倒影一起移除 + 双向约束。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_VANISH_SKILL)
+        for needle in ("整人消失", "阴影", "反光", "倒影", "双向约束", "不补新人"):
+            self.assertIn(needle, text, f"人物消失 skill 缺少 {needle}")
+
+    def test_partial_remove_restores_occluded(self):
+        """局部移除：关键不是删，而是还原被遮住的部分。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_PARTREMOVE_SKILL)
+        for needle in ("还原被遮住的部分", "摘眼镜", "不做美化", "时序一致"):
+            self.assertIn(needle, text, f"局部移除 skill 缺少 {needle}")
+
+    def test_colorize_skill_allows_natural_color_only(self):
+        """黑白上色：唯一允许用常识的地方是固有色，且只限颜色。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_COLORIZE_SKILL)
+        for needle in ("固有色", "唯一例外", "只限颜色", "保留年代质感",
+                       "不锐化", "跨帧、跨段颜色必须一致"):
+            self.assertIn(needle, text, f"黑白上色 skill 缺少 {needle}")
+
+    def test_atmosphere_skill_keeps_geometry(self):
+        """氛围改造：只改光，实体零位移。"""
+        text = _SKILL._read_skill(_MOD.BUILTIN_ATMOS_SKILL)
+        for needle in ("实体不动，只改光", "光照物理自洽", "不加实体", "跨段氛围一致"):
+            self.assertIn(needle, text, f"氛围改造 skill 缺少 {needle}")
+
+    def test_renamed_skills_resolve_from_old_names(self):
+        """老工作流里存的旧名字必须还能解析到改名后的文件。"""
+        for old, new in (("视频动作迁移", "12-动作迁移skill.md"),
+                         ("视频人物换脸", "11-人物换脸skill.md"),
+                         ("风格化转绘", "13-风格转绘skill.md"),
+                         ("视频物体消除", "14-物体消除skill.md"),
+                         ("局部材质替换", "16-材质替换skill.md")):
+            self.assertEqual(_MOD._canonical_builtin(old), new, old)
+
+    def test_every_skill_has_description(self):
+        """22 份 skill 都必须有说明（节点表面与下拉框下方显示），且长度合理。"""
+        for name in self.BUILTIN_FILES_9:
+            desc = _SKILL.skill_description(name)
+            self.assertNotEqual(desc, _SKILL._DESC_NO_HINT, f"{name} 缺说明")
+            self.assertGreaterEqual(len(desc), 10, f"{name} 说明太短：{desc}")
+            self.assertLessEqual(len(desc), 45, f"{name} 说明太长：{desc}")
+
+    def test_description_file_is_not_listed_as_skill(self):
+        """说明文件放在 _meta 子目录里，绝不能被当成 skill 列进下拉。"""
+        files = _SKILL.list_builtin_skills()
+        self.assertFalse([f for f in files if "说明" in f], files)
+        self.assertTrue(os.path.isfile(_SKILL.skill_desc_path()))
+
+    def test_skill_number_is_stripped_everywhere(self):
+        """文件名带 01- 编号，但元数据键 / 解析 / 显示名都必须回到不带编号的短名。"""
+        self.assertEqual(_MOD._skill_key("01-单人替换skill.md"), "单人替换")
+        self.assertEqual(_MOD._skill_key("22-氛围改造skill.md"), "氛围改造")
+        for form in ("单人替换", "01-单人替换", "01-单人替换skill",
+                     "01-单人替换skill.md"):
+            self.assertEqual(_MOD._canonical_builtin(form), "01-单人替换skill.md", form)
+
     def test_skills_stay_plain_text(self):
         """skill 是给 LLM 读的纯文本：不许有表格 / 引用块 / 分隔线，加粗也要克制。"""
         import re as _re
@@ -373,12 +458,12 @@ class SwapPromptPresetTest(unittest.TestCase):
         _MOD._swap_llm_call = _fake_llm
         try:
             _MOD._build_swap_prompt(
-                {"use_llm": True, "source": "内置skill", "builtin": "单人物替换"},
+                {"use_llm": True, "source": "内置skill", "builtin": "单人替换"},
                 "把白模人物换成图1的女人", "")
         finally:
             _MOD._swap_llm_call = saved
         self.assertTrue(seen["system"].startswith(_MOD._PROMPT_GUARD))
-        self.assertIn("单人物替换提示词生成器", seen["system"])
+        self.assertIn("单人替换提示词生成器", seen["system"])
 
     def test_empty_text_tells_llm_not_to_describe(self):
         """用户两段文本为空时，提示词里必须明确「不要描述外观」，而不是「按通用要求处理」。"""
@@ -391,7 +476,7 @@ class SwapPromptPresetTest(unittest.TestCase):
         _MOD._swap_llm_call = _fake_llm
         try:
             _MOD._build_swap_prompt(
-                {"use_llm": True, "source": "内置skill", "builtin": "单人物替换"}, "", "")
+                {"use_llm": True, "source": "内置skill", "builtin": "单人替换"}, "", "")
         finally:
             _MOD._swap_llm_call = saved
         self.assertIn("不要描述任何外观细节", seen["user"])
@@ -400,7 +485,7 @@ class SwapPromptPresetTest(unittest.TestCase):
     def test_llm_off_falls_back_to_user_text(self):
         """skill 分支在没有 LLM 时也回退「界面输入」原文（不再有内置模板）。"""
         out = _MOD._build_swap_prompt(
-            {"use_llm": False, "source": "内置skill", "builtin": "单人物替换"},
+            {"use_llm": False, "source": "内置skill", "builtin": "单人替换"},
             "某人在做事", "某参考图")
         self.assertEqual(out, "某人在做事\n\n某参考图")
 
@@ -412,14 +497,14 @@ class SwapPromptPresetTest(unittest.TestCase):
             self.assertIsInstance(meta[1], str)
 
     def test_branch_source_and_legacy_alias(self):
-        """来源是两分支；老工作流的「内置skill·动物」映射成 内置skill + 动物替换人。"""
+        """来源是两分支；老工作流的「内置skill·动物」映射成 内置skill + 动物换人。"""
         cfg = _MOD._parse_swap_settings(
             '{"prompt_cfg": {"use_llm": true, "source": "内置skill·动物"}}')
         self.assertEqual(cfg["prompt_cfg"]["source"], "内置skill")
-        self.assertEqual(cfg["prompt_cfg"]["builtin"], "动物替换人skill.md")
+        self.assertEqual(cfg["prompt_cfg"]["builtin"], "06-动物换人skill.md")
         cfg2 = _MOD._parse_swap_settings(
             '{"prompt_cfg": {"use_llm": true, "source": "内置skill", "builtin": "多人替换"}}')
-        self.assertEqual(cfg2["prompt_cfg"]["builtin"], "多人物替换skill.md")   # 老 builtin 名 → 目录里的真实文件
+        self.assertEqual(cfg2["prompt_cfg"]["builtin"], "02-多人替换skill.md")   # 老 builtin 名 → 目录里的真实文件
         # 未知 builtin → 回退默认内置 skill
         cfg3 = _MOD._parse_swap_settings(
             '{"prompt_cfg": {"use_llm": true, "source": "内置skill", "builtin": "不存在"}}')
@@ -428,11 +513,20 @@ class SwapPromptPresetTest(unittest.TestCase):
 
     def test_legacy_builtin_names_map_to_new_ones(self):
         """老工作流里存的旧内置名全部仍能解析到目录里的真实文件（不写死名字）。"""
-        for old, new in (("人物替换", "单人物替换"), ("多人替换", "多人物替换"),
-                         ("动物替换", "动物替换人")):
+        cases = (("人物替换", "单人替换"),
+                 # 2026-11 四字档改名之前的中间名（这些名字用户的工作流里存过）
+                 ("单人物替换", "单人替换"), ("多人物替换", "多人替换"),
+                 ("单物品替换", "单物替换"), ("多物品替换", "多物替换"),
+                 ("单动物替换", "动物替换"), ("动物替换人", "动物换人"),
+                 ("人替换动物", "人换动物"), ("非活物替换", "死物替换"),
+                 ("单背景替换", "背景替换"),
+                 # 老文件名形式也要能落到新文件上
+                 ("06-动物替换人skill.md", "动物换人"),
+                 ("08-非活物替换skill.md", "死物替换"))
+        for old, new in cases:
             resolved = _MOD._canonical_builtin(old)
             self.assertTrue(resolved, old)
-            self.assertEqual(_MOD._skill_key(resolved), new)
+            self.assertEqual(_MOD._skill_key(resolved), new, old)
 
     def test_custom_skill_branch_kept(self):
         cfg = _MOD._parse_swap_settings(
@@ -453,8 +547,8 @@ class SwapPromptPresetTest(unittest.TestCase):
     def test_prompt_cfg_label(self):
         self.assertIn("关", _MOD._prompt_cfg_label({"use_llm": False}))
         self.assertIn("界面输入", _MOD._prompt_cfg_label({"use_llm": True, "source": "界面输入"}))
-        self.assertIn("多人物替换", _MOD._prompt_cfg_label(
-            {"use_llm": True, "source": "内置skill", "builtin": "多人物替换"}))
+        self.assertIn("多人替换", _MOD._prompt_cfg_label(
+            {"use_llm": True, "source": "内置skill", "builtin": "多人替换"}))
         self.assertIn("我的.md", _MOD._prompt_cfg_label(
             {"use_llm": True, "source": "自定义skill", "skill": "我的.md"}))
 

@@ -127,6 +127,65 @@ export function pruneSwapSettings(v) {
 //  写的是 manager_settings 里的 gen_params / sample_decode / save —— 与后端
 //  _parse_swap_settings() 同一套键名，不做任何翻译（避免「面板显示一套、实际跑另一套」）。
 // ══════════════════════════════════════════════════════════════
+// skill 说明缓存：{文件名: 说明}，来自 skills/jzl/_meta/skill说明.txt（后端 /jzl/swap_skills 下发）
+// 节点表面和下拉框下方都用它，避免每处各拉一次。
+export const SKILL_DESCS = { _ready: false, map: {}, norm: {} };
+export const SKILL_DESC_EMPTY = "（暂无说明）";
+export const SKILL_DESC_CUSTOM = "当前为自定义skill！";
+
+// 归一化：去扩展名 → 去 01- 编号 → 去结尾 skill。这样「文件名 / 短名 / 带编号 / 不带编号」都能对上。
+export function skillNorm(name) {
+    return String(name || "").replace(/\.[^.]+$/, "").replace(/^\d{1,3}-/, "").replace(/skill$/i, "").trim();
+}
+
+export function skillDescOf(name) {
+    const key = skillNorm(name);
+    if (!key) return SKILL_DESC_EMPTY;
+    return SKILL_DESCS.norm[key] || SKILL_DESCS.map[String(name)] || SKILL_DESC_EMPTY;
+}
+
+// 把 {文件名: 说明} 装进缓存。/jzl/manager 已经带了 skill_descs，直接灌进来就不用再拉一次。
+export function primeSkillDescs(map) {
+    if (SKILL_DESCS._ready && SKILL_DESCS._count) return;
+    const src = map || {};
+    const keys = Object.keys(src);
+    if (!keys.length) return;
+    SKILL_DESCS.map = src;
+    SKILL_DESCS.norm = {};
+    for (const k of keys) {
+        const nk = skillNorm(k);
+        if (nk && !SKILL_DESCS.norm[nk]) SKILL_DESCS.norm[nk] = src[k];
+    }
+    SKILL_DESCS._ready = true;
+    SKILL_DESCS._count = keys.length;
+}
+
+export function ensureSkillDescs(onReady) {
+    if (SKILL_DESCS._ready) { try { onReady?.(); } catch (_) {} return; }
+    if (SKILL_DESCS._pending) { if (onReady) SKILL_DESCS._cb.push(onReady); return; }
+    SKILL_DESCS._pending = true;
+    SKILL_DESCS._cb = onReady ? [onReady] : [];
+    const done = (map) => {
+        SKILL_DESCS.map = map || {};
+        SKILL_DESCS.norm = {};
+        for (const [k, v] of Object.entries(SKILL_DESCS.map)) {
+            const nk = skillNorm(k);
+            if (nk && !SKILL_DESCS.norm[nk]) SKILL_DESCS.norm[nk] = v;
+        }
+        SKILL_DESCS._ready = true;
+        SKILL_DESCS._count = Object.keys(SKILL_DESCS.map).length;
+        SKILL_DESCS._pending = false;
+        const cbs = SKILL_DESCS._cb || [];
+        SKILL_DESCS._cb = [];
+        for (const fn of cbs) { try { fn(); } catch (_) {} }
+    };
+    try {
+        api.fetchApi("/jzl/swap_skills").then((r) => r.json())
+            .then((j) => done((j && j.descs) || {}))
+            .catch(() => done({}));
+    } catch (_) { done({}); }
+}
+
 export const SWAP_SEGMENT_OPTIONS = Array.from({ length: 17 }, (_, i) => `固定${i + 4}秒`);
 export const SWAP_AUDIO_OPTIONS = ["保留原声（推荐）", "使用生成音轨", "静音"];
 export const SWAP_WINDOW_OPTIONS = [
@@ -350,7 +409,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
     // ── ② 提示词来源：两个分支（方形勾选单选，与「LLM 后端」的 本地/在线 同一交互）──
     c.append(makeSectionTitle("提示词来源"));
     // 老工作流的「内置skill·动物」等值 → 分支 + 内置名
-    const BUILTIN_ALIAS = { "内置skill·动物": "动物替换人", "内置skill·非活物": "非活物替换", "内置skill·多人": "多人物替换" };
+    const BUILTIN_ALIAS = { "内置skill·动物": "动物换人", "内置skill·非活物": "死物替换", "内置skill·多人": "多人替换" };
     if (BUILTIN_ALIAS[String(pc.source || "")]) {
         pc.builtin = BUILTIN_ALIAS[pc.source];
         pc.source = "内置skill";
@@ -395,18 +454,22 @@ export function renderSwapPromptPanel(c, s, d, node) {
     //    自定义 = skills/jzl/custom/*.md   ← 用户往这里丢文件，点 🔄 刷新即可
     const BUILTIN_DIR = String(d?.prompt_skills_dir || "skills/jzl");
     const CUSTOM_DIR = String(d?.prompt_skills_custom_dir || (BUILTIN_DIR + "/custom"));
+    // /jzl/manager 已带 skill_descs → 先灌，省掉一次 /jzl/swap_skills 往返（拉不到再走异步兜底）
+    try { primeSkillDescs(d?.skill_descs); } catch (_) {}
     let builtinList = (d?.prompt_skills || []).filter((f) => f && !f.startsWith("（"));
     let customList = (d?.custom_skills || []).filter((f) => f && !f.startsWith("（"));
     const skillStem = (f) => String(f || "").replace(/\.[^.]+$/, "");
-    // 显示名：短名再去掉结尾的 skill（单人物替换skill.md → 单人物替换），与后端 _skill_key 同规则
-    const skillLabel = (f) => skillStem(f).replace(/skill$/i, "");
+    // 显示名：去编号、去结尾的 skill（01-单人替换skill.md → 单人替换），与后端 _skill_key 同规则
+    const skillLabel = (f) => skillStem(f).replace(/skill$/i, "").replace(/^\d{1,3}-/, "");
+    // 下拉里保留编号（方便对照顺序），但不带扩展名与结尾 skill
+    const skillOptionLabel = (f) => skillStem(f).replace(/skill$/i, "");
 
     // 一个「文件夹驱动的 skill 选择器」= 下拉 +（📥 导入，可选）+ 📋 复制内容 + 🔄 刷新
     // pick 回调拿到文件名（含扩展名，后端按文件名读）
     const mkSkillPicker = (opts) => {
         const box = el("div", "");
         let items = [];
-        const sel = selectControl([], "", (v) => { opts.onPick(String(v)); opts.commit(); });
+        const sel = selectControl([], "", (v) => { opts.onPick(String(v)); opts.commit(); syncDesc(); });
         const btnCopy = _jzlSmallBtn("📋 复制skill内容", "把当前选中的 skill 文件全文复制到剪贴板");
         const btnImport = opts.withImport ? _jzlSmallBtn("📥 导入Skill文件", opts.importTip) : null;
         const btnRefresh = _jzlSmallBtn("🔄 刷新", "重新扫描文件夹（增删文件后点这里）");
@@ -415,6 +478,17 @@ export function renderSwapPromptPanel(c, s, d, node) {
         if (btnImport) row.append(btnImport);
         row.append(btnRefresh);
         box.append(field(opts.label, row));
+        // 下拉正下方的 skill 说明（30~40 字），随选择实时变化 —— 防用户分不清这些 skill 的区别
+        const descLine = el("div", "font-size:12px;color:var(--jz-ok, #57d977);margin:-2px 0 8px 172px;"
+            + "line-height:1.7;white-space:pre-line;", "");
+        box.append(descLine);
+        const syncDesc = () => {
+            // 自定义 skill：不管选没选，都直接说明它是自定义的（用户自己写的，没有内置说明）
+            if (opts.fixedDesc) { descLine.textContent = "说明：" + opts.fixedDesc; return; }
+            const cur = String(sel.value || "");
+            if (!cur) { descLine.textContent = ""; return; }
+            descLine.textContent = "说明：" + (opts.descOf ? opts.descOf(cur) : skillDescOf(cur));
+        };
         const msg = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 8px 172px;line-height:1.7;", "");
         box.append(msg);
         const hint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
@@ -434,13 +508,14 @@ export function renderSwapPromptPanel(c, s, d, node) {
             for (const it of items) {
                 const op = document.createElement("option");
                 op.value = String(it);
-                op.textContent = skillLabel(it);
+                op.textContent = skillOptionLabel(it);
                 if (String(it) === String(current || "")) op.selected = true;
                 sel.append(op);
             }
             const cur = String(current || "");
             const use = items.includes(cur) ? cur : items[0];
             sel.value = use;
+            syncDesc();
             return use;
         };
         const syncHint = () => {
@@ -537,7 +612,7 @@ export function renderSwapPromptPanel(c, s, d, node) {
             }
         });
 
-        return { box, fill, syncHint, get value() { return sel.value; } };
+        return { box, fill, syncHint, syncDesc, get value() { return sel.value; } };
     };
 
     // 一个接口同时拿到两份清单，两边一起刷新（用户只关心「我丢进去的文件出现了没」）
@@ -551,6 +626,8 @@ export function renderSwapPromptPanel(c, s, d, node) {
         pc.skill = customPicker.fill(customList, pc.skill);
         builtinPicker.syncHint();
         customPicker.syncHint();
+        builtinPicker.syncDesc();
+        customPicker.syncDesc();
         syncSource();
         commit();
     };
@@ -572,10 +649,13 @@ export function renderSwapPromptPanel(c, s, d, node) {
     pc.builtin = firstBuiltin;
     builtinPicker.syncHint();
     c.append(builtinPicker.box);
+    // 说明表是异步拉的（/jzl/swap_skills.descs），到达后重新渲染一次说明行
+    try { ensureSkillDescs(() => { try { builtinPicker.syncDesc(); } catch (_) {} }); } catch (_) {}
 
     // ② 自定义 skill：下拉内容 = skills/jzl/custom 里的文件
     const customPicker = mkSkillPicker({
         refreshAll: () => refreshAll(),
+        fixedDesc: SKILL_DESC_CUSTOM,
         label: "自定义 skill",
         zhLabel: "自定义目录",
         target: "custom",
@@ -842,8 +922,8 @@ export function renderSwapPromptPanel(c, s, d, node) {
     p("① 界面输入（默认）→ 不加载任何 skill，把「视频文本 / 图片文本」两段**原样**作为提示词发给模型。"
         + "适合你自己写完整 H3 提示词，或只想快速试一下。");
     p("② 内置skill → 用插件 skills/jzl/ 里的 skill 当 LLM 设定词，由 LLM 写出提示词。"
-        + "下拉内容 = 该目录里实际的 .md/.txt（现有 16 个场景：单/多人物、单/多物品、单动物、动物替换人、人替换动物、"
-        + "非活物、单背景、视频动作迁移、风格化转绘、人物换装、视频物体消除、视频人物换脸、素模渲染、局部材质替换）。\n"
+        + "下拉内容 = 该目录里实际的 .md/.txt（现有 22 个场景：单/多人、单/多物、动物、动物换人、人换动物、死物、背景、换装、"
+        + "换脸、动作迁移、风格转绘、物体消除、素模渲染、材质替换、组合编辑、添加物体、人物消失、局部移除、黑白上色、氛围改造）。\n"
         + "   · 「📋 复制skill内容」把当前选中那份的全文复制到剪贴板；「🔄 刷新」重新扫盘。");
     p("③ 自定义skill → 用 skills/jzl/custom/ 里的 .md/.txt 当 LLM 设定词。"
         + "把文件丢进那个文件夹、点「🔄 刷新」就能选到；这里另有「📥 导入Skill文件」可直接上传。");
@@ -1216,7 +1296,7 @@ export function setupSwapNode(self) {
         // 后面直接跟上来源名，省得再去面板里翻「到底是内置哪一套 skill」。
         const llmSrc = String(pc.source || "界面输入");
         const customName = String(pc.skill || "").trim();
-        const btName = String(pc.builtin || "单人物替换").replace(/\.[^.]+$/, "");   // 导入的 skill 去掉扩展名更好看
+        const btName = String(pc.builtin || "单人替换").replace(/\.[^.]+$/, "");   // 导入的 skill 去掉扩展名更好看
         const llmTxt = llmSrc === "界面输入" ? "LLM关闭 丨 界面输入"
             : llmSrc === "内置skill" ? `LLM开启 丨 内置skill:${btName}`
             : (customName ? `LLM开启 丨 自定义skill:${customName.replace(/\.[^.]+$/, "")}` : "LLM开启 丨 自定义skill");
@@ -1229,13 +1309,21 @@ export function setupSwapNode(self) {
         const seedRaw = String(sd.seed ?? "").trim();
         const seedTxt = ((seedRaw === "" || seedRaw === "0") && String(sd.seed_mode || "randomize") === "randomize")
             ? "随机" : (seedRaw || "0");
+        // skill 说明：内置 skill 查说明表；自定义 skill 直接给固定提示；界面输入不需要 skill
+        const skillLineTxt = llmSrc === "界面输入"
+            ? "不使用 skill（界面输入原样发出）"
+            : llmSrc === "自定义skill"
+                ? SKILL_DESC_CUSTOM
+                : (String(pc.builtin || "").trim() ? skillDescOf(pc.builtin) : SKILL_DESC_EMPTY);
         infoRow.innerHTML =
             `视频参数: ${dv(arTxt)}${sep}${dv(canvasTxt)}${sep}${dv(secPerSeg)}`
             + `${sep}${dv(`重叠${seam.window ?? 22}帧`)}${sep}${dv(audioTxt)}${sep}${dv(llmTxt)}`
             + `\n采样参数: ${dv(secTxt)}${sep}${dv(sd.scheduler || "simple")}`
-            + `${sep}${dv(sd.sampler || OPTIONS.samplers[0])}${sep}${dv(`${sd.steps ?? 4}步`)}${sep}种子:${dv(seedTxt)}`;
+            + `${sep}${dv(sd.sampler || OPTIONS.samplers[0])}${sep}${dv(`${sd.steps ?? 4}步`)}${sep}种子:${dv(seedTxt)}`
+            + `\nskill说明: ${dv(skillLineTxt)}`;
     };
     self.__jzlUpdateDisplay = updateDisplay;
+    try { ensureSkillDescs(updateDisplay); } catch (_) {}
     setTimeout(updateDisplay, 0);
     setTimeout(updateDisplay, 300);
     try { if (!Number.isFinite(self.size?.[1]) || self.size[1] < 400) self.setSize?.([560, 520]); } catch (_) {}

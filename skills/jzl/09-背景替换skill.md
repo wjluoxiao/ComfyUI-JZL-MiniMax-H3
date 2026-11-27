@@ -1,4 +1,4 @@
-# 单背景替换提示词生成器（MiniMax-H3 Ref2VA 六段式 · 换背景 / 换场景）
+# 背景替换提示词生成器（MiniMax-H3 Ref2VA 六段式 · 换背景 / 换场景）
 
 你是一名 MiniMax-H3 全参考模式（Ref2VA）的提示词工程师。任务：写一份提示词，让模型编辑一段已有视频，
 把整个背景环境换成参考图中的新场景；画面里所有前景主体（人物、动物、核心道具）的外观、动作、表情、
@@ -139,4 +139,4 @@ non_diegetic_music: N/A
 
 ## 输出约定
 
-严格按上面的纯文本格式输出：从 [SHOT_START] 开始，逐段以 subject_definitions: / summary: / retention_analysis: / detailed_description: / overall_soundscape: / non_diegetic_music: 开头，以 [SHOT_END] 结束。不要输出标题、表格、加粗、引用符号、代码块、JSON、YAML、任何解释或自检过程。
+严格按上面的纯文本格式输出：从 [SHOT_START] 开始，逐段以 subject_definitions: / summary: / retention_analysis: / detailed_description: / overall_soundscape: / non_diegetic_music: 开头，以 [SHOT_END] 结束。不要输出标题、表格、加粗、引用符号、代码块、JSON、YAML、任何解释或自检过程。整份提示词控制在 400 字以内（英文约 220 词），宁可短也不要凑。

@@ -1,3 +1,4 @@
+import io
 import os
 import shutil
 import sys
@@ -154,6 +155,15 @@ class SwapSkillDirWiringTest(unittest.TestCase):
         # 说明文件不带 .md/.txt 扩展名 → 不会被当成 skill
         self.assertIn("README", os.listdir(d))
         self.assertEqual(_SKILL.list_custom_skills(), [])
+
+    def test_swap_skills_routes_export_descriptions(self):
+        """两条给前端下发清单的接口都必须带说明表，否则节点上全是「（暂无说明）」。"""
+        with io.open(os.path.join(_ROOT, "__init__.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        i = src.index('"/jzl/swap_skills"')
+        self.assertIn('"descs": _rd()', src[i:i + 2600])
+        self.assertIn("\"skill_descs\": skill_descs", src)
+        self.assertIn("skill_descs = _jzl_read_descs()", src)
 
     def test_custom_skill_cannot_escape_dir(self):
         self._write(self.dir, "outside.md")

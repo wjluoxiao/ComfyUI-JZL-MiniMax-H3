@@ -49,8 +49,9 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
         self.addCleanup(_restore)
 
     def _write_scene(self, scene, body="技能正文"):
-        """在临时内置目录里造一份 `<场景>skill.md`（模拟插件自带的九份）。"""
-        name = scene + "skill.md"
+        """在临时内置目录里造一份 `<序号>-<场景>skill.md`（模拟插件自带的 22 份，文件名带排序编号）。"""
+        idx = list(_MOD.BUILTIN_SKILLS).index(scene) + 1
+        name = f"{idx:02d}-{scene}skill.md"
         with open(os.path.join(self.dir, name), "w", encoding="utf-8") as f:
             f.write(body)
         return name
@@ -108,16 +109,16 @@ class ImportedBuiltinSkillTest(unittest.TestCase):
     def test_resolve_prompt_kind_keeps_builtin_lead(self):
         self._write_all_scenes()
         src, skill_file, lead = _MOD._resolve_prompt_kind(
-            {"source": "内置skill", "builtin": "动物替换人"})
-        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换人"][0])
+            {"source": "内置skill", "builtin": "动物换人"})
+        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物换人"][0])
         self.assertIsNotNone(lead)
 
     def test_legacy_builtin_name_resolves_to_new_one(self):
-        """老工作流存的是「动物替换」→ 落到动物替换人那份真正的文件。"""
+        """老工作流存的是「动物替换人」→ 落到改名后的动物换人那份文件。"""
         self._write_all_scenes()
         src, skill_file, lead = _MOD._resolve_prompt_kind(
-            {"source": "内置skill", "builtin": "动物替换"})
-        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物替换人"][0])
+            {"source": "内置skill", "builtin": "动物替换人"})
+        self.assertEqual(skill_file, _MOD.BUILTIN_SKILLS["动物换人"][0])
         self.assertIsNotNone(lead)
 
     def test_resolve_prompt_kind_falls_back_to_first_file(self):
