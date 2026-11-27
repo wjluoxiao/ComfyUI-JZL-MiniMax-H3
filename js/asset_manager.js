@@ -5061,13 +5061,61 @@ export function renderPrefPanel(c, s, d, node) {
     const slBox = el("div", "");
 
     // ── 采样（一采）──
+    // 顺序刻意这样排：Sigmas模式 → K采样器 → 自定义Sigmas →（调度器/步数/降噪）。
+    // 「模式」决定后面哪些项有效，所以放最上面；采样器两种模式下都要用，紧随其后。
     normalBox.append(makeSectionTitle("采样"));
-    normalBox.append(field("K采样器", selectControl(OPTIONS.samplers, p.sampler || OPTIONS.samplers[0], v => { p.sampler = v; })));
+
+    // 一采的 Sigmas 模式（调度器 / 自定义）—— 仅「人物替换 / 视频编辑」显示（导演台沿用原链路）
+    let mkNormSigRadio = null;
+    let syncNormSigMode = () => {};
+    if (isSwapPref) {
+        const normSigRow = el("div", "display:flex;align-items:center;gap:16px;min-width:0;");
+        mkNormSigRadio = (val, label) => {
+            const lab = el("label", "display:flex;align-items:center;gap:5px;font-size:13px;color:var(--descrip-text,var(--jz-text-dim));cursor:pointer;");
+            const r = el("input", "accent-color:#f59e0b;cursor:pointer;");
+            r.type = "radio"; r.name = "jzl_first_sigmas"; r.value = val;
+            r.checked = (p.sigmas_mode || "scheduler") === val;
+            r.addEventListener("change", () => { if (r.checked) { p.sigmas_mode = val; syncNormSigMode(); } });
+            lab.append(r, el("span", "", label));
+            normSigRow.append(lab);
+            return r;
+        };
+        normalBox.append(field("Sigmas模式", normSigRow));
+    }
+
+    normalBox.append(field("K采样器", selectControl(OPTIONS.samplers, p.sampler || "euler", v => { p.sampler = v; })));
+
+    // 自定义 = 直接用显式 sigmas 序列，此时 调度器/步数/降噪 三项不参与计算，隐藏掉免得误会。
+    let fNormCustom = null;
+    if (isSwapPref) {
+        const NORM_SIG_DEFAULT = "1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0";
+        fNormCustom = field("自定义Sigmas",
+            textControl(p.custom_sigmas || NORM_SIG_DEFAULT, NORM_SIG_DEFAULT,
+                v => { p.custom_sigmas = v; }));
+        normalBox.append(fNormCustom);
+    }
+
     const normSchedSel = selectControl(OPTIONS.schedulers, p.scheduler || OPTIONS.schedulers[0], v => { p.scheduler = v; });
-    normalBox.append(field("调度器", normSchedSel));
+    const fNormSched = field("调度器", normSchedSel);
+    normalBox.append(fNormSched);
     const normStepsStepper = stepperControl(p.steps ?? 4, { min: 1, max: 200, step: 1 }, v => { p.steps = Math.round(v); });
-    normalBox.append(field("采样步数", normStepsStepper));
-    normalBox.append(field("降噪系数", stepperControl(p.denoise ?? 1.0, { min: 0, max: 1, step: 0.05 }, v => { p.denoise = v; })));
+    const fNormSteps = field("采样步数", normStepsStepper);
+    normalBox.append(fNormSteps);
+    const fNormDenoise = field("降噪系数", stepperControl(p.denoise ?? 1.0, { min: 0, max: 1, step: 0.05 }, v => { p.denoise = v; }));
+    normalBox.append(fNormDenoise);
+
+    if (isSwapPref) {
+        syncNormSigMode = () => {
+            const custom = (p.sigmas_mode || "scheduler") === "custom";
+            fNormSched.style.display = custom ? "none" : "flex";
+            fNormSteps.style.display = custom ? "none" : "flex";
+            fNormDenoise.style.display = custom ? "none" : "flex";
+            if (fNormCustom) fNormCustom.style.display = custom ? "flex" : "none";
+        };
+        mkNormSigRadio("scheduler", "调度器");
+        mkNormSigRadio("custom", "自定义");
+        syncNormSigMode();
+    }
 
     // ── 二次采样（开关 + 设置；不折叠，设置项始终显示；种子与一采共享）──
     normalBox.append(makeSectionTitle("二次采样"));

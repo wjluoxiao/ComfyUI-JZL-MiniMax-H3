@@ -269,6 +269,29 @@ class SwapPromptPresetTest(unittest.TestCase):
         leftovers = [n for n in dir(_MOD) if n.startswith("DEFAULT_") and n.endswith("_PROMPT")]
         self.assertEqual(leftovers, [])
 
+    def test_first_pass_defaults_to_euler_and_custom_sigmas(self):
+        """一采默认：euler + 显式 sigmas（6 步从 1.0 降到 0），与二采同一套交互。"""
+        sd = _MOD._parse_swap_settings("")["sample_decode"]
+        self.assertEqual(sd["sampler"], "euler")
+        self.assertEqual(sd["sigmas_mode"], "custom")
+        vals = _MOD._sigmas_from_text(sd["custom_sigmas"])
+        self.assertEqual(vals, [1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0])
+        self.assertEqual(vals[0], 1.0)
+        self.assertEqual(vals[-1], 0.0)
+
+    def test_first_pass_scheduler_mode_still_available(self):
+        """切回「调度器」模式后，仍按 调度器/步数/降噪 算 — 老配置不会失效。"""
+        sd = _MOD._parse_swap_settings(
+            '{"sample_decode": {"sigmas_mode": "scheduler", "sampler": "res_multistep", "steps": 8}}'
+        )["sample_decode"]
+        self.assertEqual(sd["sigmas_mode"], "scheduler")
+        self.assertEqual(sd["sampler"], "res_multistep")
+        self.assertIn("8 步", _MOD._first_pass_desc(sd))
+
+    def test_sigmas_from_text_rejects_garbage(self):
+        self.assertRaises(ValueError, _MOD._sigmas_from_text, "")
+        self.assertRaises(ValueError, _MOD._sigmas_from_text, "1.0")
+
     def test_output_format_has_no_code_fence(self):
         """格式示例不能包在 ``` 里 —— 否则模型会把它当「数据格式」, 转头输出 JSON。"""
         for name in self.BUILTIN_FILES_9:

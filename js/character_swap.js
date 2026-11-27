@@ -70,6 +70,10 @@ export function swapDefaults() {
     gp.second_mode = "放大倍数";
     gp.upscale_scale = 2.0;
     const sd = d.sample_decode;
+    // 一采：默认 euler + 显式 sigmas（6 步从 1.0 平滑降到 0）
+    sd.sampler = "euler";
+    sd.sigmas_mode = "custom";
+    sd.custom_sigmas = "1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0";
     Object.assign(sd.second, {
         enabled: true,
         sampler: "euler", scheduler: "simple",
@@ -102,8 +106,8 @@ export function pruneSwapSettings(v) {
         // 📝 提示词预设：LLM 开关 / 来源 / skill / 后端配置
         prompt_cfg: pick(v.prompt_cfg, ["use_llm", "source", "builtin", "skill", "skill_dir", "llm_backend", "llm", "api"]),
         sample_decode: Object.assign(
-            pick(sd, ["sample_mode", "sampler", "scheduler", "steps", "cfg", "denoise",
-                "seed", "seed_mode", "decode_cleanup"]),
+            pick(sd, ["sample_mode", "sampler", "scheduler", "sigmas_mode", "custom_sigmas",
+                "steps", "cfg", "denoise", "seed", "seed_mode", "decode_cleanup"]),
             {
                 // 与短剧导演台同一套键：SelfLift 采样参数整组保留
                 selflift: pick(sl, ["steps", "transition_step", "lowres_scale", "rho", "w_min", "w_max",

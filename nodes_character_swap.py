@@ -964,10 +964,23 @@ def _slice_source(frames, start, count, uint8_cached, width, height):
     return _resize_chunked(clip, width, height)
 
 
+def _sigmas_from_text(text):
+    """把 "1.0, 0.97, 0.8, 0.0" 解析成 float 列表（至少 2 个，末位通常为 0）。"""
+    vals = [float(x) for x in re.findall(r"[-+]?(?:\d*\.?\d+)", str(text or ""))]
+    if len(vals) < 2:
+        raise ValueError(f"自定义 Sigmas 无效（至少 2 个值，末位通常为 0）：{text!r}")
+    return vals
+
+
 def _first_pass_desc(sd):
     """一采参数的一行摘要（控制台里两次采样必须有各自的日志，否则分不清跑到哪一步）。"""
     d = sd or {}
-    return (f"{d.get('sampler') or 'res_multistep'} {int(d.get('steps', 4) or 4)} 步"
+    if str(d.get("sigmas_mode") or "scheduler") == "custom":
+        txt = str(d.get("custom_sigmas") or "")
+        n = max(1, len(_sigmas_from_text(txt)) - 1)
+        return (f"{d.get('sampler') or 'euler'}｜自定义 sigmas {n} 步"
+                f"｜{txt.strip()}")
+    return (f"{d.get('sampler') or 'euler'} {int(d.get('steps', 4) or 4)} 步"
             f"｜{d.get('scheduler') or 'simple'}"
             f"｜降噪 {float(d.get('denoise', 1.0) or 1.0):.2f}")
 
@@ -1115,7 +1128,11 @@ _SWAP_DEFAULTS = {
     },
     "sample_decode": {
         "sample_mode": "常规采样",
-        "sampler": "res_multistep", "scheduler": "simple",
+        # 一采也支持「显式 sigmas」（与二采同一套交互）：默认走自定义 sigmas，
+        # 6 步从 1.0 平滑降到 0（对齐参考工作流的 8step turbo 曲线形态）。
+        "sampler": "euler", "scheduler": "simple",
+        "sigmas_mode": "custom",
+        "custom_sigmas": "1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0",
         "steps": 5, "cfg": 1.0, "denoise": 1.0,
         "seed": 0, "seed_mode": "randomize",
         "decode_cleanup": "不做清理",
@@ -1250,8 +1267,11 @@ def _parse_swap_settings(raw):
         # 采样分类：常规采样（K采样器 + 可选二采）/ SelfLift采样（内置 SelfLift 渐进分辨率）
         "sample_mode": _cfg_opt(sd, "sample_mode", SAMPLE_MODE_NORMAL,
                                 (SAMPLE_MODE_NORMAL, SAMPLE_MODE_SELFLIFT)),
-        "sampler": str(sd.get("sampler") or "res_multistep"),
+        "sampler": str(sd.get("sampler") or "euler"),
         "scheduler": str(sd.get("scheduler") or "simple"),
+        "sigmas_mode": _cfg_opt(sd, "sigmas_mode", "custom", ("scheduler", "custom")),
+        "custom_sigmas": str(sd.get("custom_sigmas")
+                             or "1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0"),
         "steps": int(_cfg_num(sd, "steps", 5, 1, 200)),
         "cfg": _cfg_num(sd, "cfg", 1.0, 0.0, 100.0),
         "denoise": _cfg_num(sd, "denoise", 1.0, 0.0, 1.0),
@@ -1885,12 +1905,19 @@ class JZL_MiniMaxCharacterSwap(io.ComfyNode):
              f"进度会一格一格走，请耐心等待！）")
         print(f"[JZL-{TAG}]   采样信息：{_first_pass_desc(sample_decode)}"
               f"｜画布 {width}×{height}｜整片 {total_aligned} 帧 / {len(windows)} 段", flush=True)
-        _sig1, _sampler1 = _win.make_sigmas(
-            model,
-            sample_decode.get("sampler") or "res_multistep",
-            sample_decode.get("scheduler") or "simple",
-            int(sample_decode.get("steps", 4) or 4),
-            float(sample_decode.get("denoise", 1.0) or 1.0))
+        _a_mode = str(sample_decode.get("sigmas_mode") or "scheduler")
+        _a_sampler = sample_decode.get("sampler") or "euler"
+        if _a_mode == "custom":
+            # 与二采同一套：直接用显式 sigmas 序列（步数 = 长度-1，忽略步数/降噪控件）
+            _a_vals = _sigmas_from_text(sample_decode.get("custom_sigmas"))
+            _sig1 = _torch.FloatTensor(_a_vals)
+            _sampler1 = _a_sampler
+        else:
+            _sig1, _sampler1 = _win.make_sigmas(
+                model, _a_sampler,
+                sample_decode.get("scheduler") or "simple",
+                int(sample_decode.get("steps", 4) or 4),
+                float(sample_decode.get("denoise", 1.0) or 1.0))
         _steps = max(1, int(_sig1.numel()) - 1)
         _plan_line("一采", _steps, len(windows))
         _t = time.time()
