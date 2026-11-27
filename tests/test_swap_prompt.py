@@ -92,9 +92,71 @@ class SwapPromptPresetTest(unittest.TestCase):
         "20-局部移除skill.md",
         "21-黑白上色skill.md",
         "22-氛围改造skill.md",
+        "23-口播修改skill.md",
+        "24-唱歌修改skill.md",
     )
     OFFICIAL_SECTIONS = ("subject_definitions:", "summary:", "retention_analysis:",
                          "detailed_description:", "overall_soundscape:", "non_diegetic_music:")
+
+    def test_builtin_skill_count_matches_files(self):
+        """测试清单、BUILTIN_SKILLS 元数据、磁盘文件三者数量必须一致。"""
+        on_disk = sorted(_SKILL.list_builtin_skills())
+        self.assertEqual(len(on_disk), len(self.BUILTIN_FILES_9), on_disk)
+        self.assertEqual(sorted(self.BUILTIN_FILES_9), on_disk)
+        self.assertEqual(len(_MOD.BUILTIN_SKILLS), len(on_disk))
+        for name in on_disk:
+            self.assertIn(_MOD._skill_key(name), _MOD.BUILTIN_SKILLS, name)
+
+    def test_external_audio_forces_soundscape_for_any_skill(self):
+        """「外部音频 / 静音」是**正交**开关：不管哪一档 skill、LLM 写了什么，
+        overall_soundscape 都必须被强制改写成「不生成声音」，其余字段保持原样。"""
+        body = ("[SHOT_START]\n===H3_PROMPT===\n"
+                "subject_definitions:\n<Subject 1> from <Picture 1>\n"
+                "summary:\n[video editing + audio reuse] . The target video is an edited version of <Video 1>.\n"
+                "retention_analysis:\n<Subject 1>: fully_preserved - a\n"
+                "detailed_description:\n[Shot 1] y\n"
+                "overall_soundscape: The ambience, action sounds and dialogue of <Video 1> are retained unchanged; "
+                "no new dialogue or music is added.\n"
+                "non_diegetic_music: N/A\n[SHOT_END]")
+        for mode, expect in (("外部音频", _MOD._AUDIO_EXT_LINE),
+                             ("静音", _MOD._AUDIO_MUTE_LINE)):
+            out = _MOD._apply_audio_mode(body, mode)
+            self.assertIn(expect, out, mode)
+            self.assertNotIn("are retained unchanged", out, mode)
+            # 其它字段一个字都不许动
+            for keep in ("subject_definitions:", "retention_analysis:",
+                         "detailed_description:", "non_diegetic_music: N/A", "[SHOT_END]"):
+                self.assertIn(keep, out, mode)
+        # 「参考音频」：<Audio 1> 必须保留，且不能把声音段改成「沿用原片」
+        ref_body = ("[SHOT_START]\n===H3_PROMPT===\n"
+                    "subject_definitions:\n<Subject 1> from <Picture 1>\n"
+                    "summary:\n[video editing + audio reuse] . The target video is an edited version of <Video 1>.\n"
+                    "retention_analysis:\n<Subject 1>: fully_preserved - a\n"
+                    "detailed_description:\n[Shot 1] y\n"
+                    "overall_soundscape: " + _MOD._AUDIO_REUSE_LINE + "\n"
+                    "non_diegetic_music: N/A\n[SHOT_END]")
+        out_ref = _MOD._apply_audio_mode(ref_body, "参考音频")
+        self.assertIn("<Audio 1>", out_ref)
+        self.assertIn(_MOD._AUDIO_REF_LINE, out_ref)
+        self.assertIn("attribute_transfer", out_ref)      # 自动补的 retention 行
+        self.assertNotIn("are retained unchanged", out_ref)
+        self.assertIn("non_diegetic_music: N/A", out_ref)
+
+        # 「使用原声 / 生成音频」不做强制改写
+        self.assertIn("are retained unchanged", _MOD._apply_audio_mode(body, "使用原声"))
+        self.assertIn(_MOD._AUDIO_GEN_LINE, _MOD._apply_audio_mode(body, "生成音频"))
+
+    def test_audio_edit_skills_keep_audio_out_of_prompt(self):
+        """口播/唱歌两条 skill 必须写清「模型看不到替换音轨」，且不许出现 <Audio 1>。"""
+        for name, needles in (
+            ("23-口播修改skill.md", ("参考音频", "口型", "机位", "<Audio 1>", "attribute_transfer")),
+            ("24-唱歌修改skill.md", ("参考音频", "换气", "剪辑", "<Audio 1>", "attribute_transfer")),
+        ):
+            text = _SKILL._read_skill(name)
+            # 这两档是「参考音频进编码」专用的：必须出现 <Audio 1>，且不许承诺写出台词/歌词
+            self.assertIn("<Audio 1>", text, name)
+            for needle in needles:
+                self.assertIn(needle, text, f"{name} 缺少 {needle}")
 
     def test_builtin_skills_all_available(self):
         files = _SKILL._skill_files()
@@ -144,7 +206,7 @@ class SwapPromptPresetTest(unittest.TestCase):
                           "背景替换", "动作迁移", "风格转绘", "人物换装",
                           "物体消除", "人物换脸", "素模渲染", "材质替换",
                           "组合编辑", "添加物体", "人物消失", "局部移除",
-                          "黑白上色", "氛围改造"})
+                          "黑白上色", "氛围改造", "口播修改", "唱歌修改"})
         for name, (fname, _lead) in _MOD.BUILTIN_SKILLS.items():
             self.assertIn("===H3_PROMPT===", _SKILL._read_skill(fname), name)
             self.assertTrue(name in fname or fname in name, f"{name} ↔ {fname} 名字对不上")

@@ -246,15 +246,28 @@ export function renderSwapVideoParamsPanel(c, s, node) {
     showSegLen();
 
     c.append(makeSectionTitle("声音"));
-    c.append(field("声音来源", selectControl(["使用原声", "生成音频"], String(gp.audio_mode || "使用原声"),
+    c.append(field("声音来源", selectControl(["使用原声", "生成音频", "参考音频", "外部音频", "静音"],
+        String(gp.audio_mode || "使用原声"),
         v => { gp.audio_mode = v; showAudioHint(); touch(); })));
     const audioHint = el("div", "font-size:11px;color:var(--descrip-text,var(--jz-text-dim));margin:-4px 0 10px 172px;line-height:1.7;white-space:pre-line;", "");
     c.append(audioHint);
     function showAudioHint() {
-        const gen = String(gp.audio_mode || "使用原声") === "生成音频";
-        audioHint.textContent = gen
+        const mode = String(gp.audio_mode || "使用原声");
+        audioHint.textContent = mode === "生成音频"
             ? "解码模型生成的音轨（需要接「音频VAE」）。源片原声依旧不参与参考编码。\n"
               + "注意：模型生成的音频是它自己「编」的，与源片对白/音效无关。"
+            : mode === "参考音频"
+            ? "**音色进编码**：把 AUDIO 接到「参考音频」端口（视频编辑可留空，自动取素材总线里的音频1），"
+              + "它会被编码成 <Audio 1> 的参考块交给模型，模型据此生成**同音色的音轨**和**对得上的口型**。\n"
+              + "必须接「音频VAE」，并且主模型要用 ref2va 变体 —— 参考音频只走 reference blocks，"
+              + "换 t2va/fl2va 会完全无效且不报错。\n"
+              + "效果不可控，配合「23-口播修改 / 24-唱歌修改」两档 skill 使用。"
+            : mode === "外部音频"
+            ? "用另一条音频**整体替换**成片音轨：把 AUDIO 接到「替换音轨」端口（视频编辑可留空，"
+              + "自动取素材总线里的音频1）。\n按 24fps 帧号与成片对齐 —— 比成片短的部分补静音、长的部分截掉；"
+              + "源片原声不再使用，也不需要「音频VAE」。"
+            : mode === "静音"
+            ? "成片不带任何音轨（画面正常生成）。源片原声与「音频VAE」都不使用。"
             : "用源片原声：原声不参与参考编码，只在最后按帧号精确切给每段落盘（对白/音效原样保留）。\n"
               + "此时不需要接「音频VAE」，latent 里的音频也完全不解码。";
     }
@@ -910,6 +923,8 @@ export function renderSwapPromptPanel(c, s, d, node) {
     h("① 接线");
     p("源视频 ← 「加载视频 / GetVideoComponents」的 IMAGE 输出（按 24fps 解释。源片不是 24fps 时，节点会用原声真实时长自动反推帧率并升/降帧，时长不变）。");
     p("源视频原声 ← 同一条时间轴上的 AUDIO。它不参与参考编码，只在「声音来源 = 使用原声」时按帧号切给每段落盘。");
+    p("替换音轨 ← 想整体换掉成片音频时接这里（「声音来源 = 外部音频」才用），按帧号切片、短了补静音。"
+        + "视频编辑节点可留空，会自动取素材总线里的音频1。");
     p("定妆图 ref_image_0..8 ← 新演员参考图（<Picture 1..9>），建议正面清晰、单人。");
     p("主模型 / CLIP / 视觉VAE ← 与导演台一致，建议用 ref2va 变体模型。音频VAE 只在「声音来源 = 生成音频」时需要。");
     p("输出只有一个端口「批量视频」：每段一个 VIDEO，接「XB-BOX - 🎬 视频批量拼接」勾选「拼接保存」即可无损拼成一整条。");
@@ -922,8 +937,8 @@ export function renderSwapPromptPanel(c, s, d, node) {
     p("① 界面输入（默认）→ 不加载任何 skill，把「视频文本 / 图片文本」两段**原样**作为提示词发给模型。"
         + "适合你自己写完整 H3 提示词，或只想快速试一下。");
     p("② 内置skill → 用插件 skills/jzl/ 里的 skill 当 LLM 设定词，由 LLM 写出提示词。"
-        + "下拉内容 = 该目录里实际的 .md/.txt（现有 22 个场景：单/多人、单/多物、动物、动物换人、人换动物、死物、背景、换装、"
-        + "换脸、动作迁移、风格转绘、物体消除、素模渲染、材质替换、组合编辑、添加物体、人物消失、局部移除、黑白上色、氛围改造）。\n"
+        + "下拉内容 = 该目录里实际的 .md/.txt（现有 24 个场景：单/多人、单/多物、动物、动物换人、人换动物、死物、背景、换装、"
+        + "换脸、动作迁移、风格转绘、物体消除、素模渲染、材质替换、组合编辑、添加物体、人物消失、局部移除、黑白上色、氛围改造、口播修改、唱歌修改）。\n"
         + "   · 「📋 复制skill内容」把当前选中那份的全文复制到剪贴板；「🔄 刷新」重新扫盘。");
     p("③ 自定义skill → 用 skills/jzl/custom/ 里的 .md/.txt 当 LLM 设定词。"
         + "把文件丢进那个文件夹、点「🔄 刷新」就能选到；这里另有「📥 导入Skill文件」可直接上传。");
@@ -1292,8 +1307,9 @@ export function setupSwapNode(self) {
             : (() => { const [W, H] = jzlCalcResolution(ar, Number(gp.megapixels ?? 0.4)); return `${W}×${H}`; })();
         const f = swapFrameLen(gp.segment || "固定5秒");
         const secPerSeg = `${Math.round(f / 24)}秒/每段`;
-        // 声音来源：直接显示面板里选的那一项（使用原声 / 生成音频），一眼知道成片有没有声音、是谁的声音
-        const audioTxt = String(gp.audio_mode || "使用原声") === "生成音频" ? "生成音频" : "使用原声";
+        // 声音来源：直接显示面板里选的那一项，一眼知道成片有没有声音、是谁的声音
+        const _am = String(gp.audio_mode || "使用原声");
+        const audioTxt = _am === "静音" ? "静音" : _am;
         // LLM 增强由「提示词来源」派生（与后端 use_llm 同规则）；
         // 后面直接跟上来源名，省得再去面板里翻「到底是内置哪一套 skill」。
         const llmSrc = String(pc.source || "界面输入");
